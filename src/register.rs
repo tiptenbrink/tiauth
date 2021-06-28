@@ -25,7 +25,7 @@ pub async fn write_user(
                     msg: "Error writing user registration! (write user)",
                     e: e.to_string() }) })?;
 
-            let empty_claims = defs::TiptenAuth {
+            let empty_claims = defs::Tiauth {
                 claims: vec![]
             };
 

@@ -76,40 +76,39 @@ pub async fn modify_user_claims(
     // Check if claim exists and if writer has actual write access
     // Then checks if the write operation is valid, so if writer has enough permission
     let new_claims = writer_claims.claims.iter().find(|claim| {
-        return claim.origin == user_claim_write.origin && claim.anphd_id == user_claim_write.anphd_id;
+        claim.origin == user_claim_write.origin && claim.anphd_id == user_claim_write.anphd_id
     })
-        .and_then(|claim| Some(claim))
         .map_or_else(|| {
             Err(reject(ErrorReject { rt: RejectTypes::NonExistent, msg: "Writer claim not found (modify user claims)", e: "".to_owned() }))
         },
-                     |claim: &defs::UserClaim| {
-                         if claim.permission >= 3000 {
-                             Err(reject(ErrorReject { rt: RejectTypes::Permission, msg: "No write access to claim (modify user claims)", e: "".to_owned() }))
-                         }
-                         else {
-                             let mut valid_claims: Vec<NewUserClaim> = Vec::new();
-                             let mut invalid_claim_targets: Vec<(String, String)> = Vec::new();
+         |claim: &defs::UserClaim| {
+             if claim.permission >= 3000 {
+                 Err(reject(ErrorReject { rt: RejectTypes::Permission, msg: "No write access to claim (modify user claims)", e: "".to_owned() }))
+             }
+             else {
+                 let mut valid_claims: Vec<NewUserClaim> = Vec::new();
+                 let mut invalid_claim_targets: Vec<(String, String)> = Vec::new();
 
-                             for target in user_claim_write.targets {
-                                 if target.target_permission >= claim.permission {
-                                     valid_claims.push(NewUserClaim {
-                                         origin: user_claim_write.origin.clone(),
-                                         anphd_id: user_claim_write.anphd_id.clone(),
-                                         uuid: user_claim_write.uuid.clone(),
-                                         writer_permission: claim.permission,
-                                         target_user_hex: target.target_user_hex.clone(),
-                                         target_permission: target.target_permission.clone(),
-                                         jwt: "".to_owned()
-                                     });
-                                 }
-                                 else {
-                                     invalid_claim_targets.push((target.target_user_hex.clone(), "Target has better permission than writer".to_owned()));
-                                 }
-                             }
+                 for target in user_claim_write.targets {
+                     if target.target_permission >= claim.permission {
+                         valid_claims.push(NewUserClaim {
+                             origin: user_claim_write.origin.clone(),
+                             anphd_id: user_claim_write.anphd_id.clone(),
+                             uuid: user_claim_write.uuid.clone(),
+                             writer_permission: claim.permission,
+                             target_user_hex: target.target_user_hex.clone(),
+                             target_permission: target.target_permission,
+                             jwt: "".to_owned()
+                         });
+                     }
+                     else {
+                         invalid_claim_targets.push((target.target_user_hex.clone(), "Target has better permission than writer".to_owned()));
+                     }
+                 }
 
-                             Ok((valid_claims, invalid_claim_targets))
-                         }
-                     });
+                 Ok((valid_claims, invalid_claim_targets))
+             }
+         });
 
     if new_claims.is_ok() {
         let (valid_claims, mut invalid_claim_targets) = new_claims.unwrap();
@@ -118,16 +117,19 @@ pub async fn modify_user_claims(
             let target_claims = files::read_user_claims(&new_claim.target_user_hex).await
                 .map_err(|e| { files::io_nonexistent_reject(e, "Error reading user target claims (modify user claims)",
                                                             "Target user claims do not exist! (modify user claims") })?;
-            if target_claims.claims.iter().find(|claim| {
-                return claim.origin == new_claim.origin && claim.anphd_id == new_claim.anphd_id;
-            })
-                .and_then(|claim| Some(claim.permission))
-                .map_or_else(|| {
-                    true
-                },
-                             |current_permission: u16| {
-                                 new_claim.writer_permission == 0 || new_claim.writer_permission < current_permission
-                             }) {
+
+            let found_target_claim = target_claims.claims.iter().find(|claim| {
+                claim.origin == new_claim.origin && claim.anphd_id == new_claim.anphd_id
+            });
+
+            let target_valid = match found_target_claim {
+                Some(target_claim) => {
+                    new_claim.writer_permission == 0 || new_claim.writer_permission < target_claim.permission
+                }
+                None => true
+            };
+
+            if target_valid {
                 modify_user_claim(new_claim, false).await?;
                 some_valid = true;
             }
@@ -177,7 +179,7 @@ async fn modify_user_claim(
 
     debug!("clms {:?}", target_claims.claims);
     let found = target_claims.claims.iter_mut().find(|claim| {
-        return claim.origin == new_user_claim.origin && claim.anphd_id == new_user_claim.anphd_id;
+        claim.origin == new_user_claim.origin && claim.anphd_id == new_user_claim.anphd_id
     });
     let exists = found.is_some();
 
@@ -186,7 +188,7 @@ async fn modify_user_claim(
         origin: new_user_claim.origin.clone(),
         anphd_id: new_user_claim.anphd_id.clone(),
         uuid: new_user_claim.uuid.clone(),
-        permission: new_user_claim.target_permission.clone()
+        permission: new_user_claim.target_permission
     };
     let mut found = found.unwrap_or(&mut new_target_claim);
     if exists {

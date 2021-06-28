@@ -34,7 +34,7 @@ mod defs {
     }
 
     #[derive(Deserialize, Serialize, Debug)]
-    pub struct TiptenAuth {
+    pub struct Tiauth {
         pub claims: Vec<UserClaim>,
     }
 

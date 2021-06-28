@@ -27,14 +27,14 @@ pub fn io_nonexistent_reject(e: io::Error, msg: &'static str, ne_msg: &'static s
         ErrorReject {
             rt: RejectTypes::NonExistent,
             msg: ne_msg,
-            e: err_msg.clone()
+            e: err_msg
         }
     }
     else {
         ErrorReject {
             rt: RejectTypes::IO,
             msg,
-            e: err_msg.clone()
+            e: err_msg
         }
     }
 }
@@ -53,13 +53,13 @@ pub async fn read_user(user_hex: &str, secret: bool) -> Result<SaveUserJson, io:
     Ok(save_user)
 }
 
-pub async fn read_user_claims(user_hex: &str) -> Result<defs::TiptenAuth, io::Error> {
+pub async fn read_user_claims(user_hex: &str) -> Result<defs::Tiauth, io::Error> {
     let path = Path::new("claims/a").with_file_name(user_hex);
     let mut file = File::open(path.with_extension("json")).await?;
     let mut buffer = String::new();
     file.read_to_string(&mut buffer).await?;
 
-    let user_claims: defs::TiptenAuth = serde_json::from_str(&buffer)?;
+    let user_claims: defs::Tiauth = serde_json::from_str(&buffer)?;
 
     Ok(user_claims)
 }
@@ -96,7 +96,7 @@ pub async fn write_new_user_resource(resources_arr: Vec<String>) -> tokio::io::R
     Ok(file)
 }
 
-pub async fn write_user_claims(user_hex: &str, user_claims: &defs::TiptenAuth) -> tokio::io::Result<File> {
+pub async fn write_user_claims(user_hex: &str, user_claims: &defs::Tiauth) -> tokio::io::Result<File> {
     let j = serde_json::to_string_pretty(user_claims)?;
 
     let path = Path::new("claims/a").with_file_name(user_hex);

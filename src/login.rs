@@ -133,7 +133,7 @@ pub async fn login_user(
 
         let jwt = JwtResponse {
             public_hex,
-            jwt: (jwt_combined + "." + & base64_url::encode( &signature.to_bytes())).to_owned(),
+            jwt: (jwt_combined + "." + & base64_url::encode( &signature.to_bytes())),
         };
 
         Ok(warp::reply::json(&jwt))
@@ -149,5 +149,8 @@ pub async fn login_user(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn login_test() {
 
+    }
 }
