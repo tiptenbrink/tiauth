@@ -2,7 +2,7 @@ use crate::files;
 use crate::error::{ErrorReject, RejectTypes};
 use ed25519_dalek::{PublicKey, Verifier};
 use ed25519_dalek::ed25519::signature::Signature;
-use crate::reject;
+use warp::reject::custom as reject;
 
 pub async fn verify_jwt(user_hex: &str, jwt: &str) -> Result<(), warp::Rejection> {
     let save_user = files::read_user(user_hex, false).await

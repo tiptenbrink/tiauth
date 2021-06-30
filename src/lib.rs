@@ -4,16 +4,16 @@ pub mod claims;
 pub mod login;
 pub mod auth;
 pub mod register;
+pub mod db;
 
 use error::ErrorReject;
 use error::RejectType;
 use warp::{Filter};
 use warp::path;
 use serde::{Deserialize, Serialize};
-use warp::reject::custom as reject;
-use warp::http::StatusCode;
 use env_logger::Env;
 use log::debug;
+use rusqlite::{params, Connection, Result};
 
 mod defs {
     use super::{Deserialize, Serialize};
@@ -44,20 +44,28 @@ mod defs {
     }
 }
 
+pub mod req_body {
+    use super::{Deserialize, Serialize};
+
+    #[derive(Deserialize, Serialize)]
+    pub struct UserRegister {
+        pub user_hex: String,
+        pub password_hash_hex: String,
+        pub salt_hex: String,
+    }
+}
+
 async fn root_request() -> Result<impl warp::Reply, warp::Rejection> {
     let uri = "https://www.tiptenbrink.nl".parse::<warp::http::Uri>().unwrap();
     Ok(warp::redirect(uri))
 }
 
+/// Used for simple requests in which data is passed as url params.
 mod params {
     use super::{Deserialize, Serialize};
 
-    #[derive(Deserialize, Serialize)]
-    pub struct UserSalt {
-        pub user_hex: String,
-    }
-
-    #[derive(Deserialize, Serialize)]
+    /// Username hex-dash ID for use as url param.
+    #[derive(Deserialize)]
     pub struct UserHex {
         pub user_hex: String,
     }
@@ -70,6 +78,8 @@ pub async fn run_server() {
 
     env_logger::init_from_env(env);
 
+    let db_id: &str = "tiauth_sqlite";
+
     log::debug!("main debug");
     log::info!("main info");
 
@@ -78,15 +88,17 @@ pub async fn run_server() {
         .allow_headers(vec!["content-type"])
         .allow_methods(vec!["POST", "GET", "OPTIONS"]);
 
+    // User public key request
+    // curl https://auth.tipten.nl/user_verify?user_hex=74-69-70-32
     let user_verify = path("user_verify")
         .and(warp::get())
         .and(warp::query::<params::UserHex>())
-        .and_then(login::reply_user_public);
+        .and_then(move |param| { login::reply_user_public(param, db_id) });
 
     let register = path("register")
         .and(warp::post())
         .and(warp::body::json())
-        .and_then(register::write_user);
+        .and_then(move |body| { register::write_user(body, db_id) });
 
     let user_salt = warp::path("user_salt")
         .and(warp::get())
@@ -120,74 +132,8 @@ pub async fn run_server() {
             .or(new_claim)
             .or(modify_claims)
             .or(root), )
-        .recover(handle_rejection)
+        .recover(error::handle_rejection)
         .with(cors);
 
     warp::serve(routes).run(([127, 0, 0, 1], 3031)).await;
-}
-
-async fn handle_rejection(err: warp::reject::Rejection) -> Result<impl warp::reply::Reply, warp::Rejection> {
-    #[derive(Serialize)]
-    struct ErrorMessage {
-        code: u16,
-        message: String,
-    }
-
-    let code;
-    let message: String;
-    let error_str: String;
-
-    if err.is_not_found() {
-        code = StatusCode::NOT_FOUND;
-        message = "NOT_FOUND".to_owned();
-        error_str = "".to_string();
-    }
-    else if let Some(error_reject) = err.find::<ErrorReject>() {
-        code = StatusCode::from_u16(error_reject.rt.code()).unwrap();
-
-        // Error messages can be propagated to the requester by putting them in between '@@@' on
-        // both sides.
-        let split_app = error_reject.e.split("@@@").collect::<Vec<&str>>();
-        let n_split = split_app.len();
-        let mut msg_apps: Vec<String> = Vec::new();
-        let mut err_apps: Vec<String> = Vec::new();
-        if n_split % 2 == 1 {
-            for (i, e) in split_app.iter().enumerate() {
-                if i % 2 == 0 {
-                    err_apps.push((*e).to_owned());
-                }
-                else {
-                    msg_apps.push((*e).to_owned())
-                }
-            }
-        }
-        else {
-            err_apps.push(error_reject.e.clone());
-        }
-        let msg_apps = msg_apps.join(" ");
-        let err_apps = err_apps.join(" ");
-
-        message = format!("{}: {} {}", error_reject.rt.name(), error_reject.msg, msg_apps);
-
-        error_str = err_apps
-    }
-    else {
-        eprintln!("unhandled rejection: {:?}", err);
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = format!("UNHANDLED REJ {:?}", err);
-        error_str = "".to_string();
-    }
-
-    let error_message = &ErrorMessage {
-        code: code.as_u16(),
-        message: message.to_owned(),
-    };
-
-
-    let j = warp::reply::json(&error_message);
-
-    debug!("Rejection {}: {}", code, message);
-    debug!("Err: {}", error_str);
-
-    Ok(warp::reply::with_status(j, code))
 }

@@ -2,9 +2,11 @@ use crate::{Deserialize, Serialize};
 use crate::files;
 use std::time::SystemTime;
 use ed25519_dalek::Signer;
-use crate::error::{ErrorReject, RejectTypes};
+use crate::error::{ErrorReject, RejectTypes, RejectableExt, RusqliteErrorPassExt};
 use crate::params;
-use crate::reject;
+use warp::reject::custom as reject;
+use crate::db;
+use rusqlite::Connection;
 
 #[derive(Deserialize, Serialize)]
 pub struct UserLogin {
@@ -57,15 +59,19 @@ pub async fn reply_user_salt(
     Ok(warp::reply::json(&user_salt))
 }
 
-pub async fn reply_user_public(
-    user_hex_param: params::UserHex) -> Result<impl warp::Reply, warp::Rejection> {
+/// Reads public key hex (used to verify json web token) from SQLite database
+/// Reads url parameter for user hex-dash ID
+/// Responds with a json-wrapped public key hex string.
+pub async fn reply_user_public(user_hex_param: params::UserHex, db_id: &str)
+    -> Result<impl warp::Reply, warp::Rejection> {
+
     let user_hex = user_hex_param.user_hex;
-    let save_user = files::read_user(&user_hex, false).await
-        .map_err(|e| { files::io_nonexistent_reject(e, "Error reading user data (user public)",
-                                                    "User does not exist! (user public)") })?;
+
+    let conn = Connection::open(db_id).rej(RejectTypes::IO, "Database failure (user public)")?;
+    let user = db::read_user_auth(&conn, &user_hex, false).sql_rej("(user public)")?;
 
     let user_public = UserPublic {
-        public_hex: save_user.public_hex,
+        public_hex: user.public_hex,
     };
 
     Ok(warp::reply::json(&user_public))

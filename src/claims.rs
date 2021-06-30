@@ -1,7 +1,7 @@
 use crate::{files, defs, auth};
+use warp::reject::custom as reject;
 use crate::error::{ErrorReject, RejectTypes};
 use crate::{Deserialize, Serialize};
-use crate::reject;
 use log::debug;
 
 #[derive(Deserialize, Serialize)]

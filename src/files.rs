@@ -3,7 +3,7 @@ use crate::error::RejectTypes;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{self, AsyncWriteExt, AsyncReadExt};
-use crate::defs;
+use crate::{defs, req_body};
 use crate::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -64,7 +64,7 @@ pub async fn read_user_claims(user_hex: &str) -> Result<defs::Tiauth, io::Error>
     Ok(user_claims)
 }
 
-pub async fn register_user(user_json: &defs::UserJson, public_hex: String, secret_hex: String) -> tokio::io::Result<File> {
+pub async fn register_user(user_json: &req_body::UserRegister, public_hex: String, secret_hex: String) -> tokio::io::Result<File> {
     let save_user_json = SaveUserJson {
         user_hex: user_json.user_hex.to_owned(),
         password_hash_hex: user_json.password_hash_hex.to_owned(),
