@@ -1,9 +1,9 @@
 use rusqlite::Error as sqlError;
-use std::{error, fmt};
-use warp::Rejection;
+use std::error;
 use warp::http::StatusCode;
-use crate::{Serialize, Deserialize};
-use log::debug;
+use crate::{Serialize};
+use log;
+use warp::reject::IsReject;
 
 pub trait RejectType {
     fn code(&self) -> u16;
@@ -92,10 +92,11 @@ impl<T, E: error::Error> RejectableExt<T, E> for Result<T, E> {
     /// ```
     /// # use tiauth::error::{ErrorReject, RejectTypes};
     /// # use hex;
+    /// # use warp::reject;
     /// fn reply_hex_bytes(hex_string: &str)
     ///     -> Result<Vec<u8>, warp::Rejection> {
     ///
-    ///     let bytes = hex::decode(hex_string).map_err(|e| { reject(ErrorReject {
+    ///     let bytes = hex::decode(hex_string).map_err(|e| { reject::custom(ErrorReject {
     ///             rt: RejectTypes::DecodeInternal,
     ///             msg: "Error decoding hex!",
     ///             e: e.to_string()
@@ -225,9 +226,8 @@ pub async fn handle_rejection(err: warp::reject::Rejection) -> Result<impl warp:
         error_str = err_apps
     }
     else {
-        eprintln!("unhandled rejection: {:?}", err);
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = format!("UNHANDLED REJ {:?}", err);
+        code = err.status();
+        message = format!("UNHANDLED {:?}", err);
         error_str = "".to_string();
     }
 
@@ -236,11 +236,21 @@ pub async fn handle_rejection(err: warp::reject::Rejection) -> Result<impl warp:
         message: message.to_owned(),
     };
 
-
     let j = warp::reply::json(&error_message);
 
-    debug!("Rejection {}: {}", code, message);
-    debug!("Err: {}", error_str);
+    if error_message.code >= 500 {
+        log::error!("Rejection {}: {}", code, message);
+        log::error!("Err: {}", error_str);
+    }
+    else if error_message.code >= 400 {
+        log::debug!("Rejection {}: {}", code, message);
+        log::debug!("Err: {}", error_str);
+    }
+    else {
+        log::trace!("Rejection {}: {}", code, message);
+        log::trace!("Err: {}", error_str);
+    }
+
 
     Ok(warp::reply::with_status(j, code))
 }

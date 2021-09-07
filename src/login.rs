@@ -6,6 +6,7 @@ use crate::error::{ErrorReject, RejectTypes, RejectableExt, RusqliteErrorPassExt
 use crate::params;
 use warp::reject::custom as reject;
 use crate::db;
+use crate::input;
 use rusqlite::Connection;
 
 #[derive(Deserialize, Serialize)]
@@ -62,9 +63,11 @@ pub async fn reply_user_salt(
 /// Reads public key hex (used to verify json web token) from SQLite database
 /// Reads url parameter for user hex-dash ID
 /// Responds with a json-wrapped public key hex string.
-pub async fn reply_user_public(user_hex_param: params::UserHex, db_id: &str)
+pub async fn reply_user_public(user_hex_param: input::UserHex, db_id: &str)
     -> Result<impl warp::Reply, warp::Rejection> {
 
+    input::validate(&user_hex_param)
+        .rej(RejectTypes::Incorrect, "Input validation error (user salt)")?;
     let user_hex = user_hex_param.user_hex;
 
     let conn = Connection::open(db_id).rej(RejectTypes::IO, "Database failure (user public)")?;
@@ -73,7 +76,6 @@ pub async fn reply_user_public(user_hex_param: params::UserHex, db_id: &str)
     let user_public = UserPublic {
         public_hex: user.public_hex,
     };
-
     Ok(warp::reply::json(&user_public))
 }
 

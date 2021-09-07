@@ -5,15 +5,13 @@ pub mod login;
 pub mod auth;
 pub mod register;
 pub mod db;
+pub mod input;
 
-use error::ErrorReject;
-use error::RejectType;
 use warp::{Filter};
 use warp::path;
 use serde::{Deserialize, Serialize};
 use env_logger::Env;
-use log::debug;
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Result};
 
 mod defs {
     use super::{Deserialize, Serialize};
@@ -62,7 +60,7 @@ async fn root_request() -> Result<impl warp::Reply, warp::Rejection> {
 
 /// Used for simple requests in which data is passed as url params.
 mod params {
-    use super::{Deserialize, Serialize};
+    use super::{Deserialize};
 
     /// Username hex-dash ID for use as url param.
     #[derive(Deserialize)]
@@ -73,7 +71,7 @@ mod params {
 
 pub async fn run_server() {
     let env = Env::default()
-        .filter_or("MY_LOG_LEVEL", "trace")
+        .filter_or("MY_LOG_LEVEL", "debug")
         .write_style_or("MY_LOG_STYLE", "always");
 
     env_logger::init_from_env(env);
@@ -89,12 +87,13 @@ pub async fn run_server() {
         .allow_methods(vec!["POST", "GET", "OPTIONS"]);
 
     // User public key request
-    // curl https://auth.tipten.nl/user_verify?user_hex=74-69-70-32
+    // curl http://localhost:3031/user_verify?user_hex=74-69-70-32
     let user_verify = path("user_verify")
         .and(warp::get())
-        .and(warp::query::<params::UserHex>())
+        .and(warp::query::<input::UserHex>())
         .and_then(move |param| { login::reply_user_public(param, db_id) });
 
+    // curl -d '{"user_hex":"xyz","password_hash_hex":"xyz", "salt_hex": "xyz"}' -H "Content-Type: application/json" -X POST http://localhost:3031/register
     let register = path("register")
         .and(warp::post())
         .and(warp::body::json())

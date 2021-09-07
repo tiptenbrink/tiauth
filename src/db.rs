@@ -1,7 +1,6 @@
 use rusqlite::{params, Connection, Result};
-use crate::error::{RejectableExt, RejectTypes, ErrorReject, RusqliteResultExt, RusqliteErrorPass};
+use crate::error::{RusqliteResultExt, RusqliteErrorPass};
 use crate::Serialize;
-use env_logger::Env;
 use log::debug;
 
 #[derive(Debug, Serialize)]
@@ -144,7 +143,7 @@ pub fn create_resources_table(conn: &mut Connection) -> Result<()> {
 /// # use tiauth::db::{read_user_auth, UserAuth};
 /// # use tiauth::error::RusqliteErrorPassExt;
 /// # use rusqlite::Connection;
-///fn get_user_salt(conn: &Connection) -> Result<String, warp::Rejection> {
+///fn get_user_salt(conn: &Connection, user_hex: String) -> Result<String, warp::Rejection> {
 ///    let user: UserAuth = read_user_auth(&conn, &user_hex, false).sql_rej("(user public)")?;
 ///    Ok(user.salt_hex)
 /// }

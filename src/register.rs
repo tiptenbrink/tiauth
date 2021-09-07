@@ -1,4 +1,4 @@
-use crate::{defs, files, db, req_body};
+use crate::{db, input};
 use rusqlite::Connection;
 use crate::error::{ErrorReject, RejectTypes, RusqliteErrorPassExt, RejectableExt};
 use ed25519_dalek::Keypair;
@@ -13,12 +13,17 @@ fn generate_keypair() -> (String, String) {
     (hex::encode(keypair.public.as_bytes()), hex::encode(keypair.secret.as_bytes()))
 }
 
-/// Registers a new user and writes it to the database
-///
+/// Registers a new user and writes it to the database, generating a keypair in the process for use
+/// in JWT signing.
+/// Requires `user_hex`, `password_hash_hex` and `salt_hex` in JSON.
 pub async fn write_user(
-    user_register: req_body::UserRegister, db_id: &str) -> Result<impl warp::Reply, warp::Rejection> {
+    user_register: input::UserRegister, db_id: &str) -> Result<impl warp::Reply, warp::Rejection> {
 
-    let mut conn = Connection::open(db_id).rej(RejectTypes::IO, "Database failure (user public)")?;
+    input::validate(&user_register)
+        .rej(RejectTypes::Incorrect, "Input validation error (write user)")?;
+
+    let mut conn = Connection::open(db_id)
+        .rej(RejectTypes::IO, "Database failure (write user)")?;
 
     let exists = db::user_exists(&conn, &user_register.user_hex)
         .sql_rej("User existence check error (write user)")?;
@@ -26,9 +31,9 @@ pub async fn write_user(
         let (public_hex, secret_hex): (String, String) = generate_keypair();
 
         let new_user = db::UserAuth {
-            user_hex: user_register.user_hex.clone(),
-            password_hash_hex: user_register.password_hash_hex.clone(),
-            salt_hex: user_register.salt_hex.clone(),
+            user_hex: user_register.user_hex,
+            password_hash_hex: user_register.password_hash_hex,
+            salt_hex: user_register.salt_hex,
             secret_hex,
             public_hex
         };

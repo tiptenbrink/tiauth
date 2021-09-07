@@ -17,7 +17,13 @@ serde = { version = "1.0", features = ["derive"] }
 base64-url = "1.4.10"
 log = "0.4"
 env_logger = "0.8.3"
+validator = { version = "0.14.0", features = ["derive"] }
+lazy_static = "1.4.0"
+regex = "1.5.4"
 
 [dependencies.rusqlite]
 version = "0.25.3"
 features = ["bundled"]
+
+[patch.crates-io]
+warp = { git = 'https://github.com/tiptenbrink/warp' }
