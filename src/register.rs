@@ -1,15 +1,19 @@
 use crate::{defs, files};
 use crate::error::{ErrorReject, RejectTypes};
 use ed25519_dalek::Keypair;
-use rand::rngs::OsRng;
+use ed25519_zebra::{SigningKey, VerificationKey};
+use rand::rngs;
 use crate::reject;
 
 fn generate_keypair() -> (String, String) {
-    let mut csprng = OsRng{};
+    let mut os_rng = rngs::OsRng::default();
+    let secret = SigningKey::new(os_rng);
+    let secret_bytes: [u8; 32] = secret.into();
+    let public_bytes: [u8; 32] = VerificationKey::from(&secret).into();
 
-    let keypair: Keypair = Keypair::generate(&mut csprng);
+    //let keypair: Keypair = Keypair::generate(&mut x);
 
-    (hex::encode(keypair.public.as_bytes()), hex::encode(keypair.secret.as_bytes()))
+    (hex::encode(public_bytes), hex::encode(secret_bytes))
 }
 
 pub async fn write_user(
