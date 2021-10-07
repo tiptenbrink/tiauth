@@ -1,4 +1,5 @@
 # Generated files
 /target/
-/users/
-/claims/
+/users/*
+/claims/*
+resources.json
