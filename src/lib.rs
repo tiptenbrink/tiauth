@@ -108,6 +108,9 @@ pub async fn run_server() {
         .and(warp::body::json())
         .and_then(claims::modify_user_claims);
 
+    let alive = path("alive")
+        .map(|| "alive!");
+
     let root = path::end()
         .and(warp::get())
         .and_then(root_request);
@@ -119,11 +122,12 @@ pub async fn run_server() {
             .or(user_verify)
             .or(new_claim)
             .or(modify_claims)
+            .or(alive)
             .or(root), )
         .recover(handle_rejection)
         .with(cors);
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3031)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], 3031)).await;
 }
 
 async fn handle_rejection(err: warp::reject::Rejection) -> Result<impl warp::reply::Reply, warp::Rejection> {
