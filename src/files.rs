@@ -1,7 +1,7 @@
 use crate::error::ErrorReject;
 use crate::error::RejectTypes;
 use std::path::Path;
-use tokio::fs::File;
+use tokio::fs::{File, create_dir_all, OpenOptions};
 use tokio::io::{self, AsyncWriteExt, AsyncReadExt};
 use crate::defs;
 use crate::{Serialize, Deserialize};
@@ -39,6 +39,13 @@ pub fn io_nonexistent_reject(e: io::Error, msg: &'static str, ne_msg: &'static s
     }
 }
 
+pub async fn prepare_directories() -> Result<((), (), ()), io::Error> {
+    let new_resources = write_new_user_resource(vec![]);
+    let create_users = create_dir_all("resources/users");
+    let create_claims = create_dir_all("resources/claims");
+    tokio::try_join!(new_resources, create_users, create_claims)
+}
+
 pub async fn read_user(user_hex: &str, secret: bool) -> Result<SaveUserJson, io::Error> {
     let mut f = open_user_file(user_hex).await?;
     let mut buffer = String::new();
@@ -54,7 +61,7 @@ pub async fn read_user(user_hex: &str, secret: bool) -> Result<SaveUserJson, io:
 }
 
 pub async fn read_user_claims(user_hex: &str) -> Result<defs::Tiauth, io::Error> {
-    let path = Path::new("claims/a").with_file_name(user_hex);
+    let path = Path::new("resources/claims/x").with_file_name(user_hex);
     let mut file = File::open(path.with_extension("json")).await?;
     let mut buffer = String::new();
     file.read_to_string(&mut buffer).await?;
@@ -74,7 +81,7 @@ pub async fn register_user(user_json: &defs::UserJson, public_hex: String, secre
     };
 
     let j = serde_json::to_string_pretty(&save_user_json)?;
-    let path = Path::new("users/x").with_file_name(&user_json.user_hex);
+    let path = Path::new("resources/users/x").with_file_name(&user_json.user_hex);
     let path = path.with_extension("json");
     let mut file = File::create(path).await?;
     file.write_all(j.as_bytes()).await?;
@@ -82,24 +89,24 @@ pub async fn register_user(user_json: &defs::UserJson, public_hex: String, secre
     Ok(file)
 }
 
-pub async fn write_new_user_resource(resources_arr: Vec<String>) -> tokio::io::Result<File> {
+pub async fn write_new_user_resource(resources_arr: Vec<String>) -> tokio::io::Result<()> {
     let new_resources = defs::Resources {
         resources: resources_arr,
     };
 
     let j = serde_json::to_string_pretty(&new_resources)?;
-    let path = Path::new("").with_file_name("resources");
+    let path = Path::new("resources/x").with_file_name("resources");
     let path = path.with_extension("json");
     let mut file = File::create(path).await?;
     file.write_all(j.as_bytes()).await?;
 
-    Ok(file)
+    Ok(())
 }
 
 pub async fn write_user_claims(user_hex: &str, user_claims: &defs::Tiauth) -> tokio::io::Result<File> {
     let j = serde_json::to_string_pretty(user_claims)?;
 
-    let path = Path::new("claims/a").with_file_name(user_hex);
+    let path = Path::new("resources/claims/x").with_file_name(user_hex);
     let mut file = File::create(path.with_extension("json")).await?;
     file.write_all(j.as_bytes()).await?;
 
@@ -107,16 +114,17 @@ pub async fn write_user_claims(user_hex: &str, user_claims: &defs::Tiauth) -> to
 }
 
 pub async fn open_user_file(user_hex: &str) -> tokio::io::Result<File> {
-    let path = Path::new("users/a").with_file_name(user_hex);
+    let path = Path::new("resources/users/x").with_file_name(user_hex);
     let file = File::open(path.with_extension("json")).await?;
 
     Ok(file)
 }
 
 pub async fn open_resources() -> tokio::io::Result<defs::Resources> {
-    let path = Path::new("").with_file_name("resources");
+    let path = Path::new("resources/x").with_file_name("resources");
     let path = path.with_extension("json");
-    let mut file = File::open(path).await?;
+    eprintln!("{:?}", path);
+    let mut file = OpenOptions::new().write(true).read(true).create(true).open(path).await?;
     let mut buffer = String::new();
     file.read_to_string(&mut buffer).await?;
 

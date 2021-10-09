@@ -63,6 +63,10 @@ mod params {
     }
 }
 
+pub async fn prepare_server() {
+    files::prepare_directories().await.unwrap();
+}
+
 pub async fn run_server() {
     let env = Env::default()
         .filter_or("MY_LOG_LEVEL", "trace")

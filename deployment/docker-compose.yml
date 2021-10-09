@@ -1,0 +1,15 @@
+version: '0.1.0'
+services:
+  tiauth:
+    image: "${APP_IMAGE}:${VERSION}"
+    volumes:
+      - tiauth_res:/opt/tiauth/resources
+    ports:
+      - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
+volumes:
+  tiauth_res:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${RESOURCES_SOURCE}
