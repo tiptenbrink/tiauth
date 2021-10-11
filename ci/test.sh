@@ -5,3 +5,4 @@ if [ "${RESULT}" != "alive!" ]; then
   echo "Not alive!"
   exit 1;
 fi
+echo "${RESULT}"
