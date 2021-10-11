@@ -116,8 +116,9 @@ pub async fn run_server() {
         .map(|| "alive!");
 
     let root = path::end()
-        .and(warp::get())
-        .and_then(root_request);
+        .map(|| "Tiauth Authentication Server");
+        // .and(warp::get())
+        // .and_then(root_request);
 
     let routes = warp::any().and(
         register
