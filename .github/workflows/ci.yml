@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  TEST_TAG: tmtenbrink/tiauth:test
+
 jobs:
   push:
     name: Push
@@ -12,11 +15,6 @@ jobs:
     steps:
     - name: Checkout rustfrc
       uses: actions/checkout@v2
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v3
-      with:
-        images: tmtenbrink/tiauth
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v1
     - name: Cache Docker layers
@@ -44,8 +42,7 @@ jobs:
       with:
         context: .
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: tmtenbrink/tiauth:actions
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
     - # Temp fix
@@ -62,5 +59,12 @@ jobs:
     steps:
     - name: Checkout rustfrc
       uses: actions/checkout@v2
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v3
+      with:
+        images: tmtenbrink/tiauth
     - name: Run deployment
       run: ./deployment/deploy.sh
+    - name: Curl alive
+      run: curl http://localhost:3031
