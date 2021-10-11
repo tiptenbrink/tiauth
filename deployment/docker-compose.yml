@@ -1,11 +1,12 @@
-version: '0.1.0'
 services:
   tiauth:
     image: "${APP_IMAGE}:${VERSION}"
     volumes:
-      - tiauth_res:/opt/tiauth/resources
+      # /tiauth/ must correspond to the final WORKDIR in the Dockerfile build
+      - tiauth_res:/tiauth/resources
     ports:
       - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
+# docker run -it tmtenbrink/tiauth:actions --mount 'type=volume,src=tiauth_res,dst=/opt
 volumes:
   tiauth_res:
     driver: local
