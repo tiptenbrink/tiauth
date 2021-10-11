@@ -16,6 +16,8 @@ RUN cargo build --release
 
 # We do not need the Rust toolchain to run the binary!
 FROM debian:buster-slim AS runtime
+# This means /tiauth/ will be the working directory and from where relative paths will be evaluated (i.e. the location
+# of /resources)
 WORKDIR tiauth
 COPY --from=tiauthbuilder /tiauth/target/release/tiauth /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/tiauth"]
