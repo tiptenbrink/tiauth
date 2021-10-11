@@ -36,7 +36,7 @@ jobs:
       uses: docker/build-push-action@v2
       with:
         context: .
-        tags: tmtenbrink/tiauth:actions
+        tags: tiauth:actions
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
         outputs: type=docker,dest=/tmp/tiauth-test.tar
@@ -70,9 +70,9 @@ jobs:
         docker load --input /tmp/tiauth-test.tar
         docker image ls -a
     - name: Run deployment
-      run: ./deployment/deploy.sh
+      run: ./ci/deployment/deploy.sh
     - name: Curl alive
-      run: ./test.sh
+      run: ./ci/test.sh
     - name: Docker meta
       id: meta
       uses: docker/metadata-action@v3
