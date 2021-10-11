@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  push:
   test:
     name: Test
     runs-on: ubuntu-latest
