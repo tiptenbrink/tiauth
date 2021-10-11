@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "tiauth"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64-url",
  "ed25519-dalek",
