@@ -13,4 +13,4 @@ jobs:
     - name: Run deployment
       run: ./deployment/deploy.sh
     - name: Run test
-      run: ./deployment/test.sh
+      run: ./test.sh
