@@ -1,49 +1,58 @@
-
 name: CI
 on:
+  # Run build and tests on push on branch, pull request and release publish
   push:
     branches: [ main ]
-  workflow_dispatch:
+  pull_request:
+  release:
+    types: [ published ]
 
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout rustfrc
-      uses: actions/checkout@v2
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v1
-    - name: Cache Docker layers
-      uses: actions/cache@v2
-      with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-buildx-
-    - name: Build and push
-      uses: docker/build-push-action@v2
-      with:
-        context: .
-        target: tiauthbuilder
-        cache-from: type=local,src=/tmp/.buildx-cache
-        cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
-    
-    - name: Build and push
-      uses: docker/build-push-action@v2
-      with:
-        context: .
-        tags: tiauth:actions
-        cache-from: type=local,src=/tmp/.buildx-cache
-        cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
-        outputs: type=docker,dest=/tmp/tiauth-test.tar
-    - name: Upload artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: tiauth-test
-        path: /tmp/tiauth-test.tar
-    
-    - # Temp fix
+      # Check out the repository at /
+      - name: Checkout rustfrc
+        uses: actions/checkout@v2
+      # Set up buildx for later build-push-action
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      # Get cached Docker layers to save build time
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      # Build up until the tiauthbuilder stage (i.e. including all dependencies)
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          # Dockerfile stage
+          target: tiauthbuilder
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+      # Since previous stage is cached, only the slim binary is built
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          # Tag for later use
+          tags: tiauth:actions
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          outputs: type=docker,dest=/tmp/tiauth-test.tar
+      # Upload for use in next stage
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: tiauth-test
+          path: /tmp/tiauth-test.tar
+
+      - # Temp fix
         # https://github.com/docker/build-push-action/issues/252
         # https://github.com/moby/buildkit/issues/1896
         name: Move cache
@@ -55,37 +64,40 @@ jobs:
     name: TestPush
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout rustfrc
-      uses: actions/checkout@v2
-    - name: Download artifact
-      uses: actions/download-artifact@v2
-      with:
-        name: tiauth-test
-        path: /tmp
-    - name: Load image
-      run: |
-        docker load --input /tmp/tiauth-test.tar
-        docker image ls -a
-    - name: Run deployment
-      run: ./ci/deployment/deploy.sh
-    - name: Curl alive
-      run: ./ci/test.sh
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v3
-      with:
-        images: tmtenbrink/tiauth
-    - name: Login to DockerHub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v1 
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
-    - name: Build and push
-      uses: docker/build-push-action@v2
-      with:
-        context: ./ci
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        
+      - name: Checkout rustfrc
+        uses: actions/checkout@v2
+      # Download image archive from previous step
+      - name: Download artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: tiauth-test
+          path: /tmp
+      # Load tiauth:actions from archive
+      - name: Load image
+        run: docker load --input /tmp/tiauth-test.tar
+      # Run container and do tests
+      - name: Run deployment
+        run: ./ci/deployment/deploy.sh
+      - name: Curl alive
+        run: ./ci/test.sh
+      # Get metadata for tags, labels for Docker Hub
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          images: tmtenbrink/tiauth
+      - name: Login to DockerHub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        if: github.event_name != 'pull_request'
+        with:
+          # Only contains FROM tiauth:actions to allow to use this GH Action, uses metadata tags and labels
+          context: ./ci
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
