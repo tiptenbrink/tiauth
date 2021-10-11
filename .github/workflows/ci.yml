@@ -5,12 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  TEST_TAG: tmtenbrink/tiauth:test
-
 jobs:
-  push:
-    name: Push
+  build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
     - name: Checkout rustfrc
@@ -53,9 +50,9 @@ jobs:
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
-  test:
-    needs: [push]
-    name: Test
+  testpush:
+    needs: [build]
+    name: TestPush
     runs-on: ubuntu-latest
     steps:
     - name: Checkout rustfrc
@@ -84,3 +81,11 @@ jobs:
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_PASSWORD }}
+    - name: Build and push
+      uses: docker/build-push-action@v2
+      with:
+        context: ./ci
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        
