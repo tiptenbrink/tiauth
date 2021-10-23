@@ -57,7 +57,7 @@ pub async fn new_user_claim(
         modify_user_claim(new_user_claim, true).await?;
 
         files::write_new_user_resource(resources_arr).await
-            .map_err(|e| { reject(ErrorReject { rt: RejectTypes::IO, msg: "Error writing new resource (new user claim)", e: e.to_string()}) })?;
+        .map_err(|e| { reject(ErrorReject { rt: RejectTypes::IO, msg: "Error writing new resource (new user claim)", e: e.to_string()}) })?;
 
         Ok(warp::reply())
     }

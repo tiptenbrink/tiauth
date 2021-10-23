@@ -82,7 +82,7 @@ pub async fn login_user(
 
     if save_user.password_hash_hex == user_login.password_hash_hex {
         let jwt_header = base64_url::encode(ED25519JWT);
-        let claims = files::read_user_claims(&user_hex).await
+        let claims = files::read_user_claims(user_hex).await
             .map_err(|e| { files::io_nonexistent_reject(e, "Error reading user claims (login user)",
                                                         "User claims do not exist! (login user)") })?;
         let claims = serde_json::to_value(claims)
