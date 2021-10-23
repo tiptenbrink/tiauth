@@ -1,10 +1,11 @@
-use crate::error::ErrorReject;
-use crate::error::RejectTypes;
 use std::path::Path;
-use tokio::fs::{File, create_dir_all, OpenOptions};
-use tokio::io::{self, AsyncWriteExt, AsyncReadExt};
+
+use tokio::fs::{create_dir_all, File, OpenOptions};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+
+use crate::{Deserialize, Serialize};
 use crate::defs;
-use crate::{Serialize, Deserialize};
+use crate::error::{ErrorReject, RejectTypes};
 
 #[derive(Serialize, Deserialize)]
 pub struct SaveUserJson {
