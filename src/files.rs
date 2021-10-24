@@ -7,7 +7,7 @@ use crate::{Deserialize, Serialize};
 use crate::defs;
 use crate::error::{ErrorReject, RejectTypes};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SaveUserJson {
     pub user_hex: String,
     pub password_hash_hex: String,

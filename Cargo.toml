@@ -12,7 +12,7 @@ ed25519-dalek = "1.0.1"
 ed25519-zebra = "2.2.0"
 rand = "0.7"
 hex = "0.4.3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"]}
+tokio = { version = "1.12", features = ["rt-multi-thread", "macros", "fs", ]}
 warp = "0.3.1"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }

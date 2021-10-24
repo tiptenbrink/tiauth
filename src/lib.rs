@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate diesel;
+
 use env_logger::Env;
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,10 @@ pub mod claims;
 pub mod login;
 pub mod auth;
 pub mod register;
+pub mod schema;
+pub mod models;
+pub mod db;
+pub mod queries;
 
 mod defs {
     use super::{Deserialize, Serialize};

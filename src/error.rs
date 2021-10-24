@@ -84,6 +84,10 @@ impl IntoTiauthError for hex::FromHexError {
     fn error_type(&self) -> Errors { Errors::DecodeInternal }
 }
 
+impl IntoTiauthError for diesel::result::Error {
+    fn error_type(&self) -> Errors { Errors::Internal }
+}
+
 impl Reply for TiauthError {
     fn into_response(self) -> Response {
         let reply = warp::reply::json(&ErrorReply::from(&self));
