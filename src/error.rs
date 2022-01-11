@@ -1,4 +1,5 @@
-use std::error;
+use std::error::Error as StdError;
+use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
 use serde::Serialize;
 use warp::Reply;
@@ -6,12 +7,6 @@ use warp::http::StatusCode;
 use warp::reply::Response;
 
 use crate::debug;
-
-pub trait RejectType {
-    fn code(&self) -> u16;
-
-    fn name(&self) -> &'static str;
-}
 
 pub enum Errors {
     IO,
@@ -55,11 +50,26 @@ impl Errors {
     }
 }
 
-pub struct TiauthError {
+impl Debug for Errors {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{}", self.name())
+    }
+}
+
+#[derive(Debug)]
+pub struct Error {
     pub message: &'static str,
     pub error_type: Errors,
     pub e: String
 }
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{:?}", &self)
+    }
+}
+
+impl StdError for Error { }
 
 #[derive(Serialize)]
 struct ErrorReply {
@@ -67,8 +77,8 @@ struct ErrorReply {
     message: &'static str
 }
 
-impl From<&TiauthError> for ErrorReply {
-    fn from(e: &TiauthError) -> Self {
+impl From<&Error> for ErrorReply {
+    fn from(e: &Error) -> Self {
         ErrorReply {
             name: e.error_type.name(),
             message: e.message
@@ -76,19 +86,19 @@ impl From<&TiauthError> for ErrorReply {
     }
 }
 
-pub trait IntoTiauthError: error::Error {
+pub trait IntoError: Debug {
     fn error_type(&self) -> Errors;
 }
 
-impl IntoTiauthError for hex::FromHexError {
+impl IntoError for hex::FromHexError {
     fn error_type(&self) -> Errors { Errors::DecodeInternal }
 }
 
-impl IntoTiauthError for diesel::result::Error {
+impl IntoError for sqlx::Error {
     fn error_type(&self) -> Errors { Errors::Internal }
 }
 
-impl Reply for TiauthError {
+impl Reply for Error {
     fn into_response(self) -> Response {
         let reply = warp::reply::json(&ErrorReply::from(&self));
         let res = warp::reply::with_status(reply, self.error_type.status());
@@ -98,11 +108,11 @@ impl Reply for TiauthError {
 
 /// Trait extension to allow less verbose error mapping from results if they must be mapped to
 /// `warp::Rejection` errors.
-pub trait ErrorExt<T, E: IntoTiauthError> {
-    fn repl(self, msg: &'static str) -> Result<T, TiauthError>;
+pub trait ErrorExt<T, E: IntoError> {
+    fn repl(self, msg: &'static str) -> Result<T, Error>;
 }
 
-impl<T, E: IntoTiauthError> ErrorExt<T, E> for Result<T, E> {
+impl<T, E: IntoError> ErrorExt<T, E> for Result<T, E> {
     /// Maps `Result<T, E>` to a `Result<T, `[TiauthError]`>` with the internal error converted to
     /// its string representation. Only works on errors that implement `[IntoTiauthError]`.
     ///
@@ -112,12 +122,13 @@ impl<T, E: IntoTiauthError> ErrorExt<T, E> for Result<T, E> {
     ///
     /// ```
     /// # use hex;
-    /// use tiauth::error::{TiauthError, Errors};
+    /// use tiauth::error::{Error, Errors};
+    ///
     /// fn reply_hex_bytes(hex_string: &str)
-    ///     -> Result<Vec<u8>, TiauthError> {
+    ///     -> Result<Vec<u8>, Error> {
     ///
     ///     let bytes = hex::decode(hex_string).map_err(|e| {
-    ///             TiauthError {
+    ///             Error {
     ///                 error_type: Errors::DecodeInternal,
     ///                 message: "Error decoding hex!",
     ///                 e: e.to_string()
@@ -131,10 +142,10 @@ impl<T, E: IntoTiauthError> ErrorExt<T, E> for Result<T, E> {
     /// Shorter code:
     /// ```
     /// # use hex;
-    /// use tiauth::error::{ErrorExt, TiauthError};
+    /// use tiauth::error::{ErrorExt, Error};
     ///
     /// fn reply_hex_bytes(hex_string: &str)
-    ///     -> Result<Vec<u8>, TiauthError> {
+    ///     -> Result<Vec<u8>, Error> {
     ///
     ///     let bytes = hex::decode(hex_string)
     ///         .repl("Error decoding hex!")?;
@@ -142,11 +153,11 @@ impl<T, E: IntoTiauthError> ErrorExt<T, E> for Result<T, E> {
     ///     Ok(bytes)
     /// }
     /// ```
-    fn repl(self, msg: &'static str) -> Result<T, TiauthError> {
-        self.map_err(|e| TiauthError {
+    fn repl(self, msg: &'static str) -> Result<T, Error> {
+        self.map_err(|e| Error {
             error_type: e.error_type(),
             message: msg,
-            e: e.to_string()
+            e: format!("{:?}", e)
         })
     }
 }
@@ -162,6 +173,12 @@ pub enum RejectTypes {
     Tampered,
     Incorrect,
     Internal
+}
+
+pub trait RejectType {
+    fn code(&self) -> u16;
+
+    fn name(&self) -> &'static str;
 }
 
 impl RejectType for RejectTypes {

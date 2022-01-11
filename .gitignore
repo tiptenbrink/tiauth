@@ -1,4 +1,5 @@
 # Generated files
-/.idea/
-/target/
+.idea
+target
+db
 resources/resources.json

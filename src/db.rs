@@ -1,28 +1,45 @@
-use diesel::prelude::*;
-use diesel::sqlite::SqliteConnection;
-use crate::error::{ErrorExt, TiauthError};
-use crate::models::{UserAuth};
-
-
-pub async fn connect() -> SqliteConnection {
-    let database_url = "/tmp/tidb.sqlite";
-    SqliteConnection::establish(database_url).expect("Connection error!")
-}
-
-pub async fn upsert_user(conn: SqliteConnection, user: UserAuth) -> Result<(), TiauthError>{
-    use crate::schema::user_auth::dsl::*;
-
-    diesel::replace_into(user_auth).values(
-        (
-            user_hex.eq(user.user_hex),
-            salt_hex.eq(user.password_hash_hex),
-            salt_hex.eq(user.salt_hex),
-            secret_hex.eq(user.secret_hex),
-            public_hex.eq(user.public_hex)
-        )
-    )
-        .execute(&conn)
-        .repl("Error upserting user")?;
-
-    Ok(())
-}
+// use sqlx::sqlite::SqlitePoolOptions;
+// use sqlx::prelude::*;
+// use crate::error::{Error, ErrorExt};
+//
+// static AUTH_TABLE: &'static str = "user_auth";
+//
+// static USER_HEX: &'static str = "user_hex";
+// static PASSWORD_HASH_HEX: &'static str = "password_hash_hex";
+// static SALT_HEX: &'static str = "salt_hex";
+// static SECRET_HEX: &'static str = "secret_hex";
+// static PUBLIC_HEX: &'static str = "public_hex";
+//
+// #[derive(FromRow, Debug)]
+// struct UserAuth {
+//     user_hex: String,
+//     password_hash_hex: String,
+//     salt_hex: String,
+//     secret_hex: String,
+//     public_hex: String,
+// }
+//
+// async fn connect_test() -> Result<(), Error> {
+//     let pool = SqlitePoolOptions::new()
+//         .max_connections(2)
+//         .connect("sqlite:/tmp/tidb.sqlite").await.repl("Failed DB connection.")?;
+//
+//     // let columns: String;
+//     // let secret = true;
+//     // if !secret {
+//     //     columns = format!("{}, {}", SALT_HEX, PUBLIC_HEX);
+//     // } else {
+//     //     columns = format!("{}, {}, {}, {}", PASSWORD_HASH_HEX, SALT_HEX, SECRET_HEX, PUBLIC_HEX);
+//     // }
+//     // let sql_string = format!("SELECT DISTINCT {columns} FROM {table} WHERE {uh_name}='{uh}'",
+//     //                          columns=columns, table=AUTH_TABLE, uh_name=USER_HEX, uh=user_hex);
+//
+//     let user_auths = sqlx::query_as::<_, UserAuth>(
+//         "\
+// SELECT * FROM user_auth
+//     \
+//     ").fetch_all(&pool).await.repl("db")?;
+//     println!("{:?}", user_auths);
+//
+//     Ok(())
+// }
