@@ -1,4 +1,11 @@
 # tiauth
+
+## This repository has been archived
+
+This was one of my first application programming projects. Use v0.1.1 if you want any kind of functionality, the main branch contains rewrites that don't work. It doesn't implement any kind of standard, it's just a simple password authentication server using a hash that sends a signed token in JSON format. The database was... JSON files.
+
+## Old README
+
 Rust authentication server using warp
 
 json-file based -> migrating to diesel sqlite
