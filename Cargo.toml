@@ -1,24 +1,19 @@
 [package]
 name = "tiauth"
-version = "0.1.1"
-authors = ["tiptenbrink <75669206+tiptenbrink@users.noreply.github.com>"]
-edition = "2018"
+version = "0.2.0"
+authors = ["Tip ten Brink <75669206+tiptenbrink@users.noreply.github.com>"]
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sqlx = { version = "0.5.6", features = ["runtime-tokio-rustls", "sqlite"] }
-ed25519-dalek = "1.0.1"
-ed25519-zebra = "2.2.0"
+redb = "2.1.1"
+opaque-borink = "0.3.7"
 rand = "0.7"
 hex = "0.4.3"
-tokio = { version = "1.12", features = ["rt-multi-thread", "macros", "fs", ]}
-warp = "0.3.1"
+
+
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-base64-url = "1.4.10"
-log = "0.4"
-env_logger = "0.9"
 
-[patch.crates-io]
-warp = { git = 'https://github.com/tiptenbrink/warp', branch = 'reject_reply' }
+
