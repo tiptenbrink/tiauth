@@ -1,155 +1,146 @@
 use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, Value};
-use opaque_borink::server::register_server;
-use std::str;
+use opaque_borink::server::{register_server, register_server_finish};
+use opaque_borink::{create_setup, Error as OpaqueError};
+use std::sync::OnceLock;
+use std::{fs::read, str};
 use std::fmt::Debug;
+use serde::{Deserialize, Serialize};
+use rmp_serde::{decode, encode};
+use std::cell::OnceCell;
+use terrors::OneOf;
 
-struct Login<'a> {
-    data: &'a [u8],
-    user_id_loc: u32,
-    user_id_len: u32,
-    password_file_loc: u32,
-    password_file_len: u32
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Login {
+    user_id: String,
+    password_file: String,
+    #[serde(with = "serde_bytes")]
+    claims: Vec<u8>
 }
 
-impl<'a> Debug for Login<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Login {{\n\tuser_id: {},\n\tpassword_file: {},\n}}", self.user_id(), self.password_file())
-    }
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Session {
+    user_id: String,
+    expires: i128,
+    /// These are a subset of the "login claims"
+    #[serde(with = "serde_bytes")]
+    session_claims: Vec<u8>
 }
 
-struct LoginOwned {
-    data: Vec<u8>,
-    user_id_loc: u32,
-    user_id_len: u32,
-    password_file_loc: u32,
-    password_file_len: u32
+const USERS: TableDefinition<&str, &[u8]> = TableDefinition::new("users");
+const SESSIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sessions");
+const SERVER: TableDefinition<&str, String> = TableDefinition::new("server");
+
+fn open_db() -> Result<Database, Error> {
+    Ok(Database::create("my_db.redb")?)
 }
 
-impl LoginOwned {
-    fn new(user_id: &str, password_file: &str) -> Self {
-        // Combined length of user_id and password_file must be < ~4.29 billion bytes (u32::MAX), also leaving space for 8 bytes per field (length and location)
-        
-        let user_id_len = user_id.len() as u32;
-        let password_file_len = password_file.len() as u32;
-        let user_id_loc = 16;
-        let password_file_loc = user_id_loc + user_id_len;
-
-        let len = (user_id_len + password_file_len) as usize;
-        let mut data: Vec<u8> = Vec::with_capacity(len+16);
-        data.extend(user_id_loc.to_le_bytes());
-        data.extend(user_id_len.to_le_bytes());
-        data.extend(password_file_loc.to_le_bytes());
-        data.extend(password_file_len.to_le_bytes());
-        data.extend_from_slice(user_id.as_bytes());
-        data.extend_from_slice(password_file.as_bytes());
-
-        Self {
-            data,
-            user_id_len,
-            user_id_loc,
-            password_file_len,
-            password_file_loc
-        }
-    }
-
-    fn login(&self) -> Login {
-        Login {
-            data: self.data.as_slice(),
-            user_id_loc: self.user_id_loc,
-            user_id_len: self.user_id_len,
-            password_file_len: self.password_file_len,
-            password_file_loc: self.password_file_loc
-        }
-    }
-}
-
-fn get_data_u32(data: &[u8], loc: u32, len: u32) -> &[u8] {
-    let loc = loc as usize;
-    let len = len as usize;
-
-    let range = loc..(loc+len);
-
-    data.get(range).unwrap()
-}
-
-impl<'a> Login<'a> {
-    fn user_id(&self) -> &'a str {
-        let user_id_data = get_data_u32(self.data, self.user_id_loc, self.user_id_len);
-
-        str::from_utf8(user_id_data).unwrap()
-    }
-
-    fn password_file(&self) -> &'a str {
-        let user_id_data = get_data_u32(self.data, self.password_file_loc, self.password_file_len);
-
-        str::from_utf8(user_id_data).unwrap()
-    }
-}
-
-impl<'l> Value for Login<'l> {
-    type SelfType<'a> = Login<'a>
-    where
-        Self: 'a;
-
-    type AsBytes<'a> = &'a [u8]
-    where
-        Self: 'a;
-
-    fn fixed_width() -> Option<usize> {
-        None
-    }
-
-    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
-    where
-        Self: 'a {
-        let user_id_loc = u32::from_bytes(data.get(0..4).unwrap());
-        let user_id_len = u32::from_bytes(data.get(4..8).unwrap());
-        let password_file_loc = u32::from_bytes(data.get(8..12).unwrap());
-        let password_file_len = u32::from_bytes(data.get(12..16).unwrap());
-        
-        Login {
-            data,
-            user_id_loc,
-            user_id_len,
-            password_file_loc,
-            password_file_len
-        }
-    }
-
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
-    where
-        Self: 'a,
-        Self: 'b {
-        value.data
-    }
-
-    fn type_name() -> redb::TypeName {
-        TypeName::new("tiauth:login")
-    }
-}
-
-const TABLE: TableDefinition<&str, Login> = TableDefinition::new("my_data");
-
-fn get() -> Result<(), Error> {
-    let db = Database::create("my_db.redb")?;
-    let l = LoginOwned::new("user_id1", "pw2");
-    let l_db = l.login();
-    println!("{:?}", l_db);
-
+fn set_login(db: &Database, login: &Login) -> Result<(), Error> {
+    let buf = encode::to_vec_named(login).unwrap();
+    let user_id = login.user_id.as_str();
     let write_txn = db.begin_write()?;
     {
-        let mut table = write_txn.open_table(TABLE)?;
-        table.insert("my_key", l_db)?;
+        let mut table = write_txn.open_table(USERS)?;
+        table.insert(user_id, buf.as_slice())?;
     }
     write_txn.commit()?;
-
-    let read_txn = db.begin_read()?;
-    let table = read_txn.open_table(TABLE)?;
-    println!("{:?}", table.get("my_key")?.unwrap().value());
 
     Ok(())
 }
 
+fn get_login(db: &Database, user_id: &str) -> Result<Login, Error> {
+    let read_txn = db.begin_read()?;
+    let table = read_txn.open_table(USERS)?;
+
+    Ok(decode::from_read(table.get(user_id)?.unwrap().value()).unwrap())
+}
+
+fn set_setup(db: &Database) -> Result<(), Error> {
+    let write_txn = db.begin_write()?;
+
+    let setup = {
+        let mut table = write_txn.open_table(SERVER)?;
+        let setup = table.get("opaque_setup")?.map(|a| a.value());
+
+        if let Some(setup) = setup {
+            setup
+        } else {
+            let setup = create_setup();
+            table.insert("opaque_setup", setup.clone())?;
+            setup
+        }
+    };
+    
+    write_txn.commit()?;
+
+    let _ = SETUP.get_or_init(|| setup);
+
+    Ok(())
+}
+
+fn start_register(request: &str, user_id: &str) -> Result<String, OpaqueError> {
+    let setup = SETUP.get().unwrap();
+
+    register_server(setup, request, user_id)
+}
+
+trait WrapErrorOneOf<T, E, Target> {
+    fn to_one_of(self) -> Result<T, OneOf<(Target,)>>;
+
+    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target,O,)>>;
+
+    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O,Target,)>>;
+}
+
+impl<T, E, Target> WrapErrorOneOf<T, E, Target> for Result<T, E>
+where
+    E: Into<Target> + Send + Sync + 'static,
+    Target: Send + Sync + 'static
+{
+    fn to_one_of(self) -> Result<T, OneOf<(Target,)>> {
+        self.map_err(|e| { e.into() }).map_err(OneOf::from)
+    }
+
+    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target,O,)>> {
+        let as_one_of = self.to_one_of();
+        as_one_of.map_err(OneOf::broaden)
+    }
+
+    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O,Target,)>> {
+        let as_one_of = self.to_one_of();
+        as_one_of.map_err(OneOf::broaden)
+    }
+}
+
+
+
+fn register_finish(db: &Database, request: &str) -> Result<(), OneOf<(Error, OpaqueError)>> {
+    let password_file = register_server_finish(request)
+        .to_one_of_twond()?;
+
+
+    let write_txn = db.begin_write()
+        .to_one_of_two()?;
+
+
+    Ok(())
+}
+
+static SETUP: OnceLock<String> = OnceLock::new();
+
 fn main() {
-    get().unwrap();
+    let db = open_db().unwrap();
+
+    set_setup(&db).unwrap();
+
+    let value = Login {
+        user_id: "hi".to_owned(),
+        password_file: "pw".to_owned(),
+        claims: Vec::new()
+    };
+
+    set_login(&db, &value).unwrap();
+
+    let read_login = get_login(&db, &value.user_id).unwrap();
+
+    println!("{:?}", read_login);
 }
