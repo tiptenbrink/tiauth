@@ -15,6 +15,8 @@ use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::{OsRng, StdRng};
 use rand::{Rng, SeedableRng};
 
+mod crypto;
+
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Login {
     user_id: String,

@@ -17,6 +17,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
 terrors = "=0.3.0"
 base64 = "0.22.1"
+openssl = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
