@@ -1,25 +1,25 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 use base64::{engine::general_purpose as b64, Engine as _};
-use crypto::{create_key, create_session_key, load_key, load_public_key, load_session_key, save_key, save_session_key, verify_signature, Key, PublicKey, SessionKey};
+use crypto::{
+    create_key, create_session_key, load_key, load_public_key, load_session_key, save_key,
+    save_session_key, verify_signature, Key, PublicKey, SessionKey,
+};
 use opaque_borink::server::{
     login_server, login_server_finish, register_server, register_server_finish,
 };
 use opaque_borink::{create_setup, Error as OpaqueError};
 use rand::rngs::{OsRng, StdRng};
 use rand::{Rng, SeedableRng};
-use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, WriteTransaction};
+use redb::{Database, Error, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
+use rmpv::Value;
 use serde::{Deserialize, Serialize};
-use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::sync::OnceLock;
-use std::time::Instant;
-use std::{fs::read, str};
-use terrors::OneOf;
+use std::str;
 use std::time::SystemTime;
-use rmpv::Value;
+use terrors::OneOf;
 
 mod crypto;
 
@@ -45,7 +45,7 @@ struct SignedSession {
     session_encoded: Vec<u8>,
 
     #[serde(with = "serde_bytes")]
-    signature: Vec<u8>
+    signature: Vec<u8>,
 }
 
 /// Persistent server data, such as OPAQUE private key
@@ -54,17 +54,16 @@ const SERVER: TableDefinition<&str, String> = TableDefinition::new("server");
 /// App identities
 const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
 
-
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 enum ProofUse {
     // String is user_id
     ResetPassword(String),
 
-    CreateUser(String)
+    CreateUser(String),
 }
 
 impl ProofUse {
-    fn to_string(&self) -> String {
+    fn proof_repr(&self) -> String {
         match self {
             Self::ResetPassword(user_id) => format!("{}:reset_password", user_id).to_string(),
             Self::CreateUser(user_id) => format!("{}:create_user", user_id).to_string(),
@@ -80,23 +79,29 @@ struct Proof {
     application: String,
     proof_use: ProofUse,
     // This signature is base64url-encoded.
-    signature: String
+    signature: String,
 }
 
 fn proof_data(application: &str, nonce: &str, expires: u64, proof_use: &ProofUse) -> Vec<u8> {
-    format!("{}.{}.{}.{}", application, nonce, expires, proof_use.to_string()).into_bytes()
+    format!(
+        "{}.{}.{}.{}",
+        application,
+        nonce,
+        expires,
+        proof_use.proof_repr()
+    )
+    .into_bytes()
 }
-
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Application {
-    // This must be a 
+    // This must be a
     public_key: String,
     name: String,
 }
 
 // TODO maybe move this to start? I don't like that the DB stuff can be called at any moment
-fn app_key<'a, 'b>(state: &'a mut State, app_name: &'b str) -> Result<&'a PublicKey, Error> {
+fn app_key<'a>(state: &'a mut State, app_name: &str) -> Result<&'a PublicKey, Error> {
     let key = state.app_keys.get(app_name);
 
     if key.is_some() {
@@ -107,15 +112,18 @@ fn app_key<'a, 'b>(state: &'a mut State, app_name: &'b str) -> Result<&'a Public
         Ok(state.app_keys.get(app_name).unwrap())
     } else {
         let read_txn = state.db.begin_read()?;
-    
+
         let table = read_txn.open_table(APPS)?;
-    
-        let application: Application = decode::from_read(table.get(app_name)?.unwrap().value()).unwrap();
+
+        let application: Application =
+            decode::from_read(table.get(app_name)?.unwrap().value()).unwrap();
 
         let public_key = load_public_key(&application.public_key);
 
-        state.app_keys.insert(app_name.to_owned(), public_key.clone());
-        
+        state
+            .app_keys
+            .insert(app_name.to_owned(), public_key.clone());
+
         Ok(state.app_keys.get(app_name).unwrap())
     }
 }
@@ -161,7 +169,7 @@ fn open_db() -> Result<Database, Error> {
 fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), Error> {
     let buf = encode::to_vec_named(login).unwrap();
     let user_id = login.user_id.as_str();
-    let table_def = user_table(&mut state.tables, application);
+    let table_def = user_table(state.tables, application);
     let write_txn = state.db.begin_write()?;
 
     {
@@ -180,11 +188,18 @@ fn set_login_field(
     application: &str,
     user_id: &str,
     password_file: String,
-    require_unset_password: bool
+    require_unset_password: bool,
 ) -> Result<bool, Error> {
     let write_txn = state.db.begin_write()?;
-    
-    let result = set_login_field_write(&write_txn, state, application, user_id, password_file, require_unset_password)?;
+
+    let result = set_login_field_write(
+        &write_txn,
+        state,
+        application,
+        user_id,
+        password_file,
+        require_unset_password,
+    )?;
 
     write_txn.commit()?;
 
@@ -199,14 +214,14 @@ fn set_login_field_write(
     application: &str,
     user_id: &str,
     password_file: String,
-    require_unset_password: bool
+    require_unset_password: bool,
 ) -> Result<bool, Error> {
-    let table_def = user_table(&mut state.tables, application);
+    let table_def = user_table(state.tables, application);
     let mut table = write_txn.open_table(table_def)?;
     let mut login: Login = decode::from_read(table.get(user_id)?.unwrap().value()).unwrap();
-    
-    if require_unset_password && login.password_file.len() != 0 {
-        return Ok(false)
+
+    if require_unset_password && !login.password_file.is_empty() {
+        return Ok(false);
     }
 
     login.password_file = password_file;
@@ -219,7 +234,7 @@ fn set_login_field_write(
 
 fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Login, Error> {
     let read_txn = state.db.begin_read()?;
-    let table_def = user_table(&mut state.tables, application);
+    let table_def = user_table(state.tables, application);
 
     let table = read_txn.open_table(table_def)?;
 
@@ -272,17 +287,19 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, E
     Ok(PrivateState {
         opaque,
         session,
-        private
+        private,
     })
 }
 
 fn register_application(state: &mut State, application: Application) -> Result<(), Error> {
     let app_buf = encode::to_vec_named(&application).unwrap();
-    
+
     let write_txn = state.db.begin_write()?;
     {
         let mut table = write_txn.open_table(APPS)?;
-        table.insert(application.name.as_str(), app_buf.as_slice()).unwrap();
+        table
+            .insert(application.name.as_str(), app_buf.as_slice())
+            .unwrap();
     }
     write_txn.commit()?;
 
@@ -334,11 +351,18 @@ fn register_finish(
     application: &str,
     request: &str,
     user_id: &str,
-    require_unset_password: bool
+    require_unset_password: bool,
 ) -> Result<(), OneOf<(Error, OpaqueError)>> {
     let password_file = register_server_finish(request).to_one_of_twond()?;
 
-    set_login_field(state, application, user_id, password_file, require_unset_password).to_one_of_two()?;
+    set_login_field(
+        state,
+        application,
+        user_id,
+        password_file,
+        require_unset_password,
+    )
+    .to_one_of_two()?;
 
     Ok(())
 }
@@ -349,7 +373,7 @@ fn write_state(
     key: &str,
     state_data: &str,
 ) -> Result<(), Error> {
-    let table_def = state_table(&mut state.tables, application);
+    let table_def = state_table(state.tables, application);
 
     let write_txn = state.db.begin_write()?;
     {
@@ -362,7 +386,7 @@ fn write_state(
 }
 
 fn read_state(state: &mut State, application: &str, key: &str) -> Result<String, Error> {
-    let table_def = state_table(&mut state.tables, application);
+    let table_def = state_table(state.tables, application);
     let write_txn = state.db.begin_write()?;
     let state_data = {
         let mut table = write_txn.open_table(table_def)?;
@@ -384,10 +408,14 @@ fn login_start(
 ) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
     let read_login = get_login(state, application, user_id).unwrap();
 
-    let (response, state_data) =
-        login_server(&state.private.opaque, &read_login.password_file, request, user_id).to_one_of_twond()?;
+    let (response, state_data) = login_server(
+        &state.private.opaque,
+        &read_login.password_file,
+        request,
+        user_id,
+    )
+    .to_one_of_twond()?;
 
-    
     let nonce = nonce_384(state);
     let key = format!("{}:{}", user_id, nonce);
 
@@ -421,68 +449,92 @@ fn login_finish(
 // 1 month
 const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
 
-fn login_session(state: &mut State, application: &str, user_id: &str, request: &str, nonce: &str, secret: &str, requested_claims: Vec<String>) -> Result<Vec<u8>, OneOf<(Error, OpaqueError)>> {
+fn login_session(
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+    request: &str,
+    nonce: &str,
+    secret: &str,
+    requested_claims: Vec<String>,
+) -> Result<Vec<u8>, OneOf<(Error, OpaqueError)>> {
     let server_secret = login_finish(state, application, user_id, request, nonce)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
     }
 
-    let claims = get_login(state, application, user_id).to_one_of_two()?.claims;
+    let claims = get_login(state, application, user_id)
+        .to_one_of_two()?
+        .claims;
 
     let mut requested_claims: HashSet<String> = HashSet::from_iter(requested_claims);
 
     let session_claims: Vec<(Value, Value)> = if let Value::Map(entries) = claims {
-        entries.into_iter().filter(|(key, _value)| {
-            if let Value::String(key) = key {
-                if key.is_err() {
-                    panic!("Keys must be valid UTF-8!")
+        entries
+            .into_iter()
+            .filter(|(key, _value)| {
+                if let Value::String(key) = key {
+                    if key.is_err() {
+                        panic!("Keys must be valid UTF-8!")
+                    }
+
+                    let key = key.as_str().unwrap();
+
+                    requested_claims.remove(key)
+                } else {
+                    panic!("All claims must be string keys!")
                 }
-
-                let key = key.as_str().unwrap();
-
-                requested_claims.remove(key)
-            } else {
-                panic!("All claims must be string keys!")
-            }
-        }).collect()
+            })
+            .collect()
     } else {
         panic!("Claims must be a map type!");
     };
 
-    let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+    let time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let session = Session {
         user_id: user_id.to_owned(),
         expires: time + EXPIRE_TIME,
-        session_claims: Value::Map(session_claims)
+        session_claims: Value::Map(session_claims),
     };
 
     let session_encoded = encode::to_vec_named(&session).unwrap();
 
-    Ok(crypto::session(&session_encoded, &state.private.session, state.rng))
+    Ok(crypto::session(
+        &session_encoded,
+        &state.private.session,
+        state.rng,
+    ))
 }
 
 #[derive(Debug)]
 pub struct InvalidSession {}
 
 fn verify_session_claims(state: &mut State, session: &[u8]) -> Result<Session, InvalidSession> {
-    let session = crypto::session_decrypt(session, &state.private.session).map_err(|_e| InvalidSession { })?;
+    let session =
+        crypto::session_decrypt(session, &state.private.session).map_err(|_e| InvalidSession {})?;
 
-    decode::from_read(session.as_slice()).map_err(|_e| InvalidSession { })
+    decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
 }
 
 const LEEWAY: u64 = 10;
 
 fn reset_password(state: &mut State, proof: Proof) -> Result<(), Error> {
-    let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+    let time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     if time > proof.expires + LEEWAY {
         panic!("Proof has expired!");
     }
 
     if let ProofUse::ResetPassword(user_id) = proof.proof_use {
-        let state_table_def = state_table(&mut state.tables, &proof.application);
+        let state_table_def = state_table(state.tables, &proof.application);
         let signature = b64::URL_SAFE_NO_PAD.decode(&proof.signature).unwrap();
 
         let write_txn = state.db.begin_write()?;
@@ -498,29 +550,43 @@ fn reset_password(state: &mut State, proof: Proof) -> Result<(), Error> {
 
             let key = app_key(state, &proof.application)?;
 
-            let is_verified = verify_signature(&proof_data(&proof.application, &proof.nonce, proof.expires, &ProofUse::ResetPassword(user_id.clone())), &signature, key);
+            let is_verified = verify_signature(
+                &proof_data(
+                    &proof.application,
+                    &proof.nonce,
+                    proof.expires,
+                    &ProofUse::ResetPassword(user_id.clone()),
+                ),
+                &signature,
+                key,
+            );
 
             if !is_verified {
                 panic!("Signature invalid!");
             }
 
-            assert!(set_login_field_write(&write_txn, state, &proof.application, &user_id, "".to_owned(), false)?)
+            assert!(set_login_field_write(
+                &write_txn,
+                state,
+                &proof.application,
+                &user_id,
+                "".to_owned(),
+                false
+            )?)
         }
         write_txn.commit()?;
-        
     } else {
         // TODO make error
         panic!("Proof for reset password must be reset_password!")
     }
 
     Ok(())
-
 }
 
 struct PrivateState {
     opaque: String,
     session: SessionKey,
-    private: Key
+    private: Key,
 }
 
 /// It seems like giving them the same lifetime doesn't cause any issues
@@ -529,7 +595,7 @@ struct State<'a> {
     app_keys: &'a mut HashMap<String, PublicKey>,
     db: &'a Database,
     rng: &'a mut StdRng,
-    private: &'a PrivateState
+    private: &'a PrivateState,
 }
 
 struct StateOwner {
@@ -537,7 +603,7 @@ struct StateOwner {
     app_keys: HashMap<String, PublicKey>,
     db: Database,
     rng: StdRng,
-    private: PrivateState
+    private: PrivateState,
 }
 
 impl StateOwner {
@@ -554,7 +620,7 @@ impl StateOwner {
             app_keys: HashMap::new(),
             db,
             rng,
-            private
+            private,
         })
     }
 }
@@ -566,9 +632,8 @@ impl<'a> State<'a> {
             app_keys: &mut state.app_keys,
             db: &state.db,
             rng: &mut state.rng,
-            private: &state.private
+            private: &state.private,
         })
-        
     }
 }
 
@@ -587,6 +652,8 @@ fn main() {
     set_login(&mut state, &value, &app).unwrap();
 
     let read_login = get_login(&mut state, &app, &value.user_id).unwrap();
+
+    println!("{:?}", read_login)
 }
 
 #[cfg(test)]
@@ -625,12 +692,12 @@ mod tests {
             claims: Value::Map(Vec::new()),
         };
 
-        set_login(state, &value, &application).unwrap();
+        set_login(state, &value, application).unwrap();
 
         let (request, client_state) = client_register(password).unwrap();
         let server_response = start_register(state, &request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
-        register_finish(state, &application, &request, user_id, true).unwrap();
+        register_finish(state, application, &request, user_id, true).unwrap();
     }
 
     #[test]
@@ -650,7 +717,7 @@ mod tests {
 
         create_user(&mut state, user_id, app, password);
 
-        let read_login = get_login(&mut state, &app, &value.user_id).unwrap();
+        let read_login = get_login(&mut state, app, &value.user_id).unwrap();
 
         assert_ne!(value.password_file, read_login.password_file)
     }

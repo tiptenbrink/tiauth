@@ -1,12 +1,9 @@
-use openssl::hash::MessageDigest;
-use openssl::pkey::{Id, PKey, Private, Public};
 use base64::{engine::general_purpose as b64, Engine as _};
+use openssl::pkey::{Id, PKey, Private, Public};
 use openssl::sign::{Signer, Verifier};
 use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use rand::rngs::StdRng;
 use rand::RngCore;
-use serde::{Serialize, Deserialize};
-use serde;
 
 struct CryptoError {}
 
@@ -95,26 +92,24 @@ pub struct SessionKey {
 }
 
 pub struct SavedSessionKey {
-    pub session: String
+    pub session: String,
 }
 
 pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
-    let session = b64::URL_SAFE_NO_PAD.encode(&key.key_256_raw);
+    let session = b64::URL_SAFE_NO_PAD.encode(key.key_256_raw);
 
-    SavedSessionKey {
-        session
-    }
+    SavedSessionKey { session }
 }
 
 pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
     let mut key_256_raw = [0u8; 32];
 
-    let bytes_written = b64::URL_SAFE_NO_PAD.decode_slice(session_key_encoded, &mut key_256_raw).unwrap();
+    let bytes_written = b64::URL_SAFE_NO_PAD
+        .decode_slice(session_key_encoded, &mut key_256_raw)
+        .unwrap();
     assert_eq!(bytes_written, 32);
 
-    SessionKey {
-        key_256_raw
-    }
+    SessionKey { key_256_raw }
 }
 
 pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
@@ -159,10 +154,12 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
     match decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag) {
         Ok(decrypted) => Ok(decrypted),
         // If something with the data is wrong, no errors will be reported
-        Err(e) => if e.errors().len() == 0 {
-            Err(DecryptFailed {  })
-        } else {
-            panic!("Internal OpenSSL error!")
+        Err(e) => {
+            if e.errors().is_empty() {
+                Err(DecryptFailed {})
+            } else {
+                panic!("Internal OpenSSL error!")
+            }
         }
     }
 }
@@ -229,10 +226,11 @@ mod tests {
 
         let signature = sign_data(&key, data);
 
-        assert_eq!(
-            verify_signature(b"other_data", signature.as_slice(), &key.to_public_key()),
-            false
-        )
+        assert!(!verify_signature(
+            b"other_data",
+            signature.as_slice(),
+            &key.to_public_key()
+        ))
     }
 
     #[test]
@@ -241,10 +239,7 @@ mod tests {
 
         let data = b"some_data";
 
-        assert_eq!(
-            verify_signature(data, b"bad_sig", &key.to_public_key()),
-            false
-        )
+        assert!(!verify_signature(data, b"bad_sig", &key.to_public_key()))
     }
 
     #[test]
@@ -257,7 +252,7 @@ mod tests {
 
         let other_key = create_key().to_public_key();
 
-        assert_eq!(verify_signature(data, &signature, &other_key), false)
+        assert!(!verify_signature(data, &signature, &other_key))
     }
 
     #[test]
