@@ -1,38 +1,44 @@
 use openssl::hash::MessageDigest;
-use openssl::pkey::{Id, PKey, Private};
+use openssl::pkey::{Id, PKey, Private, Public};
 use openssl::sign::{Signer, Verifier};
-use base64::{engine::general_purpose as b64, Engine as _};
-use openssl::symm::{encrypt_aead, Cipher, decrypt_aead};
+use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use rand::rngs::StdRng;
 use rand::RngCore;
+use serde::{Serialize, Deserialize};
+use serde;
 
-struct CryptoError {
-
-}
+struct CryptoError {}
 
 pub struct Key {
-    openssl_ed448: PKey<Private>
+    openssl_ed448: PKey<Private>,
+}
+
+impl Key {
+    fn to_public_key(&self) -> PublicKey {
+        let key = self.openssl_ed448.raw_public_key().unwrap();
+        let openssl_ed448 = PKey::public_key_from_raw_bytes(&key, Id::ED448).unwrap();
+
+        PublicKey { openssl_ed448 }
+    }
 }
 
 pub struct SavedKeypair {
     // PEM encoded SubjectPublicKeyInfo
     pub public: String,
-    
+
     // PEM encoded PKCS#8
-    pub private: String
+    pub private: String,
 }
 
+#[derive(Clone)]
 pub struct PublicKey {
-    key: String
+    openssl_ed448: PKey<Public>,
 }
-
 
 pub fn create_key() -> Key {
     let openssl_ed448 = PKey::generate_ed448().unwrap();
 
-    Key {
-        openssl_ed448
-    }
+    Key { openssl_ed448 }
 }
 
 pub fn save_key(key: &Key) -> SavedKeypair {
@@ -43,30 +49,34 @@ pub fn save_key(key: &Key) -> SavedKeypair {
     let public_pem = key.openssl_ed448.public_key_to_pem().unwrap();
     let public = String::from_utf8(public_pem).unwrap();
 
-    SavedKeypair {
-        public,
-        private
-    }
+    SavedKeypair { public, private }
 }
 
 pub fn load_key(private_key_pem: &str) -> Key {
     let openssl_ed448 = PKey::private_key_from_pem(private_key_pem.as_bytes()).unwrap();
 
-    Key {
-        openssl_ed448
-    }
+    Key { openssl_ed448 }
 }
 
-pub fn signature_encoded(key: &Key, data: &[u8]) -> String {
+pub fn load_public_key(public_key_pem: &str) -> PublicKey {
+    let openssl_ed448 = PKey::public_key_from_pem(public_key_pem.as_bytes()).unwrap();
+
+    PublicKey { openssl_ed448 }
+}
+
+pub fn sign_data(key: &Key, data: &[u8]) -> Vec<u8> {
     // Only accept Ed448 keys
     assert_eq!(Id::ED448, key.openssl_ed448.id());
 
     let mut signer = Signer::new_without_digest(&key.openssl_ed448).unwrap();
-    signer.update(data).unwrap();
 
-    let signature = signer.sign_to_vec().unwrap();
+    signer.sign_oneshot_to_vec(data).unwrap()
+}
 
-    b64::URL_SAFE_NO_PAD.encode(signature)
+pub fn verify_signature(data: &[u8], signature: &[u8], public_key: &PublicKey) -> bool {
+    let mut verifier = Verifier::new_without_digest(&public_key.openssl_ed448).unwrap();
+
+    verifier.verify_oneshot(signature, data).unwrap()
 }
 
 pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
@@ -75,16 +85,15 @@ pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
     rng.fill_bytes(&mut key_bytes);
 
     SessionKey {
-        key_256_raw: key_bytes
+        key_256_raw: key_bytes,
     }
 }
 
 pub struct SessionKey {
-    key_256_raw: [u8; 32]
+    key_256_raw: [u8; 32],
 }
 
-
-pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) {
+pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
     let cipher = Cipher::aes_256_gcm();
 
     let mut iv_bytes = vec![0u8; 12];
@@ -92,22 +101,193 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) {
 
     let mut tag = vec![0u8; 16];
 
-    let mut ciphertext = encrypt_aead(cipher, &key.key_256_raw, Some(&iv_bytes), b"", session_data, &mut tag).unwrap();
+    let mut ciphertext = encrypt_aead(
+        cipher,
+        &key.key_256_raw,
+        Some(&iv_bytes),
+        b"",
+        session_data,
+        &mut tag,
+    )
+    .unwrap();
 
     // We add the authentication tag to the end
     ciphertext.append(&mut tag);
     ciphertext.append(&mut iv_bytes);
+
+    ciphertext
 }
 
-pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Vec<u8> {
+/// The decryption failed. This can be due to tampered data, an invalid key, invalid IV or incorrect tag.
+#[derive(Debug)]
+pub struct DecryptFailed {}
+
+pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, DecryptFailed> {
     let session_len = session.len();
     assert!(session_len >= 28);
 
-    let iv = session.get((session_len-16)..(session_len)).unwrap();
-    let tag = session.get((session_len-28)..(session_len-16)).unwrap();
-    let ciphertext = session.get(0..(session_len-28)).unwrap();
+    let iv = session.get((session_len - 12)..(session_len)).unwrap();
+    let tag = session.get((session_len - 28)..(session_len - 12)).unwrap();
+    let ciphertext = session.get(0..(session_len - 28)).unwrap();
 
     let cipher = Cipher::aes_256_gcm();
-    
-    decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag).unwrap()
+
+    decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag)
+        .map_err(|_| DecryptFailed {})
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{rngs::OsRng, Rng, SeedableRng};
+
+    use super::*;
+
+    #[test]
+    fn generate_key_length() {
+        let key = create_key();
+
+        let raw_private = key.openssl_ed448.raw_private_key().unwrap();
+
+        // Ed448 private should be 57 bytes
+        assert_eq!(raw_private.len(), 57);
+
+        let raw_public = key.openssl_ed448.raw_public_key().unwrap();
+
+        // Ed448 public should be 57 bytes
+        assert_eq!(raw_public.len(), 57);
+    }
+
+    #[test]
+    fn save_load_key() {
+        let key = create_key();
+
+        let saved_key = save_key(&key);
+
+        let loaded_key = load_key(&saved_key.private);
+
+        assert_eq!(
+            key.openssl_ed448.raw_public_key().unwrap(),
+            loaded_key.openssl_ed448.raw_public_key().unwrap()
+        );
+        assert_eq!(
+            key.openssl_ed448.raw_private_key().unwrap(),
+            loaded_key.openssl_ed448.raw_private_key().unwrap()
+        );
+    }
+
+    #[test]
+    fn sign_verify_data() {
+        let key = create_key();
+
+        let data = b"some_data";
+
+        let signature = sign_data(&key, data);
+
+        assert!(verify_signature(
+            data,
+            signature.as_slice(),
+            &key.to_public_key()
+        ))
+    }
+
+    #[test]
+    fn sign_invalid_data() {
+        let key = create_key();
+
+        let data = b"some_data";
+
+        let signature = sign_data(&key, data);
+
+        assert_eq!(
+            verify_signature(b"other_data", signature.as_slice(), &key.to_public_key()),
+            false
+        )
+    }
+
+    #[test]
+    fn sign_invalid_sig() {
+        let key = create_key();
+
+        let data = b"some_data";
+
+        assert_eq!(
+            verify_signature(data, b"bad_sig", &key.to_public_key()),
+            false
+        )
+    }
+
+    #[test]
+    fn sign_invalid_pub_key() {
+        let key = create_key();
+
+        let data = b"some_data";
+
+        let signature = sign_data(&key, data);
+
+        let other_key = create_key().to_public_key();
+
+        assert_eq!(verify_signature(data, &signature, &other_key), false)
+    }
+
+    #[test]
+    fn encrypt_decrypt() {
+        let mut seed = [0u8; 32];
+        OsRng.fill(&mut seed);
+        let mut rng = StdRng::from_seed(seed);
+
+        let key = create_session_key(&mut rng);
+
+        let data = "this_is_some_amount_of_data_that_I_encrypt";
+
+        let encrypted = session(data.as_bytes(), &key, &mut rng);
+
+        let data_decrypt = session_decrypt(&encrypted, &key).unwrap();
+
+        assert_eq!(data.as_bytes(), data_decrypt);
+    }
+
+    #[test]
+    fn encrypt_decrypt_different() {
+        let mut seed = [0u8; 32];
+        OsRng.fill(&mut seed);
+        let mut rng = StdRng::from_seed(seed);
+
+        let key = create_session_key(&mut rng);
+
+        let data = "this_is_some_amount_of_data_that_I_encrypt";
+
+        let encrypted = session(data.as_bytes(), &key, &mut rng);
+
+        let mut encrypted_tampered = encrypted.clone();
+        let mut encrypted_invalid_iv = encrypted.clone();
+        let mut encrypted_bad_tag = encrypted.clone();
+
+        if encrypted_tampered[0] != 3 {
+            encrypted_tampered[0] = 3
+        } else {
+            encrypted_tampered[0] = 2;
+        }
+
+        let encrypted_len = encrypted.len();
+
+        if encrypted_invalid_iv[encrypted_len - 1] != 3 {
+            encrypted_invalid_iv[encrypted_len - 1] = 3
+        } else {
+            encrypted_invalid_iv[encrypted_len - 1] = 2;
+        }
+
+        if encrypted_bad_tag[encrypted_len - 20] != 3 {
+            encrypted_bad_tag[encrypted_len - 20] = 3
+        } else {
+            encrypted_bad_tag[encrypted_len - 20] = 2;
+        }
+
+        let tampered_decrypt = session_decrypt(&encrypted_tampered, &key);
+        let invalid_iv_decrypt = session_decrypt(&encrypted_invalid_iv, &key);
+        let bad_tag_decrypt = session_decrypt(&encrypted_bad_tag, &key);
+
+        assert!(tampered_decrypt.is_err());
+        assert!(invalid_iv_decrypt.is_err());
+        assert!(bad_tag_decrypt.is_err());
+    }
 }

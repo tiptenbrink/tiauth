@@ -1,19 +1,24 @@
 #![allow(dead_code, unused_imports)]
 
-use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, Value};
-use opaque_borink::server::{register_server, register_server_finish, login_server, login_server_finish};
-use opaque_borink::{create_setup, Error as OpaqueError};
-use std::collections::HashMap;
-use std::sync::OnceLock;
-use std::{fs::read, str};
-use std::fmt::Debug;
-use serde::{Deserialize, Serialize};
-use rmp_serde::{decode, encode};
-use std::cell::OnceCell;
-use terrors::OneOf;
 use base64::{engine::general_purpose as b64, Engine as _};
+use crypto::{load_public_key, verify_signature, PublicKey};
+use opaque_borink::server::{
+    login_server, login_server_finish, register_server, register_server_finish,
+};
+use opaque_borink::{create_setup, Error as OpaqueError};
 use rand::rngs::{OsRng, StdRng};
 use rand::{Rng, SeedableRng};
+use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, Value, WriteTransaction};
+use rmp_serde::{decode, encode};
+use serde::{Deserialize, Serialize};
+use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::OnceLock;
+use std::time::Instant;
+use std::{fs::read, str};
+use terrors::OneOf;
+use std::time::SystemTime;
 
 mod crypto;
 
@@ -22,36 +27,121 @@ struct Login {
     user_id: String,
     password_file: String,
     #[serde(with = "serde_bytes")]
-    claims: Vec<u8>
+    claims: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Session {
     user_id: String,
-    expires: i128,
+    expires: u64,
     /// These are a subset of the "login claims"
     #[serde(with = "serde_bytes")]
-    session_claims: Vec<u8>
+    session_claims: Vec<u8>,
 }
 
+/// Persistent server data, such as OPAQUE private key
 const SERVER: TableDefinition<&str, String> = TableDefinition::new("server");
 
-fn session_table<'a>(state: &'a mut State, application: &str) -> TableDefinition<'a, &'static str, &'static [u8]> {
-    let tables = &mut state.tables;
+/// App identities
+const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
+
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+enum ProofUse {
+    // String is user_id
+    ResetPassword(String),
+
+    CreateUser(String)
+}
+
+impl ProofUse {
+    fn to_string(&self) -> String {
+        match self {
+            Self::ResetPassword(user_id) => format!("{}:reset_password", user_id).to_string(),
+            Self::CreateUser(user_id) => format!("{}:create_user", user_id).to_string(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Proof {
+    /// Nonce ensures it is used just once
+    nonce: String,
+    expires: u64,
+    application: String,
+    proof_use: ProofUse,
+    // This signature is base64url-encoded.
+    signature: String
+}
+
+fn proof_data(application: &str, nonce: &str, expires: u64, proof_use: &ProofUse) -> Vec<u8> {
+    format!("{}.{}.{}.{}", application, nonce, expires, proof_use.to_string()).into_bytes()
+}
+
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Application {
+    // This must be a 
+    public_key: String,
+    name: String,
+}
+
+// TODO maybe move this to start? I don't like that the DB stuff can be called at any moment
+fn app_key<'a, 'b>(state: &'a mut State, app_name: &'b str) -> Result<&'a PublicKey, Error> {
+    let key = state.app_keys.get(app_name);
+
+    if key.is_some() {
+        // This is necessary due to borrow checker limitation (see https://blog.rust-lang.org/2022/08/05/nll-by-default.html)
+        // It requires the "borrow checker of the future"
+        // Alternative is to instead return an owned PublicKey. Probably a clone is faster than a second get, but it doesn't matter much
+        // Entry API is also not an option because the below code is fallible
+        Ok(state.app_keys.get(app_name).unwrap())
+    } else {
+        let read_txn = state.db.begin_read()?;
     
-    let table_name = tables.entry(format!("{}:sessions", application)).or_insert_with(|| format!("{}:sessions", application));
+        let table = read_txn.open_table(APPS)?;
+    
+        let application: Application = decode::from_read(table.get(app_name)?.unwrap().value()).unwrap();
+
+        let public_key = load_public_key(&application.public_key);
+
+        state.app_keys.insert(app_name.to_owned(), public_key.clone());
+        
+        Ok(state.app_keys.get(app_name).unwrap())
+    }
+}
+
+fn session_table<'a>(
+    state: &'a mut State,
+    application: &str,
+) -> TableDefinition<'a, &'static str, &'static [u8]> {
+    let tables = &mut state.tables;
+
+    let table_name = tables
+        .entry(format!("{}:sessions", application))
+        .or_insert_with(|| format!("{}:sessions", application));
 
     TableDefinition::new(table_name)
 }
 
-fn user_table<'a>(tables: &'a mut HashMap<String, String>, application: &str) -> TableDefinition<'a, &'static str, &'static [u8]> {
-    let table_name = tables.entry(format!("{}:users", application)).or_insert_with(|| format!("{}:users", application));
+fn user_table<'a>(
+    tables: &'a mut HashMap<String, String>,
+    application: &str,
+) -> TableDefinition<'a, &'static str, &'static [u8]> {
+    let table_name = tables
+        .entry(format!("{}:users", application))
+        .or_insert_with(|| format!("{}:users", application));
 
     TableDefinition::new(table_name)
 }
 
-fn state_table<'a>(tables: &'a mut HashMap<String, String>, application: &str) -> TableDefinition<'a, &'static str, &'static str> {
-    let table_name = tables.entry(format!("{}:state", application)).or_insert_with(|| format!("{}:state", application));
+fn state_table<'a>(
+    tables: &'a mut HashMap<String, String>,
+    application: &str,
+) -> TableDefinition<'a, &'static str, &'static str> {
+    let table_name = tables
+        .entry(format!("{}:state", application))
+        .or_insert_with(|| format!("{}:state", application));
     TableDefinition::new(table_name)
 }
 
@@ -64,7 +154,7 @@ fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), 
     let user_id = login.user_id.as_str();
     let table_def = user_table(&mut state.tables, application);
     let write_txn = state.db.begin_write()?;
-    
+
     {
         let mut table = write_txn.open_table(table_def)?;
         table.insert(user_id, buf.as_slice())?;
@@ -74,21 +164,48 @@ fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), 
     Ok(())
 }
 
-fn set_login_field(state: &mut State, application: &str, user_id: &str, password_file: String) -> Result<(), Error> {
-    let table_def = user_table(&mut state.tables, application);
+/// Assumes a user has already been created. If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
+/// Returns true if password was written.
+fn set_login_field(
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+    password_file: String,
+    require_unset_password: bool
+) -> Result<bool, Error> {
     let write_txn = state.db.begin_write()?;
-    {
-        let mut table = write_txn.open_table(table_def)?;
-        let mut login: Login = decode::from_read(table.get(user_id)?.unwrap().value()).unwrap();
-        login.password_file = password_file;
-
-        let buf = encode::to_vec_named(&login).unwrap();
-        table.insert(user_id, buf.as_slice())?;
-    };
     
+    let result = set_login_field_write(&write_txn, state, application, user_id, password_file, require_unset_password)?;
+
     write_txn.commit()?;
 
-    Ok(())
+    Ok(result)
+}
+
+/// Assumes a user has already been created. If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
+/// Returns true if password was written.
+fn set_login_field_write(
+    write_txn: &WriteTransaction,
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+    password_file: String,
+    require_unset_password: bool
+) -> Result<bool, Error> {
+    let table_def = user_table(&mut state.tables, application);
+    let mut table = write_txn.open_table(table_def)?;
+    let mut login: Login = decode::from_read(table.get(user_id)?.unwrap().value()).unwrap();
+    
+    if require_unset_password && login.password_file.len() != 0 {
+        return Ok(false)
+    }
+
+    login.password_file = password_file;
+
+    let buf = encode::to_vec_named(&login).unwrap();
+    table.insert(user_id, buf.as_slice())?;
+
+    Ok(true)
 }
 
 fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Login, Error> {
@@ -115,10 +232,22 @@ fn set_setup(db: &Database) -> Result<(), Error> {
             setup
         }
     };
-    
     write_txn.commit()?;
 
     let _ = SETUP.get_or_init(|| setup);
+
+    Ok(())
+}
+
+fn register_application(state: &mut State, application: Application) -> Result<(), Error> {
+    let app_buf = encode::to_vec_named(&application).unwrap();
+    
+    let write_txn = state.db.begin_write()?;
+    {
+        let mut table = write_txn.open_table(APPS)?;
+        table.insert(application.name.as_str(), app_buf.as_slice()).unwrap();
+    }
+    write_txn.commit()?;
 
     Ok(())
 }
@@ -132,26 +261,26 @@ fn start_register(request: &str, user_id: &str) -> Result<String, OpaqueError> {
 trait WrapErrorOneOf<T, E, Target> {
     fn to_one_of(self) -> Result<T, OneOf<(Target,)>>;
 
-    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target,O,)>>;
+    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target, O)>>;
 
-    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O,Target,)>>;
+    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O, Target)>>;
 }
 
 impl<T, E, Target> WrapErrorOneOf<T, E, Target> for Result<T, E>
 where
     E: Into<Target> + Send + Sync + 'static,
-    Target: Send + Sync + 'static
+    Target: Send + Sync + 'static,
 {
     fn to_one_of(self) -> Result<T, OneOf<(Target,)>> {
-        self.map_err(|e| { e.into() }).map_err(OneOf::from)
+        self.map_err(|e| e.into()).map_err(OneOf::from)
     }
 
-    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target,O,)>> {
+    fn to_one_of_two<O>(self) -> Result<T, OneOf<(Target, O)>> {
         let as_one_of = self.to_one_of();
         as_one_of.map_err(OneOf::broaden)
     }
 
-    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O,Target,)>> {
+    fn to_one_of_twond<O>(self) -> Result<T, OneOf<(O, Target)>> {
         let as_one_of = self.to_one_of();
         as_one_of.map_err(OneOf::broaden)
     }
@@ -165,19 +294,28 @@ fn nonce_384(state: &mut State) -> String {
     b64::URL_SAFE_NO_PAD.encode(data.as_mut_slice())
 }
 
-fn register_finish(state: &mut State, application: &str, request: &str, user_id: &str) -> Result<(), OneOf<(Error, OpaqueError)>> {
-    let password_file = register_server_finish(request)
-        .to_one_of_twond()?;
+fn register_finish(
+    state: &mut State,
+    application: &str,
+    request: &str,
+    user_id: &str,
+    require_unset_password: bool
+) -> Result<(), OneOf<(Error, OpaqueError)>> {
+    let password_file = register_server_finish(request).to_one_of_twond()?;
 
-    set_login_field(state, application, user_id, password_file)
-        .to_one_of_two()?;
+    set_login_field(state, application, user_id, password_file, require_unset_password).to_one_of_two()?;
 
     Ok(())
 }
 
-fn write_state(state: &mut State, application: &str, key: &str, state_data: &str) -> Result<(), Error> {
+fn write_state(
+    state: &mut State,
+    application: &str,
+    key: &str,
+    state_data: &str,
+) -> Result<(), Error> {
     let table_def = state_table(&mut state.tables, application);
-    
+
     let write_txn = state.db.begin_write()?;
     {
         let mut table = write_txn.open_table(table_def)?;
@@ -202,44 +340,108 @@ fn read_state(state: &mut State, application: &str, key: &str) -> Result<String,
     Ok(state_data)
 }
 
-fn login_start(state: &mut State, application: &str, user_id: &str, request: &str) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
+// TODO implement fake credential, also if password file is empty
+fn login_start(
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+    request: &str,
+) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
     let setup = SETUP.get().unwrap();
 
     let read_login = get_login(state, application, user_id).unwrap();
-    
-    let (response, state_data) = login_server(setup, &read_login.password_file, request, user_id)
-        .to_one_of_twond()?;
 
+    let (response, state_data) =
+        login_server(setup, &read_login.password_file, request, user_id).to_one_of_twond()?;
+
+    
     let nonce = nonce_384(state);
     let key = format!("{}:{}", user_id, nonce);
 
-    write_state(state, application, &key, &state_data)
-        .to_one_of_two()?;
+    write_state(state, application, &key, &state_data).to_one_of_two()?;
 
     Ok((response, nonce))
 }
 
-fn login_finish(state: &mut State, application: &str, user_id: &str, request: &str, nonce: &str) -> Result<String, OneOf<(Error, OpaqueError)>> {
+fn login_finish(
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+    request: &str,
+    nonce: &str,
+) -> Result<String, OneOf<(Error, OpaqueError)>> {
     // 384 bits nonce, i.e. 48 bytes, 64 base64url characters, which are all 1 byte, so 64 bytes
     assert_eq!(nonce.len(), 64);
 
     let key = format!("{}:{}", user_id, nonce);
 
-    let state = read_state(state, application, &key)
-        .to_one_of_two()?;
+    let state = read_state(state, application, &key).to_one_of_two()?;
 
-    let secret = login_server_finish(request, &state)
-        .to_one_of_twond()?;
+    let secret = login_server_finish(request, &state).to_one_of_twond()?;
 
     Ok(secret)
 }
 
+fn login_session(state: &mut State, application: &str, user_id: &str, request: &str, nonce: &str) -> Result<String, OneOf<(Error, OpaqueError)>> {
+    let secret = login_finish(state, application, user_id, request, nonce)?;
+
+    todo!()
+}
+
+const LEEWAY: u64 = 10;
+
+fn reset_password(state: &mut State, proof: Proof) -> Result<(), Error> {
+    let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+    if time > proof.expires + LEEWAY {
+        panic!("Proof has expired!");
+    }
+
+    if let ProofUse::ResetPassword(user_id) = proof.proof_use {
+        let state_table_def = state_table(&mut state.tables, &proof.application);
+        let signature = b64::URL_SAFE_NO_PAD.decode(&proof.signature).unwrap();
+
+        let write_txn = state.db.begin_write()?;
+        {
+            let state_table = write_txn.open_table(state_table_def)?;
+
+            // TODO clean up nonces every so often (after expiry)
+            let nonce_exists = state_table.get(proof.nonce.as_str())?;
+
+            if nonce_exists.is_some() {
+                panic!("Proof has already been used!");
+            }
+
+            let key = app_key(state, &proof.application)?;
+
+            let is_verified = verify_signature(&proof_data(&proof.application, &proof.nonce, proof.expires, &ProofUse::ResetPassword(user_id.clone())), &signature, key);
+
+            if !is_verified {
+                panic!("Signature invalid!");
+            }
+
+            assert!(set_login_field_write(&write_txn, state, &proof.application, &user_id, "".to_owned(), false)?)
+        }
+        write_txn.commit()?;
+        
+    } else {
+        // TODO make error
+        panic!("Proof for reset password must be reset_password!")
+    }
+
+    Ok(())
+
+}
+
+
 static SETUP: OnceLock<String> = OnceLock::new();
 
-struct State<'a, 'b, 'c> {
-    tables: &'b mut HashMap<String, String>,
+/// It seems like giving them the same lifetime doesn't cause any issues
+struct State<'a> {
+    tables: &'a mut HashMap<String, String>,
+    app_keys: &'a mut HashMap<String, PublicKey>,
     db: &'a Database,
-    rng: &'c mut StdRng
+    rng: &'a mut StdRng,
 }
 
 fn main() {
@@ -248,20 +450,22 @@ fn main() {
     set_setup(&db).unwrap();
 
     let mut map = HashMap::new();
+    let mut key_map = HashMap::new();
     let mut seed = [0u8; 32];
     OsRng.fill(&mut seed);
     let mut rng = StdRng::from_seed(seed);
-    
+
     let mut state = State {
         tables: &mut map,
+        app_keys: &mut key_map,
         db: &db,
-        rng: &mut rng
+        rng: &mut rng,
     };
 
     let value = Login {
         user_id: "hi".to_owned(),
         password_file: "pw".to_owned(),
-        claims: Vec::new()
+        claims: Vec::new(),
     };
 
     let app = "abc".to_owned();
@@ -271,11 +475,12 @@ fn main() {
     let read_login = get_login(&mut state, &app, &value.user_id).unwrap();
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opaque_borink::client::{client_register, client_register_finish, client_login, client_login_finish};
+    use opaque_borink::client::{
+        client_login, client_login_finish, client_register, client_register_finish,
+    };
 
     fn setup() -> (Database, StdRng) {
         let tmp: tempfile::NamedTempFile = tempfile::NamedTempFile::new().unwrap();
@@ -294,16 +499,18 @@ mod tests {
     fn login_set_read() {
         let (db, mut rng) = setup();
         let mut map = HashMap::new();
+        let mut key_map = HashMap::new();
         let mut state = State {
             tables: &mut map,
+            app_keys: &mut key_map,
             db: &db,
-            rng: &mut rng
+            rng: &mut rng,
         };
 
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Vec::new()
+            claims: Vec::new(),
         };
 
         let app = "abc".to_owned();
@@ -321,7 +528,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Vec::new()
+            claims: Vec::new(),
         };
 
         set_login(state, &value, &application).unwrap();
@@ -329,17 +536,19 @@ mod tests {
         let (request, client_state) = client_register(password).unwrap();
         let server_response = start_register(&request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
-        register_finish(state, &application, &request, user_id).unwrap();
+        register_finish(state, &application, &request, user_id, true).unwrap();
     }
 
     #[test]
     fn register() {
         let (db, mut rng) = setup();
         let mut map = HashMap::new();
+        let mut key_map = HashMap::new();
         let mut state = State {
             tables: &mut map,
+            app_keys: &mut key_map,
             db: &db,
-            rng: &mut rng
+            rng: &mut rng,
         };
 
         let user_id = "hi";
@@ -347,7 +556,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Vec::new()
+            claims: Vec::new(),
         };
         let app = "abc";
         let password = "pass";
@@ -363,10 +572,12 @@ mod tests {
     fn login() {
         let (db, mut rng) = setup();
         let mut map = HashMap::new();
+        let mut key_map = HashMap::new();
         let mut state = State {
             tables: &mut map,
+            app_keys: &mut key_map,
             db: &db,
-            rng: &mut rng
+            rng: &mut rng,
         };
 
         let user_id = "hi";
