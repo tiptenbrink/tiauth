@@ -9,6 +9,8 @@ use redb::Error;
 use std::str;
 use terrors::OneOf;
 
+use super::prove::Proof;
+
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
 /// It is important to rate-limit this, because the `register_server` function is not cheap to compute.
@@ -40,6 +42,7 @@ fn register_finish(
     application: &str,
     request: &str,
     register_flow_nonce: &str,
+    claims_proof: Option<Proof>
 ) -> Result<(), OneOf<(Error, OpaqueError)>> {
     let password_file = register_server_finish(request).to_one_of_twond()?;
 
@@ -47,11 +50,13 @@ fn register_finish(
         state,
         application,
         register_flow_nonce,
-        vec![StateType::SetPassword, StateType::ChangePassword],
+        vec![StateType::SetPassword, StateType::ChangePassword, StateType::NewUser],
     )
     .to_one_of_two()?;
 
     if let Some(entry) = entry {
+        
+        
         let require_unset_password = match entry.state_type {
             StateType::ChangePassword => false,
             StateType::SetPassword => true,

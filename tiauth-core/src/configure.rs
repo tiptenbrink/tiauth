@@ -4,7 +4,7 @@ use rmp_serde::encode;
 use crate::data::{Application, APPS};
 use crate::state::State;
 
-fn register_application(state: &mut State, application: Application) -> Result<(), Error> {
+fn register_application(state: &mut State, application: &Application) -> Result<(), Error> {
     let app_buf = encode::to_vec_named(&application).unwrap();
 
     let write_txn = state.db.begin_write()?;
@@ -17,4 +17,24 @@ fn register_application(state: &mut State, application: Application) -> Result<(
     write_txn.commit()?;
 
     Ok(())
+}
+
+pub mod test_util {
+    use crate::crypto::{create_key, save_key, Key};
+
+    use super::*;
+
+    pub fn create_register_app(state: &mut State, application: &str) -> Result<Key, Error> {
+        let key = create_key();
+
+        let saved_key = save_key(&key);
+
+        let public_key = saved_key.public;
+
+        let app = Application::new(public_key, application);
+
+        register_application(state, &app)?;
+
+        Ok(key)
+    }
 }

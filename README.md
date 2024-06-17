@@ -54,7 +54,12 @@ The `claims` is a [MessagePack](https://msgpack.org/) map, where each key is a s
 
 ## Registration
 
-By default, any user can register for your application. If they try to register when someone has already registered, it will be a no-op.
+By default, any user can register for your application.
+
+When someone calls `start_register` (providing the application and their preferred user_id), the server computes the OPAQUE response and hands out a NewUser nonce. 
+It will do this even if someone has already registered using that user_id.
+
+When someone calls `register_finish` with a NewUser nonce, no status is returned. 
 
 <!-- ### Proof-mode -->
 

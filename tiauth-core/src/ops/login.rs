@@ -122,6 +122,7 @@ fn login_session<S: AsRef<str>>(
 
     let session = Session {
         user_id: user_id.to_owned(),
+        application: application.to_owned(),
         expires: time + EXPIRE_TIME,
         session_claims: Value::Map(session_claims),
     };
