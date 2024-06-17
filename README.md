@@ -71,3 +71,7 @@ Client provides request + nonce. Server writes at nonce key. While client can ch
 
 1. App: reset password
 2. Go to e-mail
+
+
+
+For encryption signing... check if msgpack deterministic?
