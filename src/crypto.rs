@@ -1,5 +1,6 @@
 use openssl::hash::MessageDigest;
 use openssl::pkey::{Id, PKey, Private, Public};
+use base64::{engine::general_purpose as b64, Engine as _};
 use openssl::sign::{Signer, Verifier};
 use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use rand::rngs::StdRng;
@@ -93,6 +94,29 @@ pub struct SessionKey {
     key_256_raw: [u8; 32],
 }
 
+pub struct SavedSessionKey {
+    pub session: String
+}
+
+pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
+    let session = b64::URL_SAFE_NO_PAD.encode(&key.key_256_raw);
+
+    SavedSessionKey {
+        session
+    }
+}
+
+pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
+    let mut key_256_raw = [0u8; 32];
+
+    let bytes_written = b64::URL_SAFE_NO_PAD.decode_slice(session_key_encoded, &mut key_256_raw).unwrap();
+    assert_eq!(bytes_written, 32);
+
+    SessionKey {
+        key_256_raw
+    }
+}
+
 pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
     let cipher = Cipher::aes_256_gcm();
 
@@ -132,8 +156,15 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
 
     let cipher = Cipher::aes_256_gcm();
 
-    decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag)
-        .map_err(|_| DecryptFailed {})
+    match decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag) {
+        Ok(decrypted) => Ok(decrypted),
+        // If something with the data is wrong, no errors will be reported
+        Err(e) => if e.errors().len() == 0 {
+            Err(DecryptFailed {  })
+        } else {
+            panic!("Internal OpenSSL error!")
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,24 +1,25 @@
 #![allow(dead_code, unused_imports)]
 
 use base64::{engine::general_purpose as b64, Engine as _};
-use crypto::{load_public_key, verify_signature, PublicKey};
+use crypto::{create_key, create_session_key, load_key, load_public_key, load_session_key, save_key, save_session_key, verify_signature, Key, PublicKey, SessionKey};
 use opaque_borink::server::{
     login_server, login_server_finish, register_server, register_server_finish,
 };
 use opaque_borink::{create_setup, Error as OpaqueError};
 use rand::rngs::{OsRng, StdRng};
 use rand::{Rng, SeedableRng};
-use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, Value, WriteTransaction};
+use redb::{Database, Error, ReadableTable, TableDefinition, TypeName, WriteTransaction};
 use rmp_serde::{decode, encode};
 use serde::{Deserialize, Serialize};
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{fs::read, str};
 use terrors::OneOf;
 use std::time::SystemTime;
+use rmpv::Value;
 
 mod crypto;
 
@@ -26,8 +27,7 @@ mod crypto;
 struct Login {
     user_id: String,
     password_file: String,
-    #[serde(with = "serde_bytes")]
-    claims: Vec<u8>,
+    claims: Value,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -35,8 +35,17 @@ struct Session {
     user_id: String,
     expires: u64,
     /// These are a subset of the "login claims"
+    /// They are a msgpack map
+    session_claims: Value,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct SignedSession {
     #[serde(with = "serde_bytes")]
-    session_claims: Vec<u8>,
+    session_encoded: Vec<u8>,
+
+    #[serde(with = "serde_bytes")]
+    signature: Vec<u8>
 }
 
 /// Persistent server data, such as OPAQUE private key
@@ -217,26 +226,54 @@ fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Logi
     Ok(decode::from_read(table.get(user_id)?.unwrap().value()).unwrap())
 }
 
-fn set_setup(db: &Database) -> Result<(), Error> {
+fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, Error> {
     let write_txn = db.begin_write()?;
 
-    let setup = {
+    let (opaque, session, private) = {
         let mut table = write_txn.open_table(SERVER)?;
         let setup = table.get("opaque_setup")?.map(|a| a.value());
 
-        if let Some(setup) = setup {
+        let setup = if let Some(setup) = setup {
             setup
         } else {
             let setup = create_setup();
             table.insert("opaque_setup", setup.clone())?;
             setup
-        }
+        };
+
+        let session_key = table.get("session_key")?.map(|a| a.value());
+
+        let session_key = if let Some(session_key) = session_key {
+            load_session_key(&session_key)
+        } else {
+            let session_key = create_session_key(rng);
+            let saved_session_key = save_session_key(&session_key);
+
+            table.insert("private_key", saved_session_key.session)?;
+            session_key
+        };
+
+        let private_key = table.get("private_key")?.map(|a| a.value());
+
+        let keypair = if let Some(private_key) = private_key {
+            load_key(&private_key)
+        } else {
+            let keypair = create_key();
+            let saved_private_key = save_key(&keypair);
+
+            table.insert("private_key", saved_private_key.private)?;
+            keypair
+        };
+
+        (setup, session_key, keypair)
     };
     write_txn.commit()?;
 
-    let _ = SETUP.get_or_init(|| setup);
-
-    Ok(())
+    Ok(PrivateState {
+        opaque,
+        session,
+        private
+    })
 }
 
 fn register_application(state: &mut State, application: Application) -> Result<(), Error> {
@@ -252,10 +289,8 @@ fn register_application(state: &mut State, application: Application) -> Result<(
     Ok(())
 }
 
-fn start_register(request: &str, user_id: &str) -> Result<String, OpaqueError> {
-    let setup = SETUP.get().unwrap();
-
-    register_server(setup, request, user_id)
+fn start_register(state: &State, request: &str, user_id: &str) -> Result<String, OpaqueError> {
+    register_server(&state.private.opaque, request, user_id)
 }
 
 trait WrapErrorOneOf<T, E, Target> {
@@ -347,12 +382,10 @@ fn login_start(
     user_id: &str,
     request: &str,
 ) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
-    let setup = SETUP.get().unwrap();
-
     let read_login = get_login(state, application, user_id).unwrap();
 
     let (response, state_data) =
-        login_server(setup, &read_login.password_file, request, user_id).to_one_of_twond()?;
+        login_server(&state.private.opaque, &read_login.password_file, request, user_id).to_one_of_twond()?;
 
     
     let nonce = nonce_384(state);
@@ -363,6 +396,9 @@ fn login_start(
     Ok((response, nonce))
 }
 
+/// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce and provided user_id, making it bound to these and ensuring
+/// they are the same values as in the first step. The server generates a secret based on the client request and stored state. If the secret is the same as the
+/// client's, we are certain that login succeeded.
 fn login_finish(
     state: &mut State,
     application: &str,
@@ -382,10 +418,58 @@ fn login_finish(
     Ok(secret)
 }
 
-fn login_session(state: &mut State, application: &str, user_id: &str, request: &str, nonce: &str) -> Result<String, OneOf<(Error, OpaqueError)>> {
-    let secret = login_finish(state, application, user_id, request, nonce)?;
+// 1 month
+const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
 
-    todo!()
+fn login_session(state: &mut State, application: &str, user_id: &str, request: &str, nonce: &str, secret: &str, requested_claims: Vec<String>) -> Result<Vec<u8>, OneOf<(Error, OpaqueError)>> {
+    let server_secret = login_finish(state, application, user_id, request, nonce)?;
+
+    if secret != server_secret {
+        panic!("Secrets do not match, invalid login!")
+    }
+
+    let claims = get_login(state, application, user_id).to_one_of_two()?.claims;
+
+    let mut requested_claims: HashSet<String> = HashSet::from_iter(requested_claims);
+
+    let session_claims: Vec<(Value, Value)> = if let Value::Map(entries) = claims {
+        entries.into_iter().filter(|(key, _value)| {
+            if let Value::String(key) = key {
+                if key.is_err() {
+                    panic!("Keys must be valid UTF-8!")
+                }
+
+                let key = key.as_str().unwrap();
+
+                requested_claims.remove(key)
+            } else {
+                panic!("All claims must be string keys!")
+            }
+        }).collect()
+    } else {
+        panic!("Claims must be a map type!");
+    };
+
+    let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+    let session = Session {
+        user_id: user_id.to_owned(),
+        expires: time + EXPIRE_TIME,
+        session_claims: Value::Map(session_claims)
+    };
+
+    let session_encoded = encode::to_vec_named(&session).unwrap();
+
+    Ok(crypto::session(&session_encoded, &state.private.session, state.rng))
+}
+
+#[derive(Debug)]
+pub struct InvalidSession {}
+
+fn verify_session_claims(state: &mut State, session: &[u8]) -> Result<Session, InvalidSession> {
+    let session = crypto::session_decrypt(session, &state.private.session).map_err(|_e| InvalidSession { })?;
+
+    decode::from_read(session.as_slice()).map_err(|_e| InvalidSession { })
 }
 
 const LEEWAY: u64 = 10;
@@ -433,8 +517,11 @@ fn reset_password(state: &mut State, proof: Proof) -> Result<(), Error> {
 
 }
 
-
-static SETUP: OnceLock<String> = OnceLock::new();
+struct PrivateState {
+    opaque: String,
+    session: SessionKey,
+    private: Key
+}
 
 /// It seems like giving them the same lifetime doesn't cause any issues
 struct State<'a> {
@@ -442,30 +529,57 @@ struct State<'a> {
     app_keys: &'a mut HashMap<String, PublicKey>,
     db: &'a Database,
     rng: &'a mut StdRng,
+    private: &'a PrivateState
+}
+
+struct StateOwner {
+    tables: HashMap<String, String>,
+    app_keys: HashMap<String, PublicKey>,
+    db: Database,
+    rng: StdRng,
+    private: PrivateState
+}
+
+impl StateOwner {
+    fn setup() -> Result<Self, Error> {
+        let db = open_db()?;
+        let mut seed = [0u8; 32];
+        OsRng.fill(&mut seed);
+        let mut rng = StdRng::from_seed(seed);
+
+        let private = init_private_state(&db, &mut rng)?;
+
+        Ok(Self {
+            tables: HashMap::new(),
+            app_keys: HashMap::new(),
+            db,
+            rng,
+            private
+        })
+    }
+}
+
+impl<'a> State<'a> {
+    fn from_state_owner(state: &'a mut StateOwner) -> Result<Self, Error> {
+        Ok(Self {
+            tables: &mut state.tables,
+            app_keys: &mut state.app_keys,
+            db: &state.db,
+            rng: &mut state.rng,
+            private: &state.private
+        })
+        
+    }
 }
 
 fn main() {
-    let db = open_db().unwrap();
-
-    set_setup(&db).unwrap();
-
-    let mut map = HashMap::new();
-    let mut key_map = HashMap::new();
-    let mut seed = [0u8; 32];
-    OsRng.fill(&mut seed);
-    let mut rng = StdRng::from_seed(seed);
-
-    let mut state = State {
-        tables: &mut map,
-        app_keys: &mut key_map,
-        db: &db,
-        rng: &mut rng,
-    };
+    let mut state_owner = StateOwner::setup().unwrap();
+    let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
     let value = Login {
         user_id: "hi".to_owned(),
         password_file: "pw".to_owned(),
-        claims: Vec::new(),
+        claims: Value::Map(Vec::new()),
     };
 
     let app = "abc".to_owned();
@@ -482,35 +596,15 @@ mod tests {
         client_login, client_login_finish, client_register, client_register_finish,
     };
 
-    fn setup() -> (Database, StdRng) {
-        let tmp: tempfile::NamedTempFile = tempfile::NamedTempFile::new().unwrap();
-        let db = Database::create(tmp.path()).unwrap();
-        let setup = create_setup();
-        let _ = SETUP.get_or_init(|| setup);
-
-        let mut seed = [0u8; 32];
-        OsRng.fill(&mut seed);
-        let rng = StdRng::from_seed(seed);
-
-        (db, rng)
-    }
-
     #[test]
     fn login_set_read() {
-        let (db, mut rng) = setup();
-        let mut map = HashMap::new();
-        let mut key_map = HashMap::new();
-        let mut state = State {
-            tables: &mut map,
-            app_keys: &mut key_map,
-            db: &db,
-            rng: &mut rng,
-        };
+        let mut state_owner = StateOwner::setup().unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Vec::new(),
+            claims: Value::Map(Vec::new()),
         };
 
         let app = "abc".to_owned();
@@ -528,35 +622,28 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Vec::new(),
+            claims: Value::Map(Vec::new()),
         };
 
         set_login(state, &value, &application).unwrap();
 
         let (request, client_state) = client_register(password).unwrap();
-        let server_response = start_register(&request, user_id).unwrap();
+        let server_response = start_register(state, &request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
         register_finish(state, &application, &request, user_id, true).unwrap();
     }
 
     #[test]
     fn register() {
-        let (db, mut rng) = setup();
-        let mut map = HashMap::new();
-        let mut key_map = HashMap::new();
-        let mut state = State {
-            tables: &mut map,
-            app_keys: &mut key_map,
-            db: &db,
-            rng: &mut rng,
-        };
+        let mut state_owner = StateOwner::setup().unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
         let user_id = "hi";
 
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Vec::new(),
+            claims: Value::Map(Vec::new()),
         };
         let app = "abc";
         let password = "pass";
@@ -570,15 +657,8 @@ mod tests {
 
     #[test]
     fn login() {
-        let (db, mut rng) = setup();
-        let mut map = HashMap::new();
-        let mut key_map = HashMap::new();
-        let mut state = State {
-            tables: &mut map,
-            app_keys: &mut key_map,
-            db: &db,
-            rng: &mut rng,
-        };
+        let mut state_owner = StateOwner::setup().unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
         let user_id = "hi";
         let app = "abc";

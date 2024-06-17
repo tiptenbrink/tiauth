@@ -46,6 +46,10 @@ Or maybe you just run your own little homelab and want a unified authentication 
 
 <!-- Some operations require "proof". There are two types of proof: -->
 
+# Claims structure
+
+The `claims` is a [MessagePack](https://msgpack.org/) map, where each key is a string (so it's UTF-8). The values can be any valid MsgPack, but if they are nested structures, note that the default recursion limit is 1024. Also, the claims must fit within 128 kB. It is up to the application to ensure there are no duplicate keys and that each key is indeed a string.
+
 # Security model
 
 ## Registration
