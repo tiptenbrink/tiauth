@@ -5,6 +5,7 @@ use rand::rngs::{OsRng, StdRng};
 use rand::{Rng, SeedableRng};
 use redb::{Database, Error, ReadableTable};
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::crypto::{
     create_key, create_session_key, load_key, load_session_key, save_key, save_session_key, Key,
@@ -58,13 +59,14 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, E
             let session_key = create_session_key(rng);
             let saved_session_key = save_session_key(&session_key);
 
-            table.insert("private_key", saved_session_key.session)?;
+            table.insert("session_key", saved_session_key.session)?;
             session_key
         };
 
         let private_key = table.get("private_key")?.map(|a| a.value());
 
         let keypair = if let Some(private_key) = private_key {
+            println!("private key {}", private_key);
             load_key(&private_key)
         } else {
             let keypair = create_key();
@@ -86,8 +88,8 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, E
 }
 
 impl StateOwner {
-    pub fn setup() -> Result<Self, Error> {
-        let db = open_db()?;
+    pub fn setup<P: AsRef<Path>>(db_path: P) -> Result<Self, Error> {
+        let db = open_db(db_path)?;
         let mut seed = [0u8; 32];
         OsRng.fill(&mut seed);
         let mut rng = StdRng::from_seed(seed);

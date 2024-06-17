@@ -1,5 +1,4 @@
 # Generated files
 .idea
 target
-db
-resources/resources.json
+**/*.redb

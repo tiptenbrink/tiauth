@@ -56,3 +56,49 @@ fn verify_session_claims(state: &mut State, session: &[u8]) -> Result<Session, I
 
     decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::login::test_util::*;
+    use crate::state::StateOwner;
+    use crate::util::msgpack_map;
+
+    #[test]
+    fn test_login_session() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
+
+        let claims = msgpack_map(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+
+        let user_id = "hi";
+        let app = "abc";
+        let password = "pass";
+
+        let session = login_create_session(
+            &mut state,
+            user_id,
+            app,
+            password,
+            Some(claims),
+            Some(vec!["email"]),
+        );
+
+        let session = verify_session_claims(&mut state, &session).unwrap();
+
+        let claims = session.session_claims.as_map().unwrap();
+
+        assert_eq!(
+            claims
+                .iter()
+                .filter(|(k, v)| {
+                    k.as_str().unwrap() == "email" && v.as_str().unwrap() == "hi@abc.nl"
+                })
+                .count(),
+            1
+        );
+
+        assert_eq!(claims.len(), 1);
+    }
+}

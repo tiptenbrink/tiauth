@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use crate::crypto::{self};
-use crate::data::{get_login, read_state, write_state, Session};
+use crate::data::{get_login, pop_state, write_state, Session, StateEntry, StateType};
 use crate::error::WrapErrorOneOf;
+use crate::ops::prove::LEEWAY;
 use crate::state::State;
 use crate::util::nonce_384;
 use opaque_borink::server::{login_server, login_server_finish};
@@ -32,59 +33,66 @@ fn login_start(
     )
     .to_one_of_twond()?;
 
-    let nonce = nonce_384(state.rng);
-    let key = format!("{}:{}", user_id, nonce);
+    let entropy = nonce_384(state.rng);
 
-    write_state(state, application, &key, &state_data).to_one_of_two()?;
+    let entry = StateEntry::new(user_id, StateType::Opaque, entropy, None, state_data);
+    let nonce = entry.key();
+
+    write_state(state, application, entry).to_one_of_two()?;
 
     Ok((response, nonce))
 }
 
-/// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce and provided user_id, making it bound to these and ensuring
-/// they are the same values as in the first step. The server generates a secret based on the client request and stored state. If the secret is the same as the
-/// client's, we are certain that login succeeded.
+/// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce, which is the serialized state entry key, which includes an
+/// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
+/// If the secret is the same as the client's, we are certain that login succeeded.
 fn login_finish(
     state: &mut State,
     application: &str,
-    user_id: &str,
     request: &str,
     nonce: &str,
-) -> Result<String, OneOf<(Error, OpaqueError)>> {
-    // 384 bits nonce, i.e. 48 bytes, 64 base64url characters, which are all 1 byte, so 64 bytes
-    assert_eq!(nonce.len(), 64);
+) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
+    let entry = pop_state(state, application, nonce, vec![StateType::Opaque])
+        .to_one_of_two()?
+        .unwrap();
 
-    let key = format!("{}:{}", user_id, nonce);
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-    let state = read_state(state, application, &key).to_one_of_two()?;
+    if now > entry.expires + LEEWAY {
+        panic!("Login has expired!")
+    }
 
-    let secret = login_server_finish(request, &state).to_one_of_twond()?;
+    let secret = login_server_finish(request, &entry.value.unwrap()).to_one_of_twond()?;
 
-    Ok(secret)
+    Ok((secret, entry.user_id))
 }
 
 // 1 month
 const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
 
-fn login_session(
+fn login_session<S: AsRef<str>>(
     state: &mut State,
     application: &str,
-    user_id: &str,
     request: &str,
     nonce: &str,
     secret: &str,
-    requested_claims: Vec<String>,
+    requested_claims: Vec<S>,
 ) -> Result<Vec<u8>, OneOf<(Error, OpaqueError)>> {
-    let server_secret = login_finish(state, application, user_id, request, nonce)?;
+    let (server_secret, user_id) = login_finish(state, application, request, nonce)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
     }
 
-    let claims = get_login(state, application, user_id)
+    let claims = get_login(state, application, &user_id)
         .to_one_of_two()?
         .claims;
 
-    let mut requested_claims: HashSet<String> = HashSet::from_iter(requested_claims);
+    let mut requested_claims: HashSet<&str> =
+        HashSet::from_iter(requested_claims.iter().map(|s| s.as_ref()));
 
     let session_claims: Vec<(Value, Value)> = if let Value::Map(entries) = claims {
         entries
@@ -127,24 +135,60 @@ fn login_session(
     ))
 }
 
+pub mod test_util {
+    use crate::ops::register::test_util::*;
+    use opaque_borink::client::{client_login, client_login_finish};
+    use rmpv::Value;
+
+    use super::*;
+
+    pub fn login_create_session(
+        state: &mut State,
+        user_id: &str,
+        application: &str,
+        password: &str,
+        claims: Option<Value>,
+        session_claims: Option<Vec<&str>>,
+    ) -> Vec<u8> {
+        create_user(state, user_id, application, password, claims);
+
+        let (request, client_state) = client_login(password).unwrap();
+
+        let (response, nonce) = login_start(state, application, user_id, &request).unwrap();
+
+        let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
+
+        login_session(
+            state,
+            application,
+            &request,
+            &nonce,
+            &secret,
+            session_claims.unwrap_or_default(),
+        )
+        .unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::ops::register::test_util::*;
     use crate::state::StateOwner;
+    use crate::{ops::register::test_util::*, util::msgpack_map};
     use opaque_borink::client::{client_login, client_login_finish};
 
     #[test]
     fn login() {
-        let mut state_owner = StateOwner::setup().unwrap();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
         let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        create_user(&mut state, user_id, app, password);
+        create_user(&mut state, user_id, app, password, None);
 
         let (request, client_state) = client_login(password).unwrap();
 
@@ -152,8 +196,36 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let secret_server = login_finish(&mut state, app, user_id, &request, &nonce).unwrap();
+        let (secret_server, login_user_id) =
+            login_finish(&mut state, app, &request, &nonce).unwrap();
 
-        assert_eq!(secret, secret_server)
+        assert_eq!(secret, secret_server);
+        assert_eq!(user_id, login_user_id);
+    }
+
+    #[test]
+    fn test_login_session() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
+
+        let claims = msgpack_map(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+
+        let user_id = "hi";
+        let app = "abc";
+        let password = "pass";
+
+        create_user(&mut state, user_id, app, password, Some(claims));
+
+        let (request, client_state) = client_login(password).unwrap();
+
+        let (response, nonce) = login_start(&mut state, app, user_id, &request).unwrap();
+
+        let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
+
+        let session =
+            login_session(&mut state, app, &request, &nonce, &secret, vec!["email"]).unwrap();
+
+        assert!(!session.is_empty());
     }
 }

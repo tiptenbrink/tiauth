@@ -6,7 +6,9 @@ use rmpv::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::Path;
 use std::str;
+use std::time::SystemTime;
 
 use crate::crypto::{load_public_key, PublicKey};
 use crate::state::State;
@@ -68,8 +70,8 @@ pub fn state_table<'a>(
     TableDefinition::new(table_name)
 }
 
-pub fn open_db() -> Result<Database, Error> {
-    Ok(Database::create("my_db.redb")?)
+pub fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, Error> {
+    Ok(Database::create(path)?)
 }
 
 /// Persistent server data, such as OPAQUE private key
@@ -188,32 +190,151 @@ pub fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<
     Ok(decode::from_read(table.get(user_id)?.unwrap().value()).unwrap())
 }
 
-pub fn write_state(
-    state: &mut State,
-    application: &str,
-    key: &str,
-    state_data: &str,
-) -> Result<(), Error> {
+#[derive(PartialEq, Eq)]
+pub enum StateType {
+    ChangePassword,
+    SetPassword,
+    Opaque,
+}
+
+impl StateType {
+    pub fn is(&self) -> impl Fn(&StateType) -> bool + '_ {
+        |t: &StateType| t.key_name() == self.key_name()
+    }
+
+    fn key_name(&self) -> &'static str {
+        match self {
+            Self::ChangePassword => "change_pass",
+            Self::SetPassword => "set_pass",
+            Self::Opaque => "opaque",
+        }
+    }
+
+    fn from_key_name(key_name: &str) -> Self {
+        match key_name {
+            "change_pass" => Self::ChangePassword,
+            "set_pass" => Self::SetPassword,
+            "opaque" => Self::Opaque,
+            _ => panic!("Invalid key_name for state type!"),
+        }
+    }
+}
+
+pub struct StateEntry {
+    pub user_id: String,
+    pub expires: u64,
+    entropy: String,
+    pub state_type: StateType,
+    pub value: Option<String>,
+}
+
+impl StateEntry {
+    // If expires_in is set to None, it will default to 30 minutes
+    pub fn new(
+        user_id: &str,
+        state_type: StateType,
+        entropy: String,
+        expires_in: Option<u64>,
+        value: String,
+    ) -> Self {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expires = expires_in.unwrap_or(1800) + now;
+
+        Self {
+            user_id: user_id.into(),
+            entropy,
+            state_type,
+            expires,
+            value: Some(value),
+        }
+    }
+
+    fn without_value(key: &str) -> Self {
+        let split: Vec<&str> = key.split(':').collect();
+
+        if split.len() < 4 {
+            panic!("Entry does not have correct format!")
+        }
+
+        let user_id = split[0..(split.len() - 3)].join(":");
+        let state_type = split[split.len() - 3].to_owned();
+        let entropy = split[split.len() - 2].to_owned();
+
+        // 384 bits nonce, i.e. 48 bytes, 64 base64url characters, which are all 1 byte, so 64 bytes
+        assert_eq!(entropy.len(), 64);
+
+        let expires: u64 = split[split.len() - 1].parse().unwrap();
+
+        Self {
+            user_id,
+            expires,
+            entropy,
+            state_type: StateType::from_key_name(&state_type),
+            value: None,
+        }
+    }
+
+    fn with_value(self, value: &str) -> Self {
+        Self {
+            user_id: self.user_id,
+            expires: self.expires,
+            entropy: self.entropy,
+            state_type: self.state_type,
+            value: Some(value.to_owned()),
+        }
+    }
+
+    pub fn key(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.user_id,
+            self.state_type.key_name(),
+            self.entropy,
+            self.expires
+        )
+    }
+}
+
+pub fn write_state(state: &mut State, application: &str, entry: StateEntry) -> Result<(), Error> {
     let table_def = state_table(state.tables, application);
 
     let write_txn = state.db.begin_write()?;
     {
         let mut table = write_txn.open_table(table_def)?;
-        table.insert(key, state_data)?;
+        table.insert(entry.key().as_str(), entry.value.unwrap().as_str())?;
     }
     write_txn.commit()?;
 
     Ok(())
 }
 
-pub fn read_state(state: &mut State, application: &str, key: &str) -> Result<String, Error> {
+/// Reads the provided key, removing it in the process. Should be used only for ephemeral, one-time keys.
+/// Do not use for keys which are supposed to represent revocations, as they will be removed, voiding the revocation.
+pub fn pop_state(
+    state: &mut State,
+    application: &str,
+    key: &str,
+    allowed_types: Vec<StateType>,
+) -> Result<Option<StateEntry>, Error> {
+    let empty_entry = StateEntry::without_value(key);
+
+    if allowed_types.iter().all(|t| *t != empty_entry.state_type) {
+        panic!("Types do no match for state!")
+    }
+
     let table_def = state_table(state.tables, application);
     let write_txn = state.db.begin_write()?;
     let state_data = {
         let mut table = write_txn.open_table(table_def)?;
-        let accesss = table.remove(key)?.unwrap();
-        let value = accesss.value();
-        value.to_owned()
+        let access = table.remove(key)?;
+        access.map(|d| {
+            let value = d.value();
+
+            empty_entry.with_value(value)
+        })
     };
     write_txn.commit()?;
 
@@ -228,7 +349,8 @@ mod tests {
 
     #[test]
     fn login_set_read() {
-        let mut state_owner = StateOwner::setup().unwrap();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
         let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
         let value = Login {
