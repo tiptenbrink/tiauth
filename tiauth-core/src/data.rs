@@ -1,23 +1,96 @@
 #![allow(dead_code)]
 
-use redb::{Database, Error, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::Path;
 use std::str;
 use std::time::SystemTime;
+use terrors::OneOf;
+use thiserror::Error;
 
 use crate::crypto::{load_public_key, PublicKey};
+use crate::error::WrapErrorOneOf;
 use crate::state::State;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct Login {
     pub user_id: String,
     pub password_file: String,
-    pub claims: Value,
+    pub claims: Claims,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Claims {
+    claims: Value,
+}
+
+impl Claims {
+    pub fn new<S, V>(map: Vec<(S, V)>) -> Self
+    where
+        S: Into<String>,
+        V: Into<Value>,
+    {
+        let value_value_map: Vec<(Value, Value)> = map
+            .into_iter()
+            .map(|(k, v)| {
+                let s: String = k.into();
+                (Value::String(s.into()), v.into())
+            })
+            .collect();
+
+        Self {
+            claims: Value::Map(value_value_map),
+        }
+    }
+
+    /// Returns only claims with keys in the provided subset. Consumes the previous claims object.
+    pub fn into_subset(self, mut subset: HashSet<&str>) -> Self {
+        let claims_subset: Vec<(Value, Value)> = if let Value::Map(entries) = self.claims {
+            entries
+                .into_iter()
+                .filter(|(key, _value)| {
+                    if let Value::String(key) = key {
+                        if key.is_err() {
+                            panic!("Keys must be valid UTF-8!")
+                        }
+
+                        let key = key.as_str().unwrap();
+
+                        subset.remove(key)
+                    } else {
+                        panic!("All claims must be string keys!")
+                    }
+                })
+                .collect()
+        } else {
+            panic!("Claims must be a map type!");
+        };
+
+        Self {
+            claims: Value::Map(claims_subset),
+        }
+    }
+
+    pub fn get(self) -> Vec<(Value, Value)> {
+        if let Value::Map(entries) = self.claims {
+            entries
+        } else {
+            panic!("Claims must be a map type!");
+        }
+    }
+}
+
+impl Default for Claims {
+    fn default() -> Self {
+        Self {
+            claims: Value::Map(Vec::new()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -27,7 +100,7 @@ pub struct Session {
     pub expires: u64,
     /// These are a subset of the "login claims"
     /// They are a msgpack map
-    pub session_claims: Value,
+    pub session_claims: Claims,
 }
 
 // #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -71,7 +144,7 @@ pub fn state_table<'a>(
     TableDefinition::new(table_name)
 }
 
-pub fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, Error> {
+pub fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, DbError> {
     Ok(Database::create(path)?)
 }
 
@@ -92,13 +165,13 @@ impl Application {
     pub fn new(public_key_pem: String, name: &str) -> Self {
         Self {
             public_key: public_key_pem,
-            name: name.to_owned()
+            name: name.to_owned(),
         }
     }
 }
 
 // TODO maybe move this to start? I don't like that the DB stuff can be called at any moment
-pub fn app_key<'a>(state: &'a mut State, app_name: &str) -> Result<&'a PublicKey, Error> {
+pub fn app_key<'a>(state: &'a mut State, app_name: &str) -> Result<&'a PublicKey, DbError> {
     let key = state.app_keys.get(app_name);
 
     if key.is_some() {
@@ -125,7 +198,7 @@ pub fn app_key<'a>(state: &'a mut State, app_name: &str) -> Result<&'a PublicKey
     }
 }
 
-pub fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), Error> {
+pub fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), DbError> {
     let buf = encode::to_vec_named(login).unwrap();
     let user_id = login.user_id.as_str();
     let table_def = user_table(state.tables, application);
@@ -140,64 +213,117 @@ pub fn set_login(state: &mut State, login: &Login, application: &str) -> Result<
     Ok(())
 }
 
-/// Assumes a user has already been created. If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
-/// Returns true if password was written.
-pub fn set_login_field(
-    state: &mut State,
-    application: &str,
-    user_id: &str,
-    password_file: String,
-    require_unset_password: bool,
-) -> Result<bool, Error> {
-    let write_txn = state.db.begin_write()?;
-
-    let result = set_login_field_write(
-        &write_txn,
-        state,
-        application,
-        user_id,
-        password_file,
-        require_unset_password,
-    )?;
-
-    write_txn.commit()?;
-
-    Ok(result)
+#[derive(Error, Debug)]
+pub enum LoginFieldError {
+    #[error("Could not set login: user {0} already exists.")]
+    AlreadyExists(String),
+    #[error("Could not set login: user {0} does not exist.")]
+    NotFound(String),
+    #[error("Could not set password for user {0}: already set.")]
+    PasswordSet(String),
 }
 
-/// If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
-/// Returns true if password was written.
+// /// Assumes a user has already been created. If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
+// /// Returns true if password was written.
+// pub fn set_login_field(
+//     state: &mut State,
+//     application: &str,
+//     user_id: &str,
+//     password_file: String,
+//     require_unset_password: bool,
+// ) -> Result<bool, OneOf<(DbError, LoginFieldError)>> {
+//     let write_txn = state.db.begin_write()?;
+
+//     let result = set_login_field_write(
+//         &write_txn,
+//         state,
+//         application,
+//         user_id,
+//         password_file,
+//         require_unset_password,
+//     )?;
+
+//     write_txn.commit()?;
+
+//     Ok(result)
+// }
+
+pub struct SetLoginOptions {
+    require_unset_password: bool,
+    create_user: bool,
+}
+
+impl SetLoginOptions {
+    pub fn new(require_unset_password: bool, create_user: bool) -> Self {
+        Self {
+            require_unset_password,
+            create_user,
+        }
+    }
+}
+
+/// Assumes "Claims" are a valid string-value map. It asserts only the map.
+/// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
+/// If `create_user` is set to true, it will create a user when the user does not exist. Otherwise, it
+/// will return a [LoginFieldError::AlreadyExists]. When set to false, it will instead return [LoginFieldError::NotFound]
+/// when the user does not exist.
 pub fn set_login_field_write(
     write_txn: &WriteTransaction,
     state: &mut State,
     application: &str,
     user_id: &str,
-    password_file: String,
-    require_unset_password: bool,
-    create_user: bool
-) -> Result<bool, Error> {
+    password_file: Option<String>,
+    claims: Option<Claims>,
+    options: SetLoginOptions,
+) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
+    // One of the two must be set
+    assert!(password_file.is_some() || claims.is_some());
+
     let table_def = user_table(state.tables, application);
-    let mut table = write_txn.open_table(table_def)?;
-    let access = table.get(user_id)?;
+    let mut table = write_txn.open_table(table_def).to_one_of_two()?;
+    let access = table.get(user_id).to_one_of_two()?;
+    let user: Option<Login> = access.map(|a| decode::from_read(a.value()).unwrap());
 
+    if let Some(mut user) = user {
+        if options.create_user {
+            return Err(OneOf::new(LoginFieldError::AlreadyExists(
+                user_id.to_owned(),
+            )));
+        }
+        if options.require_unset_password && !user.password_file.is_empty() {
+            return Err(OneOf::new(LoginFieldError::PasswordSet(user_id.to_owned())));
+        }
 
-    if let Some()
+        if let Some(password_file) = password_file {
+            user.password_file = password_file;
+        }
+        if let Some(claims) = claims {
+            user.claims = claims;
+        }
 
-    let mut login: Login = decode::from_read(.unwrap().value()).unwrap();
+        let buf = encode::to_vec_named(&user).unwrap();
+        table.insert(user_id, buf.as_slice()).to_one_of_two()?;
+    } else if options.create_user {
+        // Password file must contain value when creating user!
+        assert!(password_file.is_some());
 
-    if require_unset_password && !login.password_file.is_empty() {
-        return Ok(false);
+        let login = Login {
+            user_id: user_id.to_owned(),
+            password_file: password_file.unwrap(),
+            claims: claims.unwrap_or_default(),
+        };
+
+        let buf = encode::to_vec_named(&login).unwrap();
+
+        table.insert(user_id, buf.as_slice()).to_one_of_two()?;
+    } else {
+        return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
     }
 
-    login.password_file = password_file;
-
-    let buf = encode::to_vec_named(&login).unwrap();
-    table.insert(user_id, buf.as_slice())?;
-
-    Ok(true)
+    Ok(())
 }
 
-pub fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Login, Error> {
+pub fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Login, DbError> {
     let read_txn = state.db.begin_read()?;
     let table_def = user_table(state.tables, application);
 
@@ -206,7 +332,7 @@ pub fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<
     Ok(decode::from_read(table.get(user_id)?.unwrap().value()).unwrap())
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum StateType {
     NewUser,
     ChangePassword,
@@ -317,7 +443,7 @@ impl StateEntry {
     }
 }
 
-pub fn write_state(state: &mut State, application: &str, entry: StateEntry) -> Result<(), Error> {
+pub fn write_state(state: &mut State, application: &str, entry: StateEntry) -> Result<(), DbError> {
     let table_def = state_table(state.tables, application);
 
     let write_txn = state.db.begin_write()?;
@@ -337,7 +463,7 @@ pub fn pop_state(
     application: &str,
     key: &str,
     allowed_types: Vec<StateType>,
-) -> Result<Option<StateEntry>, Error> {
+) -> Result<Option<StateEntry>, DbError> {
     let empty_entry = StateEntry::without_value(key);
 
     if allowed_types.iter().all(|t| *t != empty_entry.state_type) {
@@ -375,7 +501,7 @@ mod tests {
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Value::Map(Vec::new()),
+            claims: Claims::default(),
         };
 
         let app = "abc".to_owned();

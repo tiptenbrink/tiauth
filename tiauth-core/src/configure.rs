@@ -24,7 +24,7 @@ pub mod test_util {
 
     use super::*;
 
-    pub fn create_register_app(state: &mut State, application: &str) -> Result<Key, Error> {
+    pub fn create_register_app(state: &mut State, application: &str) -> Key {
         let key = create_key();
 
         let saved_key = save_key(&key);
@@ -33,8 +33,8 @@ pub mod test_util {
 
         let app = Application::new(public_key, application);
 
-        register_application(state, &app)?;
+        register_application(state, &app).unwrap();
 
-        Ok(key)
+        key
     }
 }

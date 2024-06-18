@@ -630,6 +630,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5cf7ea47fef0cef7fcdeea0fe2585c66f4334c0d0250a8e77d01a8a46d89fd6"
 
 [[package]]
+name = "thiserror"
+version = "1.0.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c546c80d6be4bc6a00c0f01730c08df82eaa7a7a61f11d656526506112cc1709"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46c3384250002a6d5af4d114f2845d37b57521033f30d5c3f46c4d70e1197533"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.66",
+]
+
+[[package]]
 name = "tiauth"
 version = "0.2.0"
 
@@ -650,6 +670,7 @@ dependencies = [
  "serde_bytes",
  "tempfile",
  "terrors",
+ "thiserror",
 ]
 
 [[package]]

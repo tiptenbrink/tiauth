@@ -21,6 +21,7 @@ serde_bytes = "0.11"
 terrors = "=0.3.0"
 base64 = "0.22.1"
 openssl = "0.10"
+thiserror = "1.0"
 
 [dev-dependencies]
 tempfile = "3"

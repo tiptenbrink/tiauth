@@ -10,7 +10,6 @@ use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
 use rmp_serde::encode;
-use rmpv::Value;
 use std::collections::HashSet;
 use std::str;
 use std::time::SystemTime;
@@ -91,29 +90,10 @@ fn login_session<S: AsRef<str>>(
         .to_one_of_two()?
         .claims;
 
-    let mut requested_claims: HashSet<&str> =
+    let requested_claims: HashSet<&str> =
         HashSet::from_iter(requested_claims.iter().map(|s| s.as_ref()));
 
-    let session_claims: Vec<(Value, Value)> = if let Value::Map(entries) = claims {
-        entries
-            .into_iter()
-            .filter(|(key, _value)| {
-                if let Value::String(key) = key {
-                    if key.is_err() {
-                        panic!("Keys must be valid UTF-8!")
-                    }
-
-                    let key = key.as_str().unwrap();
-
-                    requested_claims.remove(key)
-                } else {
-                    panic!("All claims must be string keys!")
-                }
-            })
-            .collect()
-    } else {
-        panic!("Claims must be a map type!");
-    };
+    let session_claims = claims.into_subset(requested_claims);
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -124,7 +104,7 @@ fn login_session<S: AsRef<str>>(
         user_id: user_id.to_owned(),
         application: application.to_owned(),
         expires: time + EXPIRE_TIME,
-        session_claims: Value::Map(session_claims),
+        session_claims,
     };
 
     let session_encoded = encode::to_vec_named(&session).unwrap();
@@ -137,9 +117,8 @@ fn login_session<S: AsRef<str>>(
 }
 
 pub mod test_util {
-    use crate::ops::register::test_util::*;
+    use crate::ops::{prove::Proof, register::test_util::*};
     use opaque_borink::client::{client_login, client_login_finish};
-    use rmpv::Value;
 
     use super::*;
 
@@ -148,10 +127,10 @@ pub mod test_util {
         user_id: &str,
         application: &str,
         password: &str,
-        claims: Option<Value>,
+        claims: Option<Proof>,
         session_claims: Option<Vec<&str>>,
     ) -> Vec<u8> {
-        create_user(state, user_id, application, password, claims);
+        register_flow(state, user_id, application, password, None, claims);
 
         let (request, client_state) = client_login(password).unwrap();
 
@@ -175,8 +154,11 @@ pub mod test_util {
 mod tests {
     use super::*;
 
+    use crate::data::Claims;
+    use crate::ops::prove::test_util::*;
+
+    use crate::ops::register::test_util::*;
     use crate::state::StateOwner;
-    use crate::{ops::register::test_util::*, util::msgpack_map};
     use opaque_borink::client::{client_login, client_login_finish};
 
     #[test]
@@ -189,7 +171,7 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        create_user(&mut state, user_id, app, password, None);
+        register_flow(&mut state, user_id, app, password, None, None);
 
         let (request, client_state) = client_login(password).unwrap();
 
@@ -210,13 +192,15 @@ mod tests {
         let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
         let mut state = State::from_state_owner(&mut state_owner).unwrap();
 
-        let claims = msgpack_map(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        create_user(&mut state, user_id, app, password, Some(claims));
+        let claims_proof = register_proof_claims(&mut state, app, user_id, None, claims);
+
+        register_flow(&mut state, user_id, app, password, None, Some(claims_proof));
 
         let (request, client_state) = client_login(password).unwrap();
 
