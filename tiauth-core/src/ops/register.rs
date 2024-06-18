@@ -187,7 +187,7 @@ mod tests {
 
         register_flow(&mut state, user_id, app, password, None, None);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap();
+        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
 
         assert_ne!(value.password_file, read_login.password_file)
     }
@@ -210,13 +210,13 @@ mod tests {
 
         register_flow(&mut state, user_id, app, password, None, None);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap();
+        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
         let initial_pw_file = read_login.password_file;
 
         // Registering the second time should be a noop
         register_flow(&mut state, user_id, app, password, None, None);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap();
+        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
 
         assert_eq!(read_login.password_file, initial_pw_file)
     }

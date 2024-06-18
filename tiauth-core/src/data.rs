@@ -97,6 +97,7 @@ impl Default for Claims {
 pub struct Session {
     pub user_id: String,
     pub application: String,
+    pub issued: u64,
     pub expires: u64,
     /// These are a subset of the "login claims"
     /// They are a msgpack map
@@ -223,31 +224,6 @@ pub enum LoginFieldError {
     PasswordSet(String),
 }
 
-// /// Assumes a user has already been created. If `require_unset_password` is set to false, it will change it even if the password file is non-empty.
-// /// Returns true if password was written.
-// pub fn set_login_field(
-//     state: &mut State,
-//     application: &str,
-//     user_id: &str,
-//     password_file: String,
-//     require_unset_password: bool,
-// ) -> Result<bool, OneOf<(DbError, LoginFieldError)>> {
-//     let write_txn = state.db.begin_write()?;
-
-//     let result = set_login_field_write(
-//         &write_txn,
-//         state,
-//         application,
-//         user_id,
-//         password_file,
-//         require_unset_password,
-//     )?;
-
-//     write_txn.commit()?;
-
-//     Ok(result)
-// }
-
 pub struct SetLoginOptions {
     require_unset_password: bool,
     create_user: bool,
@@ -323,13 +299,19 @@ pub fn set_login_field_write(
     Ok(())
 }
 
-pub fn get_login(state: &mut State, application: &str, user_id: &str) -> Result<Login, DbError> {
+pub fn get_login(
+    state: &mut State,
+    application: &str,
+    user_id: &str,
+) -> Result<Option<Login>, DbError> {
     let read_txn = state.db.begin_read()?;
     let table_def = user_table(state.tables, application);
 
     let table = read_txn.open_table(table_def)?;
 
-    Ok(decode::from_read(table.get(user_id)?.unwrap().value()).unwrap())
+    let access = table.get(user_id)?;
+
+    Ok(access.map(|a| decode::from_read(a.value()).unwrap()))
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -508,7 +490,9 @@ mod tests {
 
         set_login(&mut state, &value, &app).unwrap();
 
-        let read_login = get_login(&mut state, &app, &value.user_id).unwrap();
+        let read_login = get_login(&mut state, &app, &value.user_id)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);

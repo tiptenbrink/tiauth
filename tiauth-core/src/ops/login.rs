@@ -22,7 +22,7 @@ fn login_start(
     user_id: &str,
     request: &str,
 ) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
-    let read_login = get_login(state, application, user_id).unwrap();
+    let read_login = get_login(state, application, user_id).unwrap().unwrap();
 
     let (response, state_data) = login_server(
         &state.private.opaque,
@@ -88,6 +88,7 @@ fn login_session<S: AsRef<str>>(
 
     let claims = get_login(state, application, &user_id)
         .to_one_of_two()?
+        .unwrap()
         .claims;
 
     let requested_claims: HashSet<&str> =
@@ -103,6 +104,7 @@ fn login_session<S: AsRef<str>>(
     let session = Session {
         user_id: user_id.to_owned(),
         application: application.to_owned(),
+        issued: time,
         expires: time + EXPIRE_TIME,
         session_claims,
     };

@@ -80,3 +80,6 @@ Client provides request + nonce. Server writes at nonce key. While client can ch
 
 
 For encryption signing... check if msgpack deterministic?
+
+
+TODO, revoke sessions when modified

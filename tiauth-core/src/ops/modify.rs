@@ -1,6 +1,6 @@
 use crate::data::{
-    session_table, set_login_field_write, state_table, LoginFieldError, SetLoginOptions,
-    StateEntry, StateType,
+    session_table, set_login_field_write, state_table, user_table, LoginFieldError,
+    SetLoginOptions, StateEntry, StateType,
 };
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
@@ -11,7 +11,8 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_meta, verify_session, InvalidProof, Proof, ProofUseVerify, LEEWAY,
+    verify_proof_meta, verify_session, InvalidProof, Proof, ProofUseVerify, CHANGE_AGE, DELETE_AGE,
+    LEEWAY,
 };
 
 /// Resets the password based on application proof. This is necessary because otherwise any user could reset another's password.
@@ -94,6 +95,10 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
         panic!("Session has expired!");
     }
 
+    if time > session.issued + CHANGE_AGE {
+        panic!("Session too old to be used for changing password!");
+    }
+
     let entropy = nonce_384(state.rng);
     let change_entry = StateEntry::new(
         &session.user_id,
@@ -131,6 +136,93 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
     Ok(change_nonce)
 }
 
+fn session_delete_user(state: &mut State, raw_session: &[u8]) -> Result<(), OneOf<(DbError,)>> {
+    let session = verify_session(state, raw_session).unwrap();
+
+    let time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if time > session.expires + LEEWAY {
+        panic!("Session has expired!");
+    }
+
+    if time > session.issued + DELETE_AGE {
+        panic!("Session too old to be used for deleting account!");
+    }
+
+    let session_table_def = session_table(state.tables, &session.application);
+    let write_txn = state
+        .db
+        .begin_write()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+    {
+        let table = write_txn
+            .open_table(session_table_def)
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+        let result = table
+            .get(raw_session)
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+        if result.is_some() {
+            panic!("Session has been revoked!");
+        }
+
+        let login_table_def = user_table(state.tables, &session.application);
+        let mut table = write_txn
+            .open_table(login_table_def)
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+        table
+            .remove(session.user_id.as_str())
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+    }
+    write_txn
+        .commit()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+
+    Ok(())
+}
+
+fn app_delete_user(state: &mut State, proof: Proof) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+    let (proof_info, proof_use) =
+        verify_proof_meta(state, proof, ProofUseVerify::DeleteUser).map_err(OneOf::broaden)?;
+
+    let write_txn = state
+        .db
+        .begin_write()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+    {
+        verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
+
+        let login_table_def = user_table(state.tables, &proof_info.application);
+        let mut table = write_txn
+            .open_table(login_table_def)
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+        table
+            .remove(proof_use.unwrap_user_id())
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+    }
+    write_txn
+        .commit()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,13 +258,13 @@ mod tests {
 
         let nonce = reset_password(&mut state, proof).unwrap();
 
-        let login = get_login(&mut state, app, user_id).unwrap();
+        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
 
         assert_eq!(login.password_file, "");
 
         register_flow(&mut state, user_id, app, password, Some(&nonce), None);
 
-        let login = get_login(&mut state, app, user_id).unwrap();
+        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
 
         assert!(!login.password_file.is_empty());
     }
@@ -191,14 +283,64 @@ mod tests {
 
         let nonce = change_password(&mut state, &session).unwrap();
 
-        let login = get_login(&mut state, app, user_id).unwrap();
+        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+        let initial_pw_file = login.password_file;
 
-        assert_eq!(login.password_file, "");
+        assert_ne!(initial_pw_file, "");
 
         register_flow(&mut state, user_id, app, password, Some(&nonce), None);
 
+        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+
+        assert_ne!(initial_pw_file, login.password_file);
+    }
+
+    #[test]
+    fn test_delete_passsword() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
+
+        let user_id = "hi";
+        let app = "abc";
+        let password = "pass";
+
+        let session = login_create_session(&mut state, user_id, app, password, None, None);
+
+        session_delete_user(&mut state, &session).unwrap();
+
         let login = get_login(&mut state, app, user_id).unwrap();
 
-        assert!(!login.password_file.is_empty());
+        assert!(login.is_none());
+    }
+
+    #[test]
+    fn test_delete_passsword_app() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
+        let mut state = State::from_state_owner(&mut state_owner).unwrap();
+
+        let user_id = "hi";
+        let app = "abc";
+        let password = "pass";
+
+        register_flow(&mut state, user_id, app, password, None, None);
+
+        let key = create_register_app(&mut state, app);
+        let proof = create_proof(
+            state.rng,
+            &key,
+            app,
+            None,
+            ProofUse::DeleteUser {
+                user_id: user_id.to_owned(),
+            },
+        );
+
+        app_delete_user(&mut state, proof).unwrap();
+
+        let login = get_login(&mut state, app, user_id).unwrap();
+
+        assert!(login.is_none());
     }
 }

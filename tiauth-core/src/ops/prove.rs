@@ -17,6 +17,7 @@ use thiserror::Error;
 #[derive(PartialEq, Eq)]
 pub enum ProofUseVerify {
     ResetPassword,
+    DeleteUser,
     SetClaims,
 }
 
@@ -25,6 +26,7 @@ pub enum ProofUseVerify {
 pub enum ProofUse {
     ResetPassword { user_id: String },
     SetClaims { user_id: String, claims: Claims },
+    DeleteUser { user_id: String },
 }
 
 impl ProofUse {
@@ -36,6 +38,7 @@ impl ProofUse {
 
     pub fn verify_type(&self, verifier: ProofUseVerify) -> bool {
         match verifier {
+            ProofUseVerify::DeleteUser => matches!(self, ProofUse::DeleteUser { .. }),
             ProofUseVerify::ResetPassword => matches!(self, ProofUse::ResetPassword { .. }),
             ProofUseVerify::SetClaims => matches!(self, ProofUse::SetClaims { .. }),
         }
@@ -43,6 +46,7 @@ impl ProofUse {
 
     pub fn unwrap_user_id(&self) -> &str {
         match self {
+            ProofUse::DeleteUser { user_id } => user_id,
             ProofUse::SetClaims { user_id, .. } => user_id,
             ProofUse::ResetPassword { user_id } => user_id, // _ => panic!("ProofUse must be SetClaims or ResetPassword variant!")
         }
@@ -120,7 +124,14 @@ pub fn proof_data(info: &ProofInfo, proof_use: &ProofUse) -> Vec<u8> {
     .into_bytes()
 }
 
+// How outdated a session or other time-sensitive token is allowed to be
 pub const LEEWAY: u64 = 10;
+
+// Can only delete account with session that is less than 10 minutes old
+pub const DELETE_AGE: u64 = 600;
+
+// Can only change password with session that is less than 10 minutes old
+pub const CHANGE_AGE: u64 = 600;
 
 #[derive(Debug)]
 pub struct InvalidSession {}
@@ -239,7 +250,7 @@ mod tests {
     use crate::state::StateOwner;
 
     #[test]
-    fn test_login_session() {
+    fn test_login_session_valid() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
         let mut state = State::from_state_owner(&mut state_owner).unwrap();
