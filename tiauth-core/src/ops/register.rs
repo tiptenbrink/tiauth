@@ -19,14 +19,14 @@ use super::prove::{verify_proof_meta, InvalidProof, Proof, ProofUseVerify};
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
 /// It is important to rate-limit this, because the `register_server` function is not cheap to compute.
 fn start_register(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     request: &str,
     user_id: &str,
 ) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
-    let response = register_server(&state.private.opaque, request, user_id).to_one_of_twond()?;
+    let response = register_server(&state.private().opaque, request, user_id).to_one_of_twond()?;
 
-    let entropy = nonce_384(state.rng);
+    let entropy = nonce_384(&mut state.rng());
     let entry = StateEntry::new(user_id, StateType::NewUser, entropy, None, "".to_owned());
     let nonce = entry.key();
 
@@ -37,7 +37,7 @@ fn start_register(
 
 /// The proof should be for SetClaims. This should be verified beforehand.
 fn register_finish(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     request: &str,
     register_flow_nonce: &str,
@@ -86,7 +86,7 @@ fn register_finish(
         let create_user = matches!(entry.state_type, StateType::NewUser);
 
         let write_txn = state
-            .db
+            .db()
             .begin_write()
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
@@ -132,15 +132,16 @@ fn register_finish(
     Ok(())
 }
 
+#[cfg(test)]
 pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
-    use crate::state::State;
+    use crate::state::test_util::TestState;
 
     use super::*;
 
     pub fn register_flow(
-        state: &mut State,
+        state: &TestState,
         user_id: &str,
         application: &str,
         password: &str,
@@ -163,18 +164,13 @@ pub mod test_util {
 mod tests {
     use crate::{
         data::{get_login, Claims, Login},
-        state::StateOwner,
+        state::test_util::TestState,
     };
 
     use super::test_util::*;
-    use super::*;
 
     #[test]
     fn register() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
 
         let value = Login {
@@ -185,19 +181,17 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        register_flow(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
+        register_flow(&state, user_id, app, password, None, None);
+
+        let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
 
         assert_ne!(value.password_file, read_login.password_file)
     }
 
     #[test]
     fn register_twice_noop() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
 
         let value = Login {
@@ -208,15 +202,17 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        register_flow(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
+        register_flow(&state, user_id, app, password, None, None);
+
+        let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
         let initial_pw_file = read_login.password_file;
 
         // Registering the second time should be a noop
-        register_flow(&mut state, user_id, app, password, None, None);
+        register_flow(&state, user_id, app, password, None, None);
 
-        let read_login = get_login(&mut state, app, &value.user_id).unwrap().unwrap();
+        let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
 
         assert_eq!(read_login.password_file, initial_pw_file)
     }

@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 use opaque_borink::create_setup;
-use rand::rngs::{OsRng, StdRng};
-use rand::{Rng, SeedableRng};
-use redb::{Database, Error, ReadableTable};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use redb::{Database, Error as DbError, ReadableTable};
+use rmp_serde::{decode, encode};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -11,7 +12,54 @@ use crate::crypto::{
     create_key, create_session_key, load_key, load_session_key, save_key, save_session_key, Key,
     PublicKey, SessionKey,
 };
-use crate::data::{open_db, SERVER};
+use crate::data::{open_db, Application, MapTables, Tables, APPS, SERVER};
+
+pub trait State {
+    fn register_application_internal(&mut self, application: &Application);
+
+    fn register_application(
+        &mut self,
+        application: &Application,
+        save: bool,
+    ) -> Result<(), DbError> {
+        if save {
+            write_app_to_db(self.db(), application)?;
+        }
+
+        self.register_application_internal(application);
+
+        Ok(())
+    }
+
+    fn tables(&self) -> &impl Tables;
+
+    fn app_key(&self, application: &str) -> PublicKey;
+
+    fn db(&self) -> &Database;
+
+    fn rng(&self) -> StdRng {
+        StdRng::from_entropy()
+    }
+
+    fn private(&self) -> &PrivateState;
+
+    fn from_init(init_state: InitState) -> Self;
+
+    fn setup<P: AsRef<Path>>(db_path: P) -> Result<Self, DbError>
+    where
+        Self: Sized,
+    {
+        let mut state = Self::from_init(InitState::init(db_path)?);
+
+        let registered_apps = get_apps(state.db())?;
+
+        for app in registered_apps {
+            state.register_application(&app, false)?;
+        }
+
+        Ok(state)
+    }
+}
 
 pub struct PrivateState {
     pub opaque: String,
@@ -20,23 +68,61 @@ pub struct PrivateState {
 }
 
 /// It seems like giving them the same lifetime doesn't cause any issues
-pub struct State<'a> {
-    pub tables: &'a mut HashMap<String, String>,
-    pub app_keys: &'a mut HashMap<String, PublicKey>,
-    pub db: &'a Database,
-    pub rng: &'a mut StdRng,
-    pub private: &'a PrivateState,
-}
-
-pub struct StateOwner {
-    tables: HashMap<String, String>,
+pub struct CoreState {
+    table_map: MapTables,
     app_keys: HashMap<String, PublicKey>,
     db: Database,
-    rng: StdRng,
     private: PrivateState,
 }
 
-fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, Error> {
+impl State for CoreState {
+    fn register_application_internal(&mut self, application: &Application) {
+        self.table_map.register_application(&application.name);
+        self.app_keys
+            .insert(application.name.clone(), application.public_key());
+    }
+
+    fn tables(&self) -> &impl Tables {
+        &self.table_map
+    }
+
+    fn db(&self) -> &Database {
+        &self.db
+    }
+
+    fn private(&self) -> &PrivateState {
+        &self.private
+    }
+
+    fn from_init(init_state: InitState) -> Self {
+        Self {
+            table_map: MapTables::new(),
+            app_keys: HashMap::new(),
+            db: init_state.db,
+            private: init_state.private,
+        }
+    }
+
+    fn app_key(&self, application: &str) -> PublicKey {
+        self.app_keys.get(application).unwrap().clone()
+    }
+}
+
+pub struct InitState {
+    pub db: Database,
+    pub private: PrivateState,
+}
+
+impl InitState {
+    fn init<P: AsRef<Path>>(db_path: P) -> Result<Self, DbError> {
+        let db = open_db(db_path)?;
+        let private = init_private_state(&db, &mut StdRng::from_entropy())?;
+
+        Ok(Self { db, private })
+    }
+}
+
+fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, DbError> {
     let write_txn = db.begin_write()?;
 
     let (opaque, session, private) = {
@@ -66,7 +152,6 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, E
         let private_key = table.get("private_key")?.map(|a| a.value());
 
         let keypair = if let Some(private_key) = private_key {
-            println!("private key {}", private_key);
             load_key(&private_key)
         } else {
             let keypair = create_key();
@@ -87,33 +172,134 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, E
     })
 }
 
-impl StateOwner {
-    pub fn setup<P: AsRef<Path>>(db_path: P) -> Result<Self, Error> {
-        let db = open_db(db_path)?;
-        let mut seed = [0u8; 32];
-        OsRng.fill(&mut seed);
-        let mut rng = StdRng::from_seed(seed);
+pub fn write_app_to_db(db: &Database, application: &Application) -> Result<(), DbError> {
+    let app_buf = encode::to_vec_named(&application).unwrap();
 
-        let private = init_private_state(&db, &mut rng)?;
-
-        Ok(Self {
-            tables: HashMap::new(),
-            app_keys: HashMap::new(),
-            db,
-            rng,
-            private,
-        })
+    let write_txn = db.begin_write()?;
+    {
+        let mut table = write_txn.open_table(APPS)?;
+        table
+            .insert(application.name.as_str(), app_buf.as_slice())
+            .unwrap();
     }
+    write_txn.commit()?;
+
+    Ok(())
 }
 
-impl<'a> State<'a> {
-    pub fn from_state_owner(state: &'a mut StateOwner) -> Result<Self, Error> {
-        Ok(Self {
-            tables: &mut state.tables,
-            app_keys: &mut state.app_keys,
-            db: &state.db,
-            rng: &mut state.rng,
-            private: &state.private,
-        })
+fn get_apps(db: &Database) -> Result<Vec<Application>, DbError> {
+    let write_txn = db.begin_write()?;
+    let apps = {
+        let table = write_txn.open_table(APPS)?;
+
+        let mut apps = Vec::new();
+
+        for app_entry in table.iter()? {
+            let (_, app_bytes) = app_entry?;
+
+            let app_bytes = app_bytes.value();
+
+            let app: Application = decode::from_read(app_bytes).unwrap();
+
+            apps.push(app);
+        }
+
+        apps
+    };
+
+    write_txn.commit()?;
+
+    Ok(apps)
+}
+
+#[cfg(test)]
+pub mod test_util {
+    use super::*;
+    use crate::crypto::Key;
+
+    fn create_app(application: &str) -> (Key, Application) {
+        let key = create_key();
+
+        let saved_key = save_key(&key);
+
+        let public_key = saved_key.public;
+
+        let app = Application::new(public_key, application);
+
+        (key, app)
+    }
+
+    pub struct TestState {
+        table_map: MapTables,
+        app_keys: HashMap<String, Key>,
+        app_public_keys: HashMap<String, PublicKey>,
+        db: Database,
+        private: PrivateState,
+    }
+
+    impl TestState {
+        pub fn setup_test(applications: Vec<&str>) -> Self {
+            let tmp = tempfile::NamedTempFile::new().unwrap();
+            let InitState { db, private } = InitState::init(tmp.path()).unwrap();
+
+            let mut table_map = MapTables::new();
+            let mut app_keys: HashMap<String, Key> = HashMap::new();
+            let mut app_public_keys: HashMap<String, PublicKey> = HashMap::new();
+
+            for app_name in applications {
+                let (key, app) = create_app(app_name);
+
+                write_app_to_db(&db, &app).unwrap();
+
+                table_map.register_application(app_name);
+                app_public_keys.insert(app_name.to_owned(), key.to_public_key());
+                app_keys.insert(app_name.to_owned(), key);
+            }
+
+            Self {
+                db,
+                private,
+                table_map,
+                app_keys,
+                app_public_keys,
+            }
+        }
+
+        pub fn proof_key(&self, application: &str) -> &Key {
+            self.app_keys.get(application).unwrap()
+        }
+    }
+
+    impl State for TestState {
+        fn register_application_internal(&mut self, _application: &Application) {
+            unimplemented!("Do not use this function for TestState. Register through `setup_test`.")
+        }
+
+        fn tables(&self) -> &impl Tables {
+            &self.table_map
+        }
+
+        fn db(&self) -> &Database {
+            &self.db
+        }
+
+        fn private(&self) -> &PrivateState {
+            &self.private
+        }
+
+        fn from_init(_init_state: InitState) -> Self {
+            unimplemented!("Do not use this function for TestState! Use `setup_test`.")
+        }
+
+        fn app_key(&self, application: &str) -> PublicKey {
+            self.app_public_keys.get(application).unwrap().clone()
+        }
+
+        fn setup<P: AsRef<Path>>(_db_path: P) -> Result<Self, DbError>
+        where
+            Self: Sized,
+        {
+            unimplemented!("Do not use this function for TestState!")
+        }
     }
 }

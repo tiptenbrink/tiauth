@@ -12,7 +12,7 @@ pub struct Key {
 }
 
 impl Key {
-    fn to_public_key(&self) -> PublicKey {
+    pub fn to_public_key(&self) -> PublicKey {
         let key = self.openssl_ed448.raw_public_key().unwrap();
         let openssl_ed448 = PKey::public_key_from_raw_bytes(&key, Id::ED448).unwrap();
 

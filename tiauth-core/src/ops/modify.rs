@@ -1,6 +1,5 @@
 use crate::data::{
-    session_table, set_login_field_write, state_table, user_table, LoginFieldError,
-    SetLoginOptions, StateEntry, StateType,
+    set_login_field_write, LoginFieldError, SetLoginOptions, StateEntry, StateType, Tables,
 };
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
@@ -26,7 +25,7 @@ use super::prove::{
 ///
 /// The function returns a "change nonce" that serves as a one-time token that allows one to re-enter the registration flow.
 fn reset_password(
-    state: &mut State,
+    state: &impl State,
     proof: Proof,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let (proof_info, proof_use) =
@@ -34,7 +33,7 @@ fn reset_password(
 
     let user_id = proof_use.unwrap_user_id();
 
-    let entropy = nonce_384(state.rng);
+    let entropy = nonce_384(&mut state.rng());
     let set_entry = StateEntry::new(
         user_id,
         StateType::SetPassword,
@@ -44,8 +43,10 @@ fn reset_password(
     );
     let set_nonce = set_entry.key();
 
+    let tables = state.tables().app(&proof_info.application);
+
     let write_txn = state
-        .db
+        .db()
         .begin_write()
         .into_one_of::<DbError>()
         .map_err(OneOf::broaden)?;
@@ -63,10 +64,8 @@ fn reset_password(
         )
         .map_err(OneOf::broaden)?;
 
-        let state_table_def = state_table(state.tables, &proof_info.application);
-
         let mut state_table = write_txn
-            .open_table(state_table_def)
+            .open_table(tables.state())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
@@ -83,7 +82,7 @@ fn reset_password(
     Ok(set_nonce)
 }
 
-fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneOf<(DbError,)>> {
+fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, OneOf<(DbError,)>> {
     let session = verify_session(state, raw_session).unwrap();
 
     let time = SystemTime::now()
@@ -99,7 +98,7 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
         panic!("Session too old to be used for changing password!");
     }
 
-    let entropy = nonce_384(state.rng);
+    let entropy = nonce_384(&mut state.rng());
     let change_entry = StateEntry::new(
         &session.user_id,
         StateType::ChangePassword,
@@ -108,13 +107,11 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
         "".to_owned(),
     );
     let change_nonce = change_entry.key();
-    let session_table_def = session_table(state.tables, &session.application);
+    let tables = state.tables().app(&session.application);
 
-    let write_txn = state.db.begin_write().into_one_of()?;
+    let write_txn = state.db().begin_write().into_one_of()?;
     {
-        let table = write_txn.open_table(session_table_def).into_one_of()?;
-
-        let state_table_def = state_table(state.tables, &session.application);
+        let table = write_txn.open_table(tables.sessions()).into_one_of()?;
 
         let result = table.get(raw_session).into_one_of()?;
 
@@ -122,7 +119,7 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
             panic!("Session has been revoked!");
         }
 
-        let mut state_table = write_txn.open_table(state_table_def).into_one_of()?;
+        let mut state_table = write_txn.open_table(tables.state()).into_one_of()?;
 
         state_table
             .insert(
@@ -136,7 +133,7 @@ fn change_password(state: &mut State, raw_session: &[u8]) -> Result<String, OneO
     Ok(change_nonce)
 }
 
-fn session_delete_user(state: &mut State, raw_session: &[u8]) -> Result<(), OneOf<(DbError,)>> {
+fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), OneOf<(DbError,)>> {
     let session = verify_session(state, raw_session).unwrap();
 
     let time = SystemTime::now()
@@ -152,15 +149,16 @@ fn session_delete_user(state: &mut State, raw_session: &[u8]) -> Result<(), OneO
         panic!("Session too old to be used for deleting account!");
     }
 
-    let session_table_def = session_table(state.tables, &session.application);
+    let tables = state.tables().app(&session.application);
+
     let write_txn = state
-        .db
+        .db()
         .begin_write()
         .into_one_of::<DbError>()
         .map_err(OneOf::broaden)?;
     {
         let table = write_txn
-            .open_table(session_table_def)
+            .open_table(tables.sessions())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
@@ -173,9 +171,8 @@ fn session_delete_user(state: &mut State, raw_session: &[u8]) -> Result<(), OneO
             panic!("Session has been revoked!");
         }
 
-        let login_table_def = user_table(state.tables, &session.application);
         let mut table = write_txn
-            .open_table(login_table_def)
+            .open_table(tables.users())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
@@ -192,21 +189,22 @@ fn session_delete_user(state: &mut State, raw_session: &[u8]) -> Result<(), OneO
     Ok(())
 }
 
-fn app_delete_user(state: &mut State, proof: Proof) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbError, InvalidProof)>> {
     let (proof_info, proof_use) =
         verify_proof_meta(state, proof, ProofUseVerify::DeleteUser).map_err(OneOf::broaden)?;
 
+    let tables = state.tables().app(&proof_info.application);
+
     let write_txn = state
-        .db
+        .db()
         .begin_write()
         .into_one_of::<DbError>()
         .map_err(OneOf::broaden)?;
     {
         verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
 
-        let login_table_def = user_table(state.tables, &proof_info.application);
         let mut table = write_txn
-            .open_table(login_table_def)
+            .open_table(tables.users())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
@@ -226,29 +224,25 @@ fn app_delete_user(state: &mut State, proof: Proof) -> Result<(), OneOf<(DbError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configure::test_util::*;
     use crate::data::get_login;
     use crate::ops::login::test_util::*;
     use crate::ops::prove::{test_util::*, ProofUse};
     use crate::ops::register::test_util::*;
-    use crate::state::StateOwner;
+    use crate::state::test_util::TestState;
 
     #[test]
     fn test_reset_password() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        register_flow(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        let key = create_register_app(&mut state, app);
+        register_flow(&state, user_id, app, password, None, None);
+
         let proof = create_proof(
-            state.rng,
-            &key,
+            &mut state.rng(),
+            state.proof_key(app),
             app,
             None,
             ProofUse::ResetPassword {
@@ -256,80 +250,73 @@ mod tests {
             },
         );
 
-        let nonce = reset_password(&mut state, proof).unwrap();
+        let nonce = reset_password(&state, proof).unwrap();
 
-        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+        let login = get_login(&state, app, user_id).unwrap().unwrap();
 
         assert_eq!(login.password_file, "");
 
-        register_flow(&mut state, user_id, app, password, Some(&nonce), None);
+        register_flow(&state, user_id, app, password, Some(&nonce), None);
 
-        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+        let login = get_login(&state, app, user_id).unwrap().unwrap();
 
         assert!(!login.password_file.is_empty());
     }
 
     #[test]
     fn test_change_password() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        let session = login_create_session(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        let nonce = change_password(&mut state, &session).unwrap();
+        let session = login_create_session(&state, user_id, app, password, None, None);
 
-        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+        let nonce = change_password(&state, &session).unwrap();
+
+        let login = get_login(&state, app, user_id).unwrap().unwrap();
         let initial_pw_file = login.password_file;
 
         assert_ne!(initial_pw_file, "");
 
-        register_flow(&mut state, user_id, app, password, Some(&nonce), None);
+        register_flow(&state, user_id, app, password, Some(&nonce), None);
 
-        let login = get_login(&mut state, app, user_id).unwrap().unwrap();
+        let login = get_login(&state, app, user_id).unwrap().unwrap();
 
         assert_ne!(initial_pw_file, login.password_file);
     }
 
     #[test]
     fn test_delete_passsword() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        let session = login_create_session(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        session_delete_user(&mut state, &session).unwrap();
+        let session = login_create_session(&state, user_id, app, password, None, None);
 
-        let login = get_login(&mut state, app, user_id).unwrap();
+        session_delete_user(&state, &session).unwrap();
+
+        let login = get_login(&state, app, user_id).unwrap();
 
         assert!(login.is_none());
     }
 
     #[test]
     fn test_delete_passsword_app() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        register_flow(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
 
-        let key = create_register_app(&mut state, app);
+        register_flow(&state, user_id, app, password, None, None);
+
         let proof = create_proof(
-            state.rng,
-            &key,
+            &mut state.rng(),
+            state.proof_key(app),
             app,
             None,
             ProofUse::DeleteUser {
@@ -337,9 +324,9 @@ mod tests {
             },
         );
 
-        app_delete_user(&mut state, proof).unwrap();
+        app_delete_user(&state, proof).unwrap();
 
-        let login = get_login(&mut state, app, user_id).unwrap();
+        let login = get_login(&state, app, user_id).unwrap();
 
         assert!(login.is_none());
     }

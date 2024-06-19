@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use rand::rngs::StdRng;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
 use rmpv::Value;
@@ -12,7 +13,7 @@ use std::time::SystemTime;
 use terrors::OneOf;
 use thiserror::Error;
 
-use crate::crypto::{load_public_key, PublicKey};
+use crate::crypto::{self, load_public_key, PublicKey, SessionKey};
 use crate::error::WrapErrorOneOf;
 use crate::state::State;
 
@@ -23,7 +24,7 @@ pub struct Login {
     pub claims: Claims,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 #[serde(transparent)]
 pub struct Claims {
     claims: Value,
@@ -104,45 +105,84 @@ pub struct Session {
     pub session_claims: Claims,
 }
 
-// #[derive(Debug, PartialEq, Deserialize, Serialize)]
-// struct SignedSession {
-//     #[serde(with = "serde_bytes")]
-//     pub session_encoded: Vec<u8>,
+impl Session {
+    pub fn token(&self, session_key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
+        let session_encoded = encode::to_vec_named(&self).unwrap();
 
-//     #[serde(with = "serde_bytes")]
-//     pub signature: Vec<u8>,
-// }
-
-pub fn session_table<'a>(
-    tables: &'a mut HashMap<String, String>,
-    application: &str,
-) -> TableDefinition<'a, &'static [u8], &'static str> {
-    let table_name = tables
-        .entry(format!("{}:sessions", application))
-        .or_insert_with(|| format!("{}:sessions", application));
-
-    TableDefinition::new(table_name)
+        crypto::session(&session_encoded, session_key, rng)
+    }
 }
 
-pub fn user_table<'a>(
-    tables: &'a mut HashMap<String, String>,
-    application: &str,
-) -> TableDefinition<'a, &'static str, &'static [u8]> {
-    let table_name = tables
-        .entry(format!("{}:users", application))
-        .or_insert_with(|| format!("{}:users", application));
+pub type TableStore = (String, String, String);
 
-    TableDefinition::new(table_name)
+pub struct AppTable {
+    store: TableStore,
 }
 
-pub fn state_table<'a>(
-    tables: &'a mut HashMap<String, String>,
-    application: &str,
-) -> TableDefinition<'a, &'static str, &'static str> {
-    let table_name = tables
-        .entry(format!("{}:state", application))
-        .or_insert_with(|| format!("{}:state", application));
-    TableDefinition::new(table_name)
+impl AppTable {
+    pub fn new(store: TableStore) -> Self {
+        Self { store }
+    }
+
+    pub fn sessions(&self) -> TableDefinition<'_, &'static [u8], &'static str> {
+        let table_name = self.store.0.as_str();
+
+        TableDefinition::new(table_name)
+    }
+
+    pub fn users(&self) -> TableDefinition<'_, &'static str, &'static [u8]> {
+        let table_name = self.store.1.as_str();
+
+        TableDefinition::new(table_name)
+    }
+
+    pub fn state(&self) -> TableDefinition<'_, &'static str, &'static str> {
+        let table_name = self.store.2.as_str();
+
+        TableDefinition::new(table_name)
+    }
+}
+
+pub trait Tables {
+    fn app(&self, application: &str) -> AppTable;
+
+    fn register_application(&mut self, application: &str);
+}
+
+#[derive(Debug)]
+pub struct MapTables {
+    tables: HashMap<String, TableStore>,
+}
+
+impl Default for MapTables {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MapTables {
+    pub fn new() -> Self {
+        Self {
+            tables: HashMap::new(),
+        }
+    }
+}
+
+impl Tables for MapTables {
+    fn register_application(&mut self, application: &str) {
+        let session_name = format!("{}:sessions", application);
+        let user_name = format!("{}:users", application);
+        let state_name = format!("{}:state", application);
+
+        self.tables.insert(
+            application.to_owned(),
+            (session_name, user_name, state_name),
+        );
+    }
+
+    fn app(&self, application: &str) -> AppTable {
+        AppTable::new(self.tables.get(application).unwrap().clone())
+    }
 }
 
 pub fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, DbError> {
@@ -169,44 +209,47 @@ impl Application {
             name: name.to_owned(),
         }
     }
-}
 
-// TODO maybe move this to start? I don't like that the DB stuff can be called at any moment
-pub fn app_key<'a>(state: &'a mut State, app_name: &str) -> Result<&'a PublicKey, DbError> {
-    let key = state.app_keys.get(app_name);
-
-    if key.is_some() {
-        // This is necessary due to borrow checker limitation (see https://blog.rust-lang.org/2022/08/05/nll-by-default.html)
-        // It requires the "borrow checker of the future"
-        // Alternative is to instead return an owned PublicKey. Probably a clone is faster than a second get, but it doesn't matter much
-        // Entry API is also not an option because the below code is fallible
-        Ok(state.app_keys.get(app_name).unwrap())
-    } else {
-        let read_txn = state.db.begin_read()?;
-
-        let table = read_txn.open_table(APPS)?;
-
-        let application: Application =
-            decode::from_read(table.get(app_name)?.unwrap().value()).unwrap();
-
-        let public_key = load_public_key(&application.public_key);
-
-        state
-            .app_keys
-            .insert(app_name.to_owned(), public_key.clone());
-
-        Ok(state.app_keys.get(app_name).unwrap())
+    pub fn public_key(&self) -> PublicKey {
+        load_public_key(&self.public_key)
     }
 }
 
-pub fn set_login(state: &mut State, login: &Login, application: &str) -> Result<(), DbError> {
+// // TODO maybe move this to start? I don't like that the DB stuff can be called at any moment
+// pub fn app_key<'a>(state: impl State, app_name: &str) -> Result<&'a PublicKey, DbError> {
+//     let key = state.app_keys.get(app_name);
+
+//     if key.is_some() {
+//         // This is necessary due to borrow checker limitation (see https://blog.rust-lang.org/2022/08/05/nll-by-default.html)
+//         // It requires the "borrow checker of the future"
+//         // Alternative is to instead return an owned PublicKey. Probably a clone is faster than a second get, but it doesn't matter much
+//         // Entry API is also not an option because the below code is fallible
+//         Ok(state.app_keys.get(app_name).unwrap())
+//     } else {
+//         let read_txn = state.db.begin_read()?;
+
+//         let table = read_txn.open_table(APPS)?;
+
+//         let application: Application =
+//             decode::from_read(table.get(app_name)?.unwrap().value()).unwrap();
+
+//         let public_key = load_public_key(&application.public_key);
+
+//         state
+//             .app_keys
+//             .insert(app_name.to_owned(), public_key.clone());
+
+//         Ok(state.app_keys.get(app_name).unwrap())
+//     }
+// }
+
+pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
     let buf = encode::to_vec_named(login).unwrap();
     let user_id = login.user_id.as_str();
-    let table_def = user_table(state.tables, application);
-    let write_txn = state.db.begin_write()?;
-
+    let tables = state.tables().app(application);
+    let write_txn = state.db().begin_write()?;
     {
-        let mut table = write_txn.open_table(table_def)?;
+        let mut table = write_txn.open_table(tables.users())?;
         table.insert(user_id, buf.as_slice())?;
     }
     write_txn.commit()?;
@@ -245,7 +288,7 @@ impl SetLoginOptions {
 /// when the user does not exist.
 pub fn set_login_field_write(
     write_txn: &WriteTransaction,
-    state: &mut State,
+    state: &impl State,
     application: &str,
     user_id: &str,
     password_file: Option<String>,
@@ -255,8 +298,8 @@ pub fn set_login_field_write(
     // One of the two must be set
     assert!(password_file.is_some() || claims.is_some());
 
-    let table_def = user_table(state.tables, application);
-    let mut table = write_txn.open_table(table_def).to_one_of_two()?;
+    let tables = state.tables().app(application);
+    let mut table = write_txn.open_table(tables.users()).to_one_of_two()?;
     let access = table.get(user_id).to_one_of_two()?;
     let user: Option<Login> = access.map(|a| decode::from_read(a.value()).unwrap());
 
@@ -300,14 +343,14 @@ pub fn set_login_field_write(
 }
 
 pub fn get_login(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     user_id: &str,
 ) -> Result<Option<Login>, DbError> {
-    let read_txn = state.db.begin_read()?;
-    let table_def = user_table(state.tables, application);
+    let read_txn = state.db().begin_read()?;
+    let tables = state.tables().app(application);
 
-    let table = read_txn.open_table(table_def)?;
+    let table = read_txn.open_table(tables.users())?;
 
     let access = table.get(user_id)?;
 
@@ -425,12 +468,16 @@ impl StateEntry {
     }
 }
 
-pub fn write_state(state: &mut State, application: &str, entry: StateEntry) -> Result<(), DbError> {
-    let table_def = state_table(state.tables, application);
+pub fn write_state(
+    state: &impl State,
+    application: &str,
+    entry: StateEntry,
+) -> Result<(), DbError> {
+    let tables = state.tables().app(application);
 
-    let write_txn = state.db.begin_write()?;
+    let write_txn = state.db().begin_write()?;
     {
-        let mut table = write_txn.open_table(table_def)?;
+        let mut table = write_txn.open_table(tables.state())?;
         table.insert(entry.key().as_str(), entry.value.unwrap().as_str())?;
     }
     write_txn.commit()?;
@@ -441,7 +488,7 @@ pub fn write_state(state: &mut State, application: &str, entry: StateEntry) -> R
 /// Reads the provided key, removing it in the process. Should be used only for ephemeral, one-time keys.
 /// Do not use for keys which are supposed to represent revocations, as they will be removed, voiding the revocation.
 pub fn pop_state(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     key: &str,
     allowed_types: Vec<StateType>,
@@ -451,11 +498,10 @@ pub fn pop_state(
     if allowed_types.iter().all(|t| *t != empty_entry.state_type) {
         panic!("Types do no match for state!")
     }
-
-    let table_def = state_table(state.tables, application);
-    let write_txn = state.db.begin_write()?;
+    let tables = state.tables().app(application);
+    let write_txn = state.db().begin_write()?;
     let state_data = {
-        let mut table = write_txn.open_table(table_def)?;
+        let mut table = write_txn.open_table(tables.state())?;
         let access = table.remove(key)?;
         access.map(|d| {
             let value = d.value();
@@ -470,29 +516,25 @@ pub fn pop_state(
 
 #[cfg(test)]
 mod tests {
-    use crate::{data::Login, state::StateOwner};
-
     use super::*;
+    use crate::data::Login;
+    use crate::state::test_util::*;
 
     #[test]
     fn login_set_read() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
             claims: Claims::default(),
         };
 
-        let app = "abc".to_owned();
+        let app = "abc";
 
-        set_login(&mut state, &value, &app).unwrap();
+        let state = TestState::setup_test(vec![app]);
 
-        let read_login = get_login(&mut state, &app, &value.user_id)
-            .unwrap()
-            .unwrap();
+        set_login(&state, &value, app).unwrap();
+
+        let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
 
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);

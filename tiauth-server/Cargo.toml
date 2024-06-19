@@ -5,3 +5,12 @@ edition = "2021"
 
 [dependencies]
 tiauth-core = { path="../tiauth-core" }
+redb = "2.1.1"
+axum = "0.7.5"
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
+rand = "0.8"
+
+[features]
+default = ["router"]
+functions = []
+router = ["functions"]

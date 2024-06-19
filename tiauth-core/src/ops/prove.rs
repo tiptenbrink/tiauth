@@ -1,5 +1,6 @@
+use crate::api::Tables;
 use crate::crypto::{self, sign_data, verify_signature, Key};
-use crate::data::{app_key, state_table, Claims, Session};
+use crate::data::{Claims, Session};
 use crate::error::WrapErrorOneOf;
 use crate::state::State;
 use crate::util::nonce_384;
@@ -21,7 +22,7 @@ pub enum ProofUseVerify {
     SetClaims,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 #[serde(tag = "use")]
 pub enum ProofUse {
     ResetPassword { user_id: String },
@@ -60,7 +61,7 @@ impl ProofUse {
     }
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct ProofInfo {
     /// Nonce ensures it is used just once
     pub nonce: String,
@@ -68,7 +69,7 @@ pub struct ProofInfo {
     pub application: String,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct Proof {
     /// For (de)serialization, the inner fields are put into the main Proof struct
     #[serde(flatten)]
@@ -136,9 +137,9 @@ pub const CHANGE_AGE: u64 = 600;
 #[derive(Debug)]
 pub struct InvalidSession {}
 
-pub fn verify_session(state: &mut State, session: &[u8]) -> Result<Session, InvalidSession> {
-    let session =
-        crypto::session_decrypt(session, &state.private.session).map_err(|_e| InvalidSession {})?;
+pub fn verify_session(state: &impl State, session: &[u8]) -> Result<Session, InvalidSession> {
+    let session = crypto::session_decrypt(session, &state.private().session)
+        .map_err(|_e| InvalidSession {})?;
 
     decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
 }
@@ -150,7 +151,7 @@ pub struct InvalidProof {}
 /// This checks all parts of the proof that do not require reading inspecting the state table.
 /// It is still required to check if the nonce has already been used!
 pub fn verify_proof_meta(
-    state: &mut State,
+    state: &impl State,
     proof: Proof,
     verify_use: ProofUseVerify,
 ) -> Result<(ProofInfo, ProofUse), OneOf<(DbError, InvalidProof)>> {
@@ -167,13 +168,15 @@ pub fn verify_proof_meta(
         return Err(OneOf::new(InvalidProof {}));
     };
 
-    let key = app_key(state, &proof.info.application).to_one_of_two()?;
-
     let signature = b64::URL_SAFE_NO_PAD
         .decode(&proof.signature)
         .map_err(|_e| OneOf::new(InvalidProof {}))?;
 
-    let is_verified = verify_signature(&proof_data(&proof.info, &proof.proof_use), &signature, key);
+    let is_verified = verify_signature(
+        &proof_data(&proof.info, &proof.proof_use),
+        &signature,
+        &state.app_key(&proof.info.application),
+    );
 
     if !is_verified {
         return Err(OneOf::new(InvalidProof {}));
@@ -183,13 +186,13 @@ pub fn verify_proof_meta(
 }
 
 pub fn verify_proof_write(
-    state: &mut State,
+    state: &impl State,
     write_txn: &WriteTransaction,
     proof_info: &ProofInfo,
 ) -> Result<(), OneOf<(DbError, InvalidProof)>> {
-    let state_table_def = state_table(state.tables, &proof_info.application);
+    let tables = state.tables().app(&proof_info.application);
 
-    let mut state_table = write_txn.open_table(state_table_def).to_one_of_two()?;
+    let mut state_table = write_txn.open_table(tables.state()).to_one_of_two()?;
     {
         // TODO clean up nonces every so often (after expiry)
         let nonce_exists = state_table.get(proof_info.nonce.as_str()).to_one_of_two()?;
@@ -207,10 +210,44 @@ pub fn verify_proof_write(
     Ok(())
 }
 
+fn verify_proof(
+    state: &impl State,
+    proof: Proof,
+    verify_use: ProofUseVerify,
+) -> Result<(ProofInfo, ProofUse), OneOf<(DbError, InvalidProof)>> {
+    let (proof_info, proof_use) = verify_proof_meta(state, proof, verify_use)?;
+
+    let write_txn = state.db().begin_write().to_one_of_two()?;
+
+    verify_proof_write(state, &write_txn, &proof_info)?;
+
+    write_txn.commit().to_one_of_two()?;
+
+    Ok((proof_info, proof_use))
+}
+
+#[cfg(test)]
 pub mod test_util {
-    use crate::configure::test_util::create_register_app;
+    use crate::state::test_util::*;
+    use crate::EXPIRE_TIME;
+    use std::time::UNIX_EPOCH;
 
     use super::*;
+
+    pub fn create_session(user_id: &str, application: &str, session_claims: Claims) -> Session {
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Session {
+            user_id: user_id.to_owned(),
+            application: application.to_owned(),
+            issued: time,
+            expires: time + EXPIRE_TIME,
+            session_claims,
+        }
+    }
 
     pub fn create_proof(
         rng: &mut StdRng,
@@ -222,57 +259,52 @@ pub mod test_util {
         Proof::create(rng, app_key, application, expires_in, proof_use)
     }
 
-    pub fn register_proof_claims(
-        state: &mut State,
+    pub fn create_proof_claims(
+        state: &TestState,
         application: &str,
         user_id: &str,
         expires_in: Option<u64>,
         claims: Claims,
     ) -> Proof {
-        let key = create_register_app(state, application);
-
         let proof_use = ProofUse::SetClaims {
             user_id: user_id.to_owned(),
             claims,
         };
 
-        Proof::create(state.rng, &key, application, expires_in, proof_use)
+        create_proof(
+            &mut state.rng(),
+            state.proof_key(application),
+            application,
+            expires_in,
+            proof_use,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use test_util::register_proof_claims;
+    use crate::state::test_util::*;
+
+    use test_util::*;
 
     use super::*;
 
-    use crate::ops::login::test_util::*;
-    use crate::state::StateOwner;
-
     #[test]
-    fn test_login_session_valid() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
+    fn test_session_verify() {
+        let user_id = "hi";
+        let app = "abc";
+
+        let state = TestState::setup_test(vec![app]);
 
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
-        let user_id = "hi";
-        let app = "abc";
-        let password = "pass";
+        let session = create_session(user_id, app, claims);
 
-        let claims_proof = register_proof_claims(&mut state, app, user_id, None, claims);
-
-        let session = login_create_session(
-            &mut state,
-            user_id,
-            app,
-            password,
-            Some(claims_proof),
-            Some(vec!["email"]),
-        );
-
-        let session = verify_session(&mut state, &session).unwrap();
+        let session = verify_session(
+            &state,
+            &session.token(&state.private().session, &mut state.rng()),
+        )
+        .unwrap();
 
         let claims = session.session_claims.get();
 
@@ -286,6 +318,24 @@ mod tests {
             1
         );
 
-        assert_eq!(claims.len(), 1);
+        assert_eq!(claims.len(), 2);
+    }
+
+    #[test]
+    fn test_proof_verify() {
+        let user_id = "hi";
+        let app = "abc";
+
+        let state = TestState::setup_test(vec![app]);
+        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let proof = create_proof_claims(&state, app, user_id, None, claims.clone());
+
+        let (proof_info, proof_use) =
+            verify_proof(&state, proof.clone(), ProofUseVerify::SetClaims).unwrap();
+
+        let unwrapped_claims = proof_use.unwrap_claims();
+
+        assert_eq!(claims.get(), unwrapped_claims.get());
+        assert_eq!(proof.info.application, proof_info.application);
     }
 }

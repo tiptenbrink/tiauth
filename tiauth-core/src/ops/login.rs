@@ -6,6 +6,7 @@ use crate::error::WrapErrorOneOf;
 use crate::ops::prove::LEEWAY;
 use crate::state::State;
 use crate::util::nonce_384;
+use crate::EXPIRE_TIME;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
@@ -17,7 +18,7 @@ use terrors::OneOf;
 
 // TODO implement fake credential, also if password file is empty
 fn login_start(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     user_id: &str,
     request: &str,
@@ -25,14 +26,14 @@ fn login_start(
     let read_login = get_login(state, application, user_id).unwrap().unwrap();
 
     let (response, state_data) = login_server(
-        &state.private.opaque,
+        &state.private().opaque,
         &read_login.password_file,
         request,
         user_id,
     )
     .to_one_of_twond()?;
 
-    let entropy = nonce_384(state.rng);
+    let entropy = nonce_384(&mut state.rng());
 
     let entry = StateEntry::new(user_id, StateType::Opaque, entropy, None, state_data);
     let nonce = entry.key();
@@ -46,7 +47,7 @@ fn login_start(
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
 fn login_finish(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     request: &str,
     nonce: &str,
@@ -69,11 +70,8 @@ fn login_finish(
     Ok((secret, entry.user_id))
 }
 
-// 1 month
-const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
-
 fn login_session<S: AsRef<str>>(
-    state: &mut State,
+    state: &impl State,
     application: &str,
     request: &str,
     nonce: &str,
@@ -113,19 +111,23 @@ fn login_session<S: AsRef<str>>(
 
     Ok(crypto::session(
         &session_encoded,
-        &state.private.session,
-        state.rng,
+        &state.private().session,
+        &mut state.rng(),
     ))
 }
 
+#[cfg(test)]
 pub mod test_util {
-    use crate::ops::{prove::Proof, register::test_util::*};
+    use crate::{
+        ops::{prove::Proof, register::test_util::*},
+        state::test_util::TestState,
+    };
     use opaque_borink::client::{client_login, client_login_finish};
 
     use super::*;
 
     pub fn login_create_session(
-        state: &mut State,
+        state: &TestState,
         user_id: &str,
         application: &str,
         password: &str,
@@ -156,33 +158,29 @@ pub mod test_util {
 mod tests {
     use super::*;
 
-    use crate::data::Claims;
     use crate::ops::prove::test_util::*;
+    use crate::{data::Claims, state::test_util::TestState};
 
     use crate::ops::register::test_util::*;
-    use crate::state::StateOwner;
     use opaque_borink::client::{client_login, client_login_finish};
 
     #[test]
     fn login() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        register_flow(&mut state, user_id, app, password, None, None);
+        let state = TestState::setup_test(vec![app]);
+
+        register_flow(&state, user_id, app, password, None, None);
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&mut state, app, user_id, &request).unwrap();
+        let (response, nonce) = login_start(&state, app, user_id, &request).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let (secret_server, login_user_id) =
-            login_finish(&mut state, app, &request, &nonce).unwrap();
+        let (secret_server, login_user_id) = login_finish(&state, app, &request, &nonce).unwrap();
 
         assert_eq!(secret, secret_server);
         assert_eq!(user_id, login_user_id);
@@ -190,28 +188,25 @@ mod tests {
 
     #[test]
     fn test_login_session() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut state_owner = StateOwner::setup(tmp.path()).unwrap();
-        let mut state = State::from_state_owner(&mut state_owner).unwrap();
-
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
         let user_id = "hi";
         let app = "abc";
         let password = "pass";
 
-        let claims_proof = register_proof_claims(&mut state, app, user_id, None, claims);
+        let state = TestState::setup_test(vec![app]);
 
-        register_flow(&mut state, user_id, app, password, None, Some(claims_proof));
+        let claims_proof = create_proof_claims(&state, app, user_id, None, claims);
+
+        register_flow(&state, user_id, app, password, None, Some(claims_proof));
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&mut state, app, user_id, &request).unwrap();
+        let (response, nonce) = login_start(&state, app, user_id, &request).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let session =
-            login_session(&mut state, app, &request, &nonce, &secret, vec!["email"]).unwrap();
+        let session = login_session(&state, app, &request, &nonce, &secret, vec!["email"]).unwrap();
 
         assert!(!session.is_empty());
     }
