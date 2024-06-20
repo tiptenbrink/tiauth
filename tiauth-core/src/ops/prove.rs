@@ -20,6 +20,7 @@ pub enum ProofUseVerify {
     ResetPassword,
     DeleteUser,
     SetClaims,
+    ReadAll
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -28,6 +29,7 @@ pub enum ProofUse {
     ResetPassword { user_id: String },
     SetClaims { user_id: String, claims: Claims },
     DeleteUser { user_id: String },
+    ReadAll
 }
 
 impl ProofUse {
@@ -42,6 +44,7 @@ impl ProofUse {
             ProofUseVerify::DeleteUser => matches!(self, ProofUse::DeleteUser { .. }),
             ProofUseVerify::ResetPassword => matches!(self, ProofUse::ResetPassword { .. }),
             ProofUseVerify::SetClaims => matches!(self, ProofUse::SetClaims { .. }),
+            ProofUseVerify::ReadAll => matches!(self, ProofUse::ReadAll),
         }
     }
 
@@ -49,7 +52,8 @@ impl ProofUse {
         match self {
             ProofUse::DeleteUser { user_id } => user_id,
             ProofUse::SetClaims { user_id, .. } => user_id,
-            ProofUse::ResetPassword { user_id } => user_id, // _ => panic!("ProofUse must be SetClaims or ResetPassword variant!")
+            ProofUse::ResetPassword { user_id } => user_id, 
+            _ => panic!("ProofUse {:?} has no user_id!", self)
         }
     }
 
@@ -80,7 +84,7 @@ pub struct Proof {
 }
 
 impl Proof {
-    fn create(
+    pub fn create(
         rng: &mut StdRng,
         app_key: &Key,
         application: &str,
@@ -249,16 +253,6 @@ pub mod test_util {
         }
     }
 
-    pub fn create_proof(
-        rng: &mut StdRng,
-        app_key: &Key,
-        application: &str,
-        expires_in: Option<u64>,
-        proof_use: ProofUse,
-    ) -> Proof {
-        Proof::create(rng, app_key, application, expires_in, proof_use)
-    }
-
     pub fn create_proof_claims(
         state: &TestState,
         application: &str,
@@ -271,7 +265,7 @@ pub mod test_util {
             claims,
         };
 
-        create_proof(
+        Proof::create(
             &mut state.rng(),
             state.proof_key(application),
             application,

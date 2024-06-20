@@ -1,0 +1,24 @@
+[package]
+name = "tiauth-app-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tiauth_app_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+tiauth-core = { path = "../tiauth-core" }
+tiauth-server = { path = "../tiauth-server", features = ["functions"] }
+redb = "2.1.1"
+axum = "0.7.5"
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
+rand = "0.8"
+terrors = "=0.3.0"
+serde = { version = "1.0", features = ["derive"] }
+reqwest = { version = "0.12.5", features = ["default", "json"] }
+opaque-borink = "0.4.0"
+
+[dependencies.pyo3]
+version = "0.21"
+features = ["extension-module"]

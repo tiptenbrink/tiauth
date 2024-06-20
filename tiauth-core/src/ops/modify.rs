@@ -240,7 +240,7 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let proof = create_proof(
+        let proof = Proof::create(
             &mut state.rng(),
             state.proof_key(app),
             app,
@@ -314,7 +314,7 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let proof = create_proof(
+        let proof = Proof::create(
             &mut state.rng(),
             state.proof_key(app),
             app,

@@ -18,7 +18,7 @@ use super::prove::{verify_proof_meta, InvalidProof, Proof, ProofUseVerify};
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
 /// It is important to rate-limit this, because the `register_server` function is not cheap to compute.
-fn start_register(
+pub fn start_register(
     state: &impl State,
     application: &str,
     request: &str,
@@ -36,7 +36,7 @@ fn start_register(
 }
 
 /// The proof should be for SetClaims. This should be verified beforehand.
-fn register_finish(
+pub fn register_finish(
     state: &impl State,
     application: &str,
     request: &str,
