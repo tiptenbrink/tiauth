@@ -66,14 +66,6 @@ async fn start_register(ExtractState(state): ExtractState<ServerState>, Json(req
 }
 
 async fn register_finish(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<PakeFinishRequestClaims>) -> Result<(), ErrorResponse> { 
-    // let payload = match MessagePack::<PakeFinishRequestClaims>::from_bytes(&body) {
-    //     Ok(MessagePack(payload)) => payload,
-    //     Err(msg_pack_err) => match Json::<PakeFinishRequest>::from_bytes(&body) {
-    //         Ok(Json(payload)) => payload.into(),
-    //         Err(_) => return Err(msg_pack_err) 
-    //     },
-    // };
-    
     functions::register_finish(&state, payload).await;
 
     Ok(())

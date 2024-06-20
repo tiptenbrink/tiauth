@@ -1625,6 +1625,7 @@ dependencies = [
  "rmpv",
  "serde",
  "serde_bytes",
+ "serde_json",
  "tempfile",
  "terrors",
  "thiserror",
