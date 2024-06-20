@@ -1635,6 +1635,7 @@ name = "tiauth-server"
 version = "0.2.0"
 dependencies = [
  "axum",
+ "base64",
  "bytes",
  "rand",
  "redb",

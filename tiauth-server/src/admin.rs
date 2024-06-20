@@ -18,8 +18,7 @@ impl StructList {
     }
 }
 
-pub async fn get_users_encoded(state: &impl State, request: Bytes) -> Vec<u8> {
-    let proof: Proof = decode::from_slice(&request).unwrap();
+pub async fn get_users_encoded(state: &impl State, proof: Proof) -> Vec<u8> {
     match admin::get_users_encoded(state, proof) {
         Ok(users) => encode::to_vec_named(&StructList::from_vec_vec(users)).unwrap(),
         Err(e) => match e.to_enum() {

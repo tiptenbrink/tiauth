@@ -1,6 +1,8 @@
 
-use tiauth_core::api::{register, State};
+use tiauth_core::api::{register, Claims, Proof, State};
 use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose as b64, Engine as _};
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
     pub application: String,
@@ -29,11 +31,34 @@ pub struct PakeFinishRequest {
     pub application: String,
     pub request: String,
     pub nonce: String,
-
 }
 
-pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
-    match register::register_finish(state, &request.application, &request.request, &request.nonce, None) {
+impl From<PakeFinishRequest> for PakeFinishRequestClaims {
+    fn from(value: PakeFinishRequest) -> Self {
+        Self {
+            application: value.application,
+            request: value.request,
+            nonce: value.nonce,
+            claims: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PakeFinishRequestClaims {
+    pub application: String,
+    pub request: String,
+    pub nonce: String,
+    pub claims: Option<String>
+}
+
+pub async fn register_finish(state: &impl State, request: PakeFinishRequestClaims) {
+    let claims_proof: Option<Proof> = request.claims.map(|c| {
+        let bytes = b64::URL_SAFE_NO_PAD.decode(c).unwrap();
+        rmp_serde::decode::from_slice(&bytes).unwrap()
+    });
+    
+    match register::register_finish(state, &request.application, &request.request, &request.nonce, claims_proof) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {
             terrors::E4::A(e) => todo!(),

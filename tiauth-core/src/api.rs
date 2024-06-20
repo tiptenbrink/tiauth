@@ -5,6 +5,7 @@ pub use crate::data::MapTables;
 pub use crate::data::TableStore;
 pub use crate::data::Tables;
 pub use crate::data::Application;
+pub use crate::data::Claims;
 
 pub use crate::state::InitState;
 pub use crate::state::PrivateState;
