@@ -1,4 +1,5 @@
 
+use lazy_borink::{Lazy, UnwrapLazy};
 use tiauth_core::api::{register, Claims, Proof, State};
 use serde::{Deserialize, Serialize};
 use base64::{engine::general_purpose as b64, Engine as _};
@@ -49,15 +50,12 @@ pub struct PakeFinishRequestClaims {
     pub application: String,
     pub request: String,
     pub nonce: String,
-    pub claims: Option<String>
+    pub claims: Option<Lazy<Proof>>
 }
 
 pub async fn register_finish(state: &impl State, request: PakeFinishRequestClaims) {
-    let claims_proof: Option<Proof> = request.claims.map(|c| {
-        let bytes = b64::URL_SAFE_NO_PAD.decode(c).unwrap();
-        rmp_serde::decode::from_slice(&bytes).unwrap()
-    });
-    
+    let claims_proof: Option<Proof> = request.claims.map(|l| l.take());
+    println!("{:?}", claims_proof);
     match register::register_finish(state, &request.application, &request.request, &request.nonce, claims_proof) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {

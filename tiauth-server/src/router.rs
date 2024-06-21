@@ -6,10 +6,11 @@ use tiauth_core::{
     api::{Application, Proof, State},
     crypto::{create_key, load_key, save_key},
 };
-use crate::functions::{PakeFinishRequest, PakeFinishRequestClaims, PakeRequest, PakeResponse};
+use crate::{admin::GetUsers, functions::{PakeFinishRequest, PakeFinishRequestClaims, PakeRequest, PakeResponse}};
 use crate::functions;
 use crate::admin;
 use crate::state::ServerState;
+
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessagePack<T>(pub T);
@@ -71,8 +72,8 @@ async fn register_finish(ExtractState(state): ExtractState<ServerState>, Json(pa
     Ok(())
 }
 
-async fn admin_get_users_encoded(ExtractState(state): ExtractState<ServerState>, MessagePack(body): MessagePack<Proof>) -> Vec<u8> { 
-    admin::get_users_encoded(&state, body).await
+async fn admin_get_users_encoded(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<GetUsers>) -> Vec<u8> { 
+    admin::get_users_encoded(&state, payload).await
 }
 
 pub fn create_router<S, P>(db_path: P) -> Router<S>

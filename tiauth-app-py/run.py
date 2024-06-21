@@ -27,6 +27,9 @@ class ProofUse(Struct):
 class ReadAllProof(ProofUse):
     use: str = "ReadAll"
 
+class GetUsersRequest(Struct):
+    proof: str
+
 class SetClaims(ProofUse, kw_only=True):
     use: str = "SetClaims"
     user_id: str
@@ -58,14 +61,17 @@ def proof_creation() -> bytes:
     return create_proof(proof_use, app, private, None)
 
 def proof_creation_claims() -> bytes:
-    set_claims_use = SetClaims(user_id="abc5", claims={"email": "abc4@abc.nl", "other": "hi"})
+    set_claims_use = SetClaims(user_id="abc6", claims={"email": "abc4@abc.nl", "other": "hi"})
     proof_use = msgpack.encode(set_claims_use)
     return create_proof(proof_use, app, private, None)
 
 def get_users():
     json_client = Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
     proof = proof_creation()
-    r: Response = json_client.post("/admin/users", content=proof)
+    proof_b64 = urlsafe_b64encode(proof).decode('utf-8').rstrip('=')
+
+    r: Response = json_client.post("/admin/users", content=json.encode(GetUsersRequest(proof=proof_b64)))
+    # print(r.content.decode('utf-8'))
     structs = msgpack.decode(r.content, type=StructList)
 
     for u_encoded in structs.list:
@@ -73,7 +79,7 @@ def get_users():
 
 
 def register_flow():
-    user_id = "abc5"
+    user_id = "abc6"
     password = "my_password"
 
     request, state = register_client(password)

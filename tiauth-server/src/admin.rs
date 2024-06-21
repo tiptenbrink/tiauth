@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use lazy_borink::Lazy;
 use serde_bytes::ByteBuf;
 use serde::{Deserialize, Serialize};
 use tiauth_core::api::{admin, Proof, State};
@@ -18,7 +19,14 @@ impl StructList {
     }
 }
 
-pub async fn get_users_encoded(state: &impl State, proof: Proof) -> Vec<u8> {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetUsers {
+    pub proof: Lazy<Proof>
+}
+
+pub async fn get_users_encoded(state: &impl State, proof: GetUsers) -> Vec<u8> {
+    let proof = proof.proof.take();
+    println!("{:?}", proof);
     match admin::get_users_encoded(state, proof) {
         Ok(users) => encode::to_vec_named(&StructList::from_vec_vec(users)).unwrap(),
         Err(e) => match e.to_enum() {
