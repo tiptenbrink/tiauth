@@ -14,6 +14,7 @@ use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
 use thiserror::Error;
+use serde_bytes;
 
 #[derive(PartialEq, Eq)]
 pub enum ProofUseVerify {
@@ -79,8 +80,8 @@ pub struct Proof {
     #[serde(flatten)]
     pub info: ProofInfo,
     pub proof_use: ProofUse,
-    // This signature is base64url-encoded.
-    pub signature: String,
+    #[serde(with = "serde_bytes")]
+    pub signature: Vec<u8>,
 }
 
 impl Proof {
@@ -107,8 +108,6 @@ impl Proof {
         let data = proof_data(&info, &proof_use);
 
         let signature = sign_data(app_key, &data);
-
-        let signature = b64::URL_SAFE_NO_PAD.encode(signature);
 
         Proof {
             info,
@@ -172,13 +171,9 @@ pub fn verify_proof_meta(
         return Err(OneOf::new(InvalidProof {}));
     };
 
-    let signature = b64::URL_SAFE_NO_PAD
-        .decode(&proof.signature)
-        .map_err(|_e| OneOf::new(InvalidProof {}))?;
-
     let is_verified = verify_signature(
         &proof_data(&proof.info, &proof.proof_use),
-        &signature,
+        &proof.signature,
         &state.app_key(&proof.info.application),
     );
 

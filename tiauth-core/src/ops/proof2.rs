@@ -120,8 +120,7 @@ impl<T> Serialize for Lazy<T>
         if let Some(data) = &self.bytes {
             serializer.serialize_bytes(data)
         } else if let Some(inner) = &self.inner {
-            let data = rmp_serde::encode::to_vec_named(inner).unwrap();
-            serializer.serialize_bytes(&data)
+            inner.serialize(serializer)
         } else {
             panic!("Contains no data!")
         }

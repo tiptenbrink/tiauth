@@ -83,3 +83,18 @@ For encryption signing... check if msgpack deterministic?
 
 
 TODO, revoke sessions when modified
+
+
+
+#### Model
+
+As the client, we want have:
+
+"claims", which are just maps, with string keys dict[str, Any]
+{
+    key: value
+}
+
+but claims are also blobs, because they can be quite big. The values can also be quite big.
+
+We don't really want to expose the structure of proof use to applications.
