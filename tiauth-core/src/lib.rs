@@ -7,6 +7,7 @@ mod error;
 mod ops;
 mod state;
 mod util;
+pub mod lazy;
 
 // 1 month
 const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
