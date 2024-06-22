@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use lazy_borink::Lazy;
 use rand::rngs::StdRng;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
@@ -20,7 +21,7 @@ use crate::state::State;
 pub struct Login {
     pub user_id: String,
     pub password_file: String,
-    pub claims: Claims,
+    pub claims: Lazy<Claims>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -38,6 +39,10 @@ impl Claims {
             map.into_iter()
                 .map(|(s, v)| (s.into(), v.as_ref().to_vec())),
         ))
+    }
+
+    pub fn none() -> Self {
+        Self(HashMap::new())
     }
 
     /// Returns only claims with keys in the provided subset. Consumes the previous claims object.
@@ -251,7 +256,7 @@ pub fn set_login_field_write(
     application: &str,
     user_id: &str,
     password_file: Option<String>,
-    claims: Option<Claims>,
+    claims: Option<Lazy<Claims>>,
     options: SetLoginOptions,
 ) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
     // One of the two must be set
@@ -288,7 +293,7 @@ pub fn set_login_field_write(
         let login = Login {
             user_id: user_id.to_owned(),
             password_file: password_file.unwrap(),
-            claims: claims.unwrap_or_default(),
+            claims: claims.unwrap_or_else(|| Claims::none().into()),
         };
 
         let buf = encode::to_vec_named(&login).unwrap();
@@ -484,7 +489,7 @@ mod tests {
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Claims::default(),
+            claims: Claims::none().into(),
         };
 
         let app = "abc";
@@ -497,6 +502,6 @@ mod tests {
 
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);
-        assert_eq!(value.claims, read_login.claims);
+        assert_eq!(value.claims.take(), read_login.claims.take());
     }
 }

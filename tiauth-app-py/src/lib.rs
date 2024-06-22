@@ -17,7 +17,7 @@ fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     internal.add_function(wrap_pyfunction!(create_set_claims_proof, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_claims, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_reset_proof, &internal)?)?;
-
+    internal.add_function(wrap_pyfunction!(create_read_all_proof, &internal)?)?;
     m.add_submodule(&internal)?;
 
     Ok(())
@@ -141,6 +141,13 @@ fn create_reset_proof(application: &str, private_key_pem: &str, user_id: &str) -
     let proof_base = ProofBase::new(application, private_key_pem);
 
     Ok(tiauth_app::create_reset_proof(proof_base, user_id))
+}
+
+#[pyfunction]
+fn create_read_all_proof(application: &str, private_key_pem: &str) -> PyResult<String> {
+    let proof_base = ProofBase::new(application, private_key_pem);
+
+    Ok(tiauth_app::create_read_all_proof(proof_base))
 }
 
 // #[pyfunction]

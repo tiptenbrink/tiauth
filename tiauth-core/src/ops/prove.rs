@@ -170,6 +170,10 @@ impl TargetList {
     pub fn from_vec(vec: Vec<String>) -> Self {
         Self(Lazy::from_inner(vec))
     }
+
+    pub fn empty() -> Self {
+        Self(Vec::new().into())
+    }
 }
 
 impl From<Lazy<Vec<String>>> for TargetList {

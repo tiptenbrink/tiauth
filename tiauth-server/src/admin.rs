@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use tiauth_core::api::{admin, prove::Proof, State};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct StructList {
     list: Vec<ByteBuf>,
 }
@@ -20,17 +20,17 @@ impl StructList {
 #[derive(Debug, Deserialize)]
 pub struct GetUsers {
     pub application: String,
-    pub proof: Lazy<Proof<()>>,
+    pub read_all_proof: Lazy<Proof<()>>,
 }
 
 pub async fn get_users_encoded(state: &impl State, request: GetUsers) -> Vec<u8> {
-    let proof = request.proof.take();
+    let proof = request.read_all_proof.take();
     println!("{:?}", proof);
     match admin::get_users_encoded(state, &request.application, proof) {
         Ok(users) => encode::to_vec_named(&StructList::from_vec_vec(users)).unwrap(),
         Err(e) => match e.to_enum() {
-            terrors::E2::A(e) => todo!(),
-            terrors::E2::B(e) => todo!(),
+            terrors::E2::A(_e) => todo!(),
+            terrors::E2::B(_e) => todo!(),
         },
     }
 }

@@ -130,4 +130,23 @@ model {
 } -> ok
 ```
 
+### Issues with rust-analyzer target dir contention and PyO3 recompiling
 
+For the PyO3 problem, create a directory inside the repository called `.cargo` and create the following a file called `config.toml`:
+```toml
+[env]
+PYO3_PYTHON = "<path to virtual environment python interpreter of tiauth-app-py>"
+```
+
+For the target dir contention, add the following to your VS Code JSON settings:
+
+```json
+"rust-analyzer.server.extraEnv": {
+    "CARGO_TARGET_DIR": "target/analyzer"
+},
+"rust-analyzer.check.extraArgs": [
+    "--target-dir=target/analyzer"
+],
+```
+
+Note that this can lead to significantly more storage requirements.

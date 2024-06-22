@@ -88,7 +88,7 @@ fn login_session<S: AsRef<str>>(
         .unwrap()
         .claims;
 
-    let session_claims = claims.into_subset(requested_claims);
+    let session_claims = claims.take().into_subset(requested_claims);
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

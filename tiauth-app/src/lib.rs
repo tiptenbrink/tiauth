@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use lazy_borink::Lazy;
-use tiauth_core::api::prove::{ActionType, Target};
+use tiauth_core::api::prove::{ActionType, Target, TargetList};
 use tiauth_core::api::{Claims, Proof};
 use tiauth_core::crypto::{create_key, load_key, save_key, Key};
 
@@ -67,6 +67,23 @@ pub fn create_reset_proof(proof_base: ProofBase, user_id: &str) -> String {
         action,
         target,
         target_data.into(),
+        Lazy::from_inner(()),
+        &proof_base.key,
+    );
+
+    proof.into_encoded()
+}
+
+pub fn create_read_all_proof(proof_base: ProofBase) -> String {
+    let action = ActionType::Read;
+    let target = Target::All;
+
+    let proof = Proof::new(
+        &proof_base.application,
+        proof_base.expires_in,
+        action,
+        target,
+        TargetList::empty(),
         Lazy::from_inner(()),
         &proof_base.key,
     );

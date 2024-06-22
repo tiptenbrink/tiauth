@@ -94,7 +94,7 @@ pub fn register_finish(
         let claims = if let Some(mut proof) = proof {
             verify_proof_write(state, &write_txn, &mut proof).map_err(OneOf::broaden)?;
 
-            Some(proof.data.take())
+            Some(proof.data)
         } else {
             None
         };
@@ -176,7 +176,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Claims::default(),
+            claims: Claims::none().into(),
         };
         let app = "abc";
         let password = "pass";
@@ -197,7 +197,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Claims::default(),
+            claims: Claims::none().into(),
         };
         let app = "abc";
         let password = "pass";
