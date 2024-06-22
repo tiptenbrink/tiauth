@@ -16,6 +16,8 @@ fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     internal.add_function(wrap_pyfunction!(public_from_private_key_pem, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_set_claims_proof, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_claims, &internal)?)?;
+    internal.add_function(wrap_pyfunction!(create_reset_proof, &internal)?)?;
+    
 
     m.add_submodule(&internal)?;
 
@@ -116,15 +118,15 @@ fn create_claims<'a>(claims: LazyArg<Claims>) -> PyResult<Cow<'a, [u8]>> {
 #[pyfunction]
 fn create_set_claims_proof(application: &str, private_key_pem: &str, user_id: &str, claims: LazyArg<Claims>) -> PyResult<String> {
     let proof_base = ProofBase::new(application, private_key_pem);
-    let mut claims = claims.0;
-    let c = claims.inner().clone();
-    let b = claims.bytes().to_vec();
-    let c2 = claims.inner().clone();
-    
-    println!("{:?}, {:?}, {:?}", c, b, c2);
 
-    //Ok(())
-    Ok(tiauth_app::create_set_claims_proof(proof_base, user_id, claims))
+    Ok(tiauth_app::create_set_claims_proof(proof_base, user_id, claims.0))
+}
+
+#[pyfunction]
+fn create_reset_proof(application: &str, private_key_pem: &str, user_id: &str) -> PyResult<String> {
+    let proof_base = ProofBase::new(application, private_key_pem);
+
+    Ok(tiauth_app::create_reset_proof(proof_base, user_id))
 }
 
 // #[pyfunction]

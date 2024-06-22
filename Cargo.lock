@@ -714,9 +714,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-borink"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3876eaa371db7914ccd0d6d037d382efc1124032a8d0e0bbc42f2155ef064c11"
+version = "0.2.0"
 dependencies = [
  "base64",
  "lazy-borink-derive",
@@ -727,8 +725,6 @@ dependencies = [
 [[package]]
 name = "lazy-borink-derive"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc56c6637612133eb28fe3d65fc128bb2b3ea38b45e7dcbd86fce9f58c4ad81b"
 dependencies = [
  "proc-macro2",
  "quote",

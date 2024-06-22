@@ -30,9 +30,18 @@ pub fn create_set_claims_proof(proof_base: ProofBase, user_id: &str, claims: Laz
     let action = ActionType::Set;
     let target = Target::Select;
     let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
-    //let data = Lazy::from_inner(Claims(claims));
     
-    let proof = Proof::new(&proof_base.application, proof_base.expires_in, action, target, target_data, claims, &proof_base.key);
+    let proof = Proof::new(&proof_base.application, proof_base.expires_in, action, target, target_data.into(), claims, &proof_base.key);
+
+    proof.into_encoded()
+}
+
+pub fn create_reset_proof(proof_base: ProofBase, user_id: &str) -> String {
+    let action = ActionType::Reset;
+    let target = Target::Select;
+    let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
+    
+    let proof = Proof::new(&proof_base.application, proof_base.expires_in, action, target, target_data.into(), Lazy::from_inner(()), &proof_base.key);
 
     proof.into_encoded()
 }

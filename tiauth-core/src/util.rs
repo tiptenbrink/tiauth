@@ -1,6 +1,14 @@
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::{rngs::StdRng, Rng};
 
+pub fn nonce_384_bytes(rng: &mut StdRng) -> Vec<u8> {
+    let mut data = vec![0u8; 48];
+
+    rng.fill(data.as_mut_slice());
+
+    data
+}
+
 pub fn nonce_384(rng: &mut StdRng) -> String {
     let mut data = vec![0u8; 48];
 

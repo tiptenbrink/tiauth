@@ -11,7 +11,7 @@ edition = "2021"
 [dependencies]
 redb = "2.1.1"
 opaque-borink = "0.4.0"
-lazy-borink = "0.1.0"
+lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2" }
 rand = "0.8"
 hex = "0.4.3"
 rmp = "0.8"
