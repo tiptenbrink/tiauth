@@ -7,6 +7,7 @@ use rmpv::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::path::Path;
 use std::str;
 use std::time::SystemTime;
@@ -26,71 +27,32 @@ pub struct Login {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 #[serde(transparent)]
-pub struct Claims {
-    claims: Value,
-}
+pub struct Claims(pub HashMap<String, Vec<u8>>);
 
 impl Claims {
     pub fn new<S, V>(map: Vec<(S, V)>) -> Self
     where
         S: Into<String>,
-        V: Into<Value>,
+        V: AsRef<[u8]>,
     {
-        let value_value_map: Vec<(Value, Value)> = map
-            .into_iter()
-            .map(|(k, v)| {
-                let s: String = k.into();
-                (Value::String(s.into()), v.into())
-            })
-            .collect();
-
-        Self {
-            claims: Value::Map(value_value_map),
-        }
+        Self(HashMap::from_iter(map.into_iter().map(|(s, v)| {
+            (s.into(), v.as_ref().to_vec())
+        })))
     }
 
     /// Returns only claims with keys in the provided subset. Consumes the previous claims object.
-    pub fn into_subset(self, mut subset: HashSet<&str>) -> Self {
-        let claims_subset: Vec<(Value, Value)> = if let Value::Map(entries) = self.claims {
-            entries
-                .into_iter()
-                .filter(|(key, _value)| {
-                    if let Value::String(key) = key {
-                        if key.is_err() {
-                            panic!("Keys must be valid UTF-8!")
-                        }
-
-                        let key = key.as_str().unwrap();
-
-                        subset.remove(key)
-                    } else {
-                        panic!("All claims must be string keys!")
-                    }
-                })
-                .collect()
-        } else {
-            panic!("Claims must be a map type!");
-        };
-
-        Self {
-            claims: Value::Map(claims_subset),
-        }
-    }
-
-    pub fn get(self) -> Vec<(Value, Value)> {
-        if let Value::Map(entries) = self.claims {
-            entries
-        } else {
-            panic!("Claims must be a map type!");
-        }
+    pub fn into_subset<S>(mut self, subset: Vec<S>) -> Self 
+        where S: AsRef<str>
+    {
+        Self(HashMap::from_iter(subset.iter().filter_map(|s| {
+            self.0.remove_entry(s.as_ref())
+        })))
     }
 }
 
 impl Default for Claims {
     fn default() -> Self {
-        Self {
-            claims: Value::Map(Vec::new()),
-        }
+        Self(HashMap::new())
     }
 }
 

@@ -30,10 +30,13 @@ fn public_from_private_key_pem(
 }
 
 #[pyfunction]
-fn create_proof<'a>(
-    proof_use: &[u8], application: &str, private_key_pem: &str, expires_in: Option<u64>
-) -> PyResult<Cow<'a, [u8]>> {
-    let proof_bytes = app::create_proof(proof_use, application, private_key_pem, expires_in);
-    //let bytes = PyBytes::new_bound(py, &proof_bytes);
-    Ok(Cow::from(proof_bytes))
-}
+fn create_claims() -> PyResult<>
+
+// #[pyfunction]
+// fn create_proof<'a>(
+//     proof_use: &[u8], application: &str, private_key_pem: &str, expires_in: Option<u64>
+// ) -> PyResult<Cow<'a, [u8]>> {
+//     let proof_bytes = app::create_proof(proof_use, application, private_key_pem, expires_in);
+//     //let bytes = PyBytes::new_bound(py, &proof_bytes);
+//     Ok(Cow::from(proof_bytes))
+// }

@@ -21,16 +21,16 @@ class PakeFinishRequest(Struct, kw_only=True):
     nonce: str
     claims: Optional[str] = None
 
-class ProofUse(Struct):
+class ProofScope(Struct):
     use: str
 
-class ReadAllProof(ProofUse):
+class ReadAllProof(ProofScope):
     use: str = "ReadAll"
 
 class GetUsersRequest(Struct):
     proof: str
 
-class SetClaims(ProofUse, kw_only=True):
+class SetClaims(ProofScope, kw_only=True):
     use: str = "SetClaims"
     user_id: str
     claims: dict[str, Any]

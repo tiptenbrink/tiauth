@@ -5,10 +5,11 @@ use crate::error::WrapErrorOneOf;
 use crate::state::State;
 use crate::util::nonce_384;
 use base64::{engine::general_purpose as b64, Engine as _};
-use lazy_borink::Lazy;
+use lazy_borink::{Lazy, UnwrapLazy};
 use rand::rngs::StdRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use rmp_serde::{decode, encode};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::str;
@@ -17,6 +18,8 @@ use terrors::OneOf;
 use thiserror::Error;
 use serde_bytes;
 
+
+
 #[derive(PartialEq, Eq)]
 pub enum ProofScopeType {
     ResetPassword,
@@ -24,12 +27,78 @@ pub enum ProofScopeType {
     SetClaims,
     ReadAll
 }
+/// reset:1:<user>
+/// delete:1:<user>
+/// set:<user>:
+/// read:all
+/// read:
+/// 
+
+trait Action {
+    type Data;
+
+    fn as_enum(&self) -> ActionType;
+
+    fn deserialize(&self, bytes: Vec<u8>) -> Lazy<<Self as Action>::Data> {
+        Lazy::from_bytes(bytes)
+    }
+}
+
+macro_rules! impl_action {
+    ($struct_name:ident, $action_type:expr, $data_type:ty) => {
+        struct $struct_name();
+
+        impl Action for $struct_name {
+            type Data = $data_type;
+
+            fn as_enum(&self) -> ActionType {
+                $action_type
+            }
+        }
+    };
+}
+impl_action!(Reset, ActionType::Reset, ());
+impl_action!(Delete, ActionType::Delete, ());
+impl_action!(Read, ActionType::Read, ());
+impl_action!(Set, ActionType::Set, Claims);
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+enum ActionType {
+    Reset,
+    Delete,
+    Set,
+    Read
+}
+
+// impl ActionType {
+//     fn deserialize(&self, data: Vec<u8>)
+
+//     fn serialize(&self, data: )
+// }
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+enum Target {
+    User(String),
+    All,
+    Group(Vec<String>)
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+struct Scope<T>
+{
+    action: ActionType,
+    target: Target,
+    #[serde(bound(deserialize = "T: DeserializeOwned"))]
+    data: Lazy<T>
+}
+
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 #[serde(tag = "use")]
 pub enum ProofScope {
+    SetClaims { user_id: String, claims: Lazy<Claims> },
     ResetPassword { user_id: String },
-    SetClaims { user_id: String, claims: Claims },
+    
     DeleteUser { user_id: String },
     ReadAll
 }
@@ -61,7 +130,7 @@ impl ProofScope {
 
     pub fn unwrap_claims(self) -> Claims {
         match self {
-            ProofScope::SetClaims { claims, .. } => claims,
+            ProofScope::SetClaims { claims, .. } => claims.take(),
             _ => panic!("ProofScope must be SetClaims variant!"),
         }
     }
@@ -76,22 +145,23 @@ pub struct ProofInfo {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct Proof {
+pub struct Proof<T> {
     /// For (de)serialization, the inner fields are put into the main Proof struct
     #[serde(flatten)]
-    pub info: ProofInfo,
-    pub proof_use: Lazy<ProofScope>,
+    info: ProofInfo,
+    #[serde(bound(deserialize = "T: DeserializeOwned"))]
+    proof_use: Lazy<Scope<T>>,
     #[serde(with = "serde_bytes")]
-    pub signature: Vec<u8>,
+    signature: Vec<u8>,
 }
 
-impl Proof {
+impl<T> Proof<T> {
     pub fn create(
         rng: &mut StdRng,
         app_key: &Key,
         application: &str,
         expires_in: Option<u64>,
-        mut proof_use: Lazy<ProofScope>,
+        scope: Scope<T>,
     ) -> Self {
         let nonce = nonce_384(rng);
         let now = SystemTime::now()
@@ -106,7 +176,7 @@ impl Proof {
             application: application.to_owned(),
         };
 
-        let data = proof_data(&info, &proof_use.inner());
+        let data = proof_data(&info, proof_use.inner());
 
         let signature = sign_data(app_key, &data);
 
@@ -118,7 +188,9 @@ impl Proof {
     }
 }
 
-pub fn proof_data(info: &ProofInfo, proof_use: &ProofScope) -> Vec<u8> {
+pub fn proof_data<T>(info: &ProofInfo, scope: Scope<T>) -> Vec<u8> {
+    let s = scope.
+
     format!(
         "{}:{}:{}:{}",
         info.application,
@@ -260,7 +332,7 @@ pub mod test_util {
     ) -> Proof {
         let proof_use = ProofScope::SetClaims {
             user_id: user_id.to_owned(),
-            claims,
+            claims: Lazy::from_inner(claims),
         };
 
         Proof::create(

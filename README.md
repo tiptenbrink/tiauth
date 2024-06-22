@@ -98,3 +98,36 @@ As the client, we want have:
 but claims are also blobs, because they can be quite big. The values can also be quite big.
 
 We don't really want to expose the structure of proof use to applications.
+
+# App API
+
+Every request or call is a simple map type, with primitive or simple sequence values. 
+
+## App library
+
+`create_proof`:
+
+
+## HTTP
+
+`register_start`:
+model {
+    application: str
+    opaque_request: str
+    user_id: st
+} -> {
+    register_start_nonce: str
+    opaque_response: str
+}
+
+`register_finish`:
+```
+model {
+    application: str
+    opaque_request: str  # output from opaque_register_client_finish
+    register_start_nonce: str  # output from register_start
+    claims_proof: str | None  #
+} -> ok
+```
+
+

@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_meta, verify_session, InvalidProof, Proof, ProofUseVerify, CHANGE_AGE, DELETE_AGE,
+    verify_proof_meta, verify_session, InvalidProof, Proof, ProofScopeType, CHANGE_AGE, DELETE_AGE,
     LEEWAY,
 };
 
@@ -19,7 +19,7 @@ pub fn get_users_encoded(
     proof: Proof,
 ) -> Result<Vec<Vec<u8>>, OneOf<(DbError, InvalidProof)>> {
     let (proof_info, _) =
-        verify_proof_meta(state, proof, ProofUseVerify::ReadAll).map_err(OneOf::broaden)?;
+        verify_proof_meta(state, proof, ProofScopeType::ReadAll).map_err(OneOf::broaden)?;
 
     let tables = state.tables().app(&proof_info.application);
 

@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_meta, verify_session, InvalidProof, Proof, ProofUseVerify, CHANGE_AGE, DELETE_AGE,
+    verify_proof_meta, verify_session, InvalidProof, Proof, ProofScopeType, CHANGE_AGE, DELETE_AGE,
     LEEWAY,
 };
 
@@ -29,7 +29,7 @@ fn reset_password(
     proof: Proof,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let (proof_info, proof_use) =
-        verify_proof_meta(state, proof, ProofUseVerify::ResetPassword).map_err(OneOf::broaden)?;
+        verify_proof_meta(state, proof, ProofScopeType::ResetPassword).map_err(OneOf::broaden)?;
 
     let user_id = proof_use.unwrap_user_id();
 
@@ -191,7 +191,7 @@ fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), One
 
 fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbError, InvalidProof)>> {
     let (proof_info, proof_use) =
-        verify_proof_meta(state, proof, ProofUseVerify::DeleteUser).map_err(OneOf::broaden)?;
+        verify_proof_meta(state, proof, ProofScopeType::DeleteUser).map_err(OneOf::broaden)?;
 
     let tables = state.tables().app(&proof_info.application);
 
@@ -223,10 +223,12 @@ fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbErro
 
 #[cfg(test)]
 mod tests {
+    use lazy_borink::Lazy;
+
     use super::*;
     use crate::data::get_login;
     use crate::ops::login::test_util::*;
-    use crate::ops::prove::{test_util::*, ProofUse};
+    use crate::ops::prove::{test_util::*, ProofScope};
     use crate::ops::register::test_util::*;
     use crate::state::test_util::TestState;
 
@@ -245,9 +247,9 @@ mod tests {
             state.proof_key(app),
             app,
             None,
-            ProofUse::ResetPassword {
+            Lazy::from_inner(ProofScope::ResetPassword {
                 user_id: user_id.to_owned(),
-            },
+            }),
         );
 
         let nonce = reset_password(&state, proof).unwrap();
@@ -319,9 +321,9 @@ mod tests {
             state.proof_key(app),
             app,
             None,
-            ProofUse::DeleteUser {
+            Lazy::from_inner(ProofScope::DeleteUser {
                 user_id: user_id.to_owned(),
-            },
+            }),
         );
 
         app_delete_user(&state, proof).unwrap();

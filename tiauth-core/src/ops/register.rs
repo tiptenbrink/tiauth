@@ -13,7 +13,7 @@ use redb::Error as DbError;
 use std::str;
 use terrors::OneOf;
 
-use super::prove::{verify_proof_meta, InvalidProof, Proof, ProofUseVerify};
+use super::prove::{verify_proof_meta, InvalidProof, Proof, ProofScopeType};
 
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
@@ -63,7 +63,7 @@ pub fn register_finish(
     if let Some(entry) = entry {
         let proof = if let Some(proof) = claims_proof {
             let (proof_info, proof_use) =
-                verify_proof_meta(state, proof, ProofUseVerify::SetClaims)
+                verify_proof_meta(state, proof, ProofScopeType::SetClaims)
                     .map_err(OneOf::broaden)?;
 
             // The requested application/user_id must match the proof

@@ -6,7 +6,7 @@ use tiauth_core::{
     api::{Application, Proof, State},
     crypto::{create_key, load_key, save_key},
 };
-use crate::{admin::GetUsers, functions::{PakeFinishRequest, PakeFinishRequestClaims, PakeRequest, PakeResponse}};
+use crate::{admin::GetUsers, functions::{PakeFinishRequest, PakeRequest, PakeResponse}};
 use crate::functions;
 use crate::admin;
 use crate::state::ServerState;
@@ -66,7 +66,7 @@ async fn start_register(ExtractState(state): ExtractState<ServerState>, Json(req
     Json(functions::start_register(&state, request).await)
 }
 
-async fn register_finish(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<PakeFinishRequestClaims>) -> Result<(), ErrorResponse> { 
+async fn register_finish(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<PakeFinishRequest>) -> Result<(), ErrorResponse> { 
     functions::register_finish(&state, payload).await;
 
     Ok(())

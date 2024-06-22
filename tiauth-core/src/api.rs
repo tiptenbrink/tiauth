@@ -14,3 +14,4 @@ pub use crate::ops::register;
 pub use crate::ops::admin;
 pub use crate::ops::app;
 pub use crate::ops::prove::Proof;
+pub use crate::ops::prove::ProofScope;

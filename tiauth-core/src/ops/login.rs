@@ -89,9 +89,6 @@ fn login_session<S: AsRef<str>>(
         .unwrap()
         .claims;
 
-    let requested_claims: HashSet<&str> =
-        HashSet::from_iter(requested_claims.iter().map(|s| s.as_ref()));
-
     let session_claims = claims.into_subset(requested_claims);
 
     let time = SystemTime::now()

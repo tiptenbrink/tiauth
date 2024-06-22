@@ -1605,10 +1605,13 @@ name = "tiauth-app"
 version = "0.2.0"
 dependencies = [
  "axum",
+ "base64",
+ "lazy-borink",
  "opaque-borink",
  "rand",
  "redb",
  "reqwest",
+ "rmp-serde",
  "serde",
  "terrors",
  "tiauth-core",
