@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use base64::{engine::general_purpose as b64, Engine as _};
+use lazy_borink::Lazy;
 use pyo3::exceptions::PyValueError;
-use pyo3::types::{PyBytes, PyDict, PyString, PyType};
+use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::{prelude::*, PyTypeInfo};
 use tiauth_app::ProofBase;
 use tiauth_core::api::Claims;
-use lazy_borink::Lazy;
-use base64::{engine::general_purpose as b64, Engine as _};
 
 #[pymodule]
 fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -17,7 +17,6 @@ fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     internal.add_function(wrap_pyfunction!(create_set_claims_proof, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_claims, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_reset_proof, &internal)?)?;
-    
 
     m.add_submodule(&internal)?;
 
@@ -25,15 +24,12 @@ fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn create_private_key_pem(
-) -> PyResult<String> {
+fn create_private_key_pem() -> PyResult<String> {
     Ok(tiauth_app::create_private_key_pem())
 }
 
 #[pyfunction]
-fn public_from_private_key_pem(
-    private_key_pem: &str
-) -> PyResult<String> {
+fn public_from_private_key_pem(private_key_pem: &str) -> PyResult<String> {
     Ok(tiauth_app::public_from_private_key_pem(private_key_pem))
 }
 
@@ -42,32 +38,40 @@ struct LazyArg<T>(Lazy<T>);
 trait FromPython {
     type PyType: PyTypeInfo;
 
-    fn is_instance<'py>(ob: &Bound<'py, PyAny>) -> bool {
+    fn is_instance(ob: &Bound<'_, PyAny>) -> bool {
         ob.is_instance_of::<Self::PyType>()
     }
 
-    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> where Self: Sized;
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self>
+    where
+        Self: Sized;
 
     fn name() -> &'static str;
 }
 
-impl<'py, T> FromPyObject<'py> for LazyArg<T> 
-    where T: FromPython
+impl<'py, T> FromPyObject<'py> for LazyArg<T>
+where
+    T: FromPython,
 {
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         if T::is_instance(ob) {
             let inner = T::extract_bound(ob)?;
-            return Ok(LazyArg(Lazy::from_inner(inner)))
+            Ok(LazyArg(Lazy::from_inner(inner)))
         } else if ob.is_instance_of::<PyBytes>() {
             let claim_bytes: Vec<u8> = ob.extract()?;
-            return Ok(LazyArg(Lazy::from_bytes(claim_bytes)))
+            return Ok(LazyArg(Lazy::from_bytes(claim_bytes)));
         } else if ob.is_instance_of::<PyString>() {
             let str: &str = ob.extract()?;
-            let bytes = b64::URL_SAFE_NO_PAD.decode(str)
+            let bytes = b64::URL_SAFE_NO_PAD
+                .decode(str)
                 .map_err(|_e| PyValueError::new_err("Failed to decode Python string as base64."))?;
-            return Ok(LazyArg(Lazy::from_bytes(bytes)))
+            return Ok(LazyArg(Lazy::from_bytes(bytes)));
         } else {
-            let msg = format!("Unable to interpret {} type as {}!", ob.get_type().name()?, T::name());
+            let msg = format!(
+                "Unable to interpret {} type as {}!",
+                ob.get_type().name()?,
+                T::name()
+            );
             Err(PyValueError::new_err(msg))
         }
     }
@@ -79,8 +83,11 @@ impl FromPython for Claims {
     fn name() -> &'static str {
         "Claims"
     }
-    
-    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> where Self: Sized {
+
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self>
+    where
+        Self: Sized,
+    {
         let dict = ob.downcast::<PyDict>()?;
         let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
 
@@ -116,10 +123,17 @@ fn create_claims<'a>(claims: LazyArg<Claims>) -> PyResult<Cow<'a, [u8]>> {
 }
 
 #[pyfunction]
-fn create_set_claims_proof(application: &str, private_key_pem: &str, user_id: &str, claims: LazyArg<Claims>) -> PyResult<String> {
+fn create_set_claims_proof(
+    application: &str,
+    private_key_pem: &str,
+    user_id: &str,
+    claims: LazyArg<Claims>,
+) -> PyResult<String> {
     let proof_base = ProofBase::new(application, private_key_pem);
 
-    Ok(tiauth_app::create_set_claims_proof(proof_base, user_id, claims.0))
+    Ok(tiauth_app::create_set_claims_proof(
+        proof_base, user_id, claims.0,
+    ))
 }
 
 #[pyfunction]

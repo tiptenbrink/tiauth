@@ -1,7 +1,8 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 
 use crate::data::{
-    pop_state, set_login_field_write, write_state, Claims, LoginFieldError, SetLoginOptions, StateEntry, StateType
+    pop_state, set_login_field_write, write_state, Claims, LoginFieldError, SetLoginOptions,
+    StateEntry, StateType,
 };
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::ops::prove::verify_proof_write;
@@ -62,12 +63,12 @@ pub fn register_finish(
     if let Some(entry) = entry {
         let proof = if let Some(proof) = claims_proof {
             let key: crate::crypto::PublicKey = state.app_key(application);
-            let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
+            let mut proof_content =
+                verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
                     .map_err(OneOf::broaden)?;
 
             let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
-            if user_id != entry.user_id
-            {
+            if user_id != entry.user_id {
                 return Err(OneOf::new(InvalidProof {}));
             }
 

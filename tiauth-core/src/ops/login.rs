@@ -11,7 +11,6 @@ use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
 use rmp_serde::encode;
-use std::collections::HashSet;
 use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -116,7 +115,9 @@ fn login_session<S: AsRef<str>>(
 #[cfg(test)]
 pub mod test_util {
     use crate::{
-        data::Claims, ops::{prove::Proof, register::test_util::*}, state::test_util::TestState
+        data::Claims,
+        ops::{prove::Proof, register::test_util::*},
+        state::test_util::TestState,
     };
     use opaque_borink::client::{client_login, client_login_finish};
 

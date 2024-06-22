@@ -3,14 +3,20 @@
 //! set:<user>:
 //! read:all
 //! read:
-//! 
+//!
 //! <application>:<expires>:<action_type>:<target>:<nonce>
-//! 
+//!
 //! <target blob>
 //! <permission blob>
 
 use std::time::SystemTime;
 
+use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey};
+use crate::data::{Session, Tables};
+use crate::error::WrapErrorOneOf;
+use crate::state::State;
+use crate::util::nonce_384_bytes;
+use base64::{engine::general_purpose as b64, Engine as _};
 use lazy_borink::Lazy;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -18,12 +24,6 @@ use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use terrors::OneOf;
 use thiserror::Error;
-use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey};
-use crate::data::{Claims, Session, Tables};
-use crate::error::WrapErrorOneOf;
-use crate::state::State;
-use crate::util::{nonce_384, nonce_384_bytes};
-use base64::{engine::general_purpose as b64, Engine as _};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub enum ActionType {
@@ -34,7 +34,7 @@ pub enum ActionType {
     #[serde(rename = "set")]
     Set,
     #[serde(rename = "read")]
-    Read
+    Read,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -50,7 +50,7 @@ impl Target {
         match &self {
             Self::Select => "select",
             Self::All => "all",
-        }   
+        }
     }
 }
 
@@ -60,8 +60,8 @@ impl ActionType {
             Self::Reset => "reset",
             Self::Delete => "delete",
             Self::Set => "set",
-            Self::Read => "read"
-        }   
+            Self::Read => "read",
+        }
     }
 }
 
@@ -70,7 +70,7 @@ pub struct ProofAbout {
     pub application: String,
     pub expires: u64,
     pub action: ActionType,
-    pub target: Target
+    pub target: Target,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -81,11 +81,18 @@ pub struct ProofContent<T> {
     pub target_data: Lazy<Vec<String>>,
     // TODO see if we can prevent this by fixing lazy-borink
     #[serde(bound(deserialize = "T: DeserializeOwned"))]
-    pub data: Lazy<T>
+    pub data: Lazy<T>,
 }
 
 impl<T> ProofContent<T> {
-    pub fn new(application: &str, expires: u64, action: ActionType, target: Target, target_data: Lazy<Vec<String>>, data: Lazy<T>) -> Self {
+    pub fn new(
+        application: &str,
+        expires: u64,
+        action: ActionType,
+        target: Target,
+        target_data: Lazy<Vec<String>>,
+        data: Lazy<T>,
+    ) -> Self {
         let nonce = nonce_384_bytes(&mut StdRng::from_entropy());
 
         Self {
@@ -93,11 +100,11 @@ impl<T> ProofContent<T> {
                 application: application.to_owned(),
                 expires,
                 action,
-                target
+                target,
             },
             nonce,
             target_data,
-            data
+            data,
         }
     }
 
@@ -111,31 +118,31 @@ impl<T> ProofContent<T> {
                 } else {
                     Err(OneOf::new(InvalidProof {}))
                 }
-            },
-            Target::All => Err(OneOf::new(InvalidProof {}))
+            }
+            Target::All => Err(OneOf::new(InvalidProof {})),
         }
     }
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ProofInner<T> {
     #[serde(bound(deserialize = "T: DeserializeOwned"))]
     proof: Lazy<ProofContent<T>>,
-    signature: Vec<u8>
+    signature: Vec<u8>,
 }
 
-impl<T> ProofInner<T> 
-    where T: Serialize
+impl<T> ProofInner<T>
+where
+    T: Serialize,
 {
     fn new(proof_content: ProofContent<T>, key: &Key) -> Self {
         let mut proof_content = Lazy::from_inner(proof_content);
-    
+
         let signature = sign_data(key, proof_content.bytes());
-    
+
         Self {
             proof: proof_content,
-            signature
+            signature,
         }
     }
 }
@@ -144,20 +151,22 @@ impl<T> ProofInner<T>
 #[serde(transparent)]
 pub struct Proof<T> {
     #[serde(bound(deserialize = "T: DeserializeOwned"))]
-    inner: ProofInner<T>
+    inner: ProofInner<T>,
 }
 
 pub struct TargetList(Lazy<Vec<String>>);
 
 impl TargetList {
     pub fn new<S: AsRef<str>>(vec: Vec<S>) -> Self {
-        Self(Lazy::from_inner(vec.into_iter().map(|s| s.as_ref().to_owned()).collect()))
+        Self(Lazy::from_inner(
+            vec.into_iter().map(|s| s.as_ref().to_owned()).collect(),
+        ))
     }
 
     pub fn user(user_id: &str) -> Self {
         Self::new(vec![user_id])
     }
-    
+
     pub fn from_vec(vec: Vec<String>) -> Self {
         Self(Lazy::from_inner(vec))
     }
@@ -169,25 +178,35 @@ impl From<Lazy<Vec<String>>> for TargetList {
     }
 }
 
-impl<T> Proof<T> 
-    where T: Serialize
+impl<T> Proof<T>
+where
+    T: Serialize,
 {
-    pub fn new(application: &str, expires_in: u64, action: ActionType, target: Target, target_data: TargetList, data: Lazy<T>, key: &Key) -> Self {
+    pub fn new(
+        application: &str,
+        expires_in: u64,
+        action: ActionType,
+        target: Target,
+        target_data: TargetList,
+        data: Lazy<T>,
+        key: &Key,
+    ) -> Self {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let expires = expires_in + now;
-        
-        let proof_content = ProofContent::new(application, expires, action, target, target_data.0, data);
-        
+
+        let proof_content =
+            ProofContent::new(application, expires, action, target, target_data.0, data);
+
         Self {
-            inner: ProofInner::new(proof_content, key)
+            inner: ProofInner::new(proof_content, key),
         }
     }
 
     pub fn into_encoded(self) -> String {
-        b64::URL_SAFE_NO_PAD.encode(&Lazy::from_inner(self.inner).take_bytes())
+        b64::URL_SAFE_NO_PAD.encode(Lazy::from_inner(self.inner).take_bytes())
     }
 
     // pub fn create_encoded(application: &str, expires: u64, action: ActionType, target: Target, target_data: Lazy<Vec<String>>, data: Lazy<T>, key: &Key) -> String {
@@ -211,7 +230,7 @@ impl AboutVerify {
     pub fn new(application: &str, action: ActionType) -> Self {
         Self {
             application: application.to_owned(),
-            action: Some(action)
+            action: Some(action),
         }
     }
 }
@@ -220,8 +239,13 @@ impl AboutVerify {
 #[error("Invalid proof.")]
 pub struct InvalidProof {}
 
-pub fn verify_proof_content<T>(proof: Proof<T>, public_key: &PublicKey, verify: AboutVerify) -> Result<ProofContent<T>, OneOf<(InvalidProof,)>>
-    where T: DeserializeOwned + Serialize
+pub fn verify_proof_content<T>(
+    proof: Proof<T>,
+    public_key: &PublicKey,
+    verify: AboutVerify,
+) -> Result<ProofContent<T>, OneOf<(InvalidProof,)>>
+where
+    T: DeserializeOwned + Serialize,
 {
     let (mut lazy_proof, signature) = proof.into_parts();
 
@@ -230,14 +254,14 @@ pub fn verify_proof_content<T>(proof: Proof<T>, public_key: &PublicKey, verify: 
     let about = lazy_proof.inner().about.clone();
 
     if verify.application != about.application {
-        return Err(OneOf::new(InvalidProof {}))
+        return Err(OneOf::new(InvalidProof {}));
     }
     if let Some(action) = verify.action {
         if action != about.action {
-            return Err(OneOf::new(InvalidProof {}))
+            return Err(OneOf::new(InvalidProof {}));
         }
     }
-    
+
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -247,29 +271,24 @@ pub fn verify_proof_content<T>(proof: Proof<T>, public_key: &PublicKey, verify: 
         return Err(OneOf::new(InvalidProof {}));
     };
 
-    if verify_signature(
-        lazy_proof.bytes(),
-        &signature,
-        public_key,
-    ) {
+    if verify_signature(lazy_proof.bytes(), &signature, public_key) {
         Ok(lazy_proof.take())
     } else {
         Err(OneOf::new(InvalidProof {}))
     }
 }
 
-
 pub fn verify_proof_write<T>(
     state: &impl State,
     write_txn: &WriteTransaction,
-    content: &mut ProofContent<T>
+    content: &mut ProofContent<T>,
 ) -> Result<(), OneOf<(DbError, InvalidProof)>> {
     let tables = state.tables().app(&content.about.application);
     let nonce = b64::URL_SAFE_NO_PAD.encode(&content.nonce);
     let mut state_table = write_txn.open_table(tables.state()).to_one_of_two()?;
     {
         // TODO clean up nonces every so often (after expiry)
-        
+
         let nonce_exists = state_table.get(nonce.as_str()).to_one_of_two()?;
 
         if nonce_exists.is_some() {
@@ -285,13 +304,13 @@ pub fn verify_proof_write<T>(
     Ok(())
 }
 
-
 pub fn verify_proof<T>(
     state: &impl State,
     proof: Proof<T>,
     verify: AboutVerify,
-) -> Result<ProofContent<T>, OneOf<(DbError, InvalidProof)>> 
-    where T: Serialize + DeserializeOwned
+) -> Result<ProofContent<T>, OneOf<(DbError, InvalidProof)>>
+where
+    T: Serialize + DeserializeOwned,
 {
     let key = state.app_key(&verify.application);
     let mut proof_content = verify_proof_content(proof, &key, verify).map_err(OneOf::broaden)?;
@@ -325,7 +344,7 @@ pub fn verify_session(state: &impl State, session: &[u8]) -> Result<Session, Inv
 
 #[cfg(test)]
 pub mod test_util {
-    use crate::data::Session;
+    use crate::data::{Claims, Session};
     use crate::state::test_util::*;
     use crate::EXPIRE_TIME;
     use std::time::UNIX_EPOCH;
@@ -357,15 +376,22 @@ pub mod test_util {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);
 
-        Proof::new(application, expires_in, ActionType::Set, Target::Select, TargetList::user(user_id), claims.into(), key)
+        Proof::new(
+            application,
+            expires_in,
+            ActionType::Set,
+            Target::Select,
+            TargetList::user(user_id),
+            claims.into(),
+            key,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::state::test_util::*;
+    use crate::{data::Claims, state::test_util::*};
 
-    use lazy_borink::UnwrapLazy;
     use test_util::*;
 
     use super::*;
@@ -423,8 +449,12 @@ mod tests {
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
         let proof = create_proof_claims(&state, app, user_id, None, claims.clone());
 
-        let mut proof_content =
-            verify_proof(&state, proof.clone(), AboutVerify::new(app, ActionType::Set)).unwrap();
+        let mut proof_content = verify_proof(
+            &state,
+            proof.clone(),
+            AboutVerify::new(app, ActionType::Set),
+        )
+        .unwrap();
 
         let unwrapped_claims = proof_content.data.inner();
 

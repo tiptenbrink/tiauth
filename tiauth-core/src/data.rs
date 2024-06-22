@@ -3,11 +3,9 @@
 use rand::rngs::StdRng;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
-use rmpv::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::path::Path;
 use std::str;
 use std::time::SystemTime;
@@ -27,6 +25,7 @@ pub struct Login {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 #[serde(transparent)]
+#[derive(Default)]
 pub struct Claims(pub HashMap<String, Vec<u8>>);
 
 impl Claims {
@@ -35,24 +34,22 @@ impl Claims {
         S: Into<String>,
         V: AsRef<[u8]>,
     {
-        Self(HashMap::from_iter(map.into_iter().map(|(s, v)| {
-            (s.into(), v.as_ref().to_vec())
-        })))
+        Self(HashMap::from_iter(
+            map.into_iter()
+                .map(|(s, v)| (s.into(), v.as_ref().to_vec())),
+        ))
     }
 
     /// Returns only claims with keys in the provided subset. Consumes the previous claims object.
-    pub fn into_subset<S>(mut self, subset: Vec<S>) -> Self 
-        where S: AsRef<str>
+    pub fn into_subset<S>(mut self, subset: Vec<S>) -> Self
+    where
+        S: AsRef<str>,
     {
-        Self(HashMap::from_iter(subset.iter().filter_map(|s| {
-            self.0.remove_entry(s.as_ref())
-        })))
-    }
-}
-
-impl Default for Claims {
-    fn default() -> Self {
-        Self(HashMap::new())
+        Self(HashMap::from_iter(
+            subset
+                .iter()
+                .filter_map(|s| self.0.remove_entry(s.as_ref())),
+        ))
     }
 }
 

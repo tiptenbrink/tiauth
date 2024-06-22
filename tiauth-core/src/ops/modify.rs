@@ -10,7 +10,8 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE, DELETE_AGE, LEEWAY
+    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE,
+    DELETE_AGE, LEEWAY,
 };
 
 /// Resets the password based on application proof. This is necessary because otherwise any user could reset another's password.
@@ -29,7 +30,12 @@ fn reset_password(
     proof: Proof<()>,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let key = state.app_key(application);
-    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Reset)).map_err(OneOf::broaden)?;
+    let mut proof_content = verify_proof_content(
+        proof,
+        &key,
+        AboutVerify::new(application, ActionType::Reset),
+    )
+    .map_err(OneOf::broaden)?;
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
@@ -56,7 +62,7 @@ fn reset_password(
         set_login_field_write(
             &write_txn,
             state,
-            &application,
+            application,
             &user_id,
             Some("".to_owned()),
             None,
@@ -189,9 +195,18 @@ fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), One
     Ok(())
 }
 
-fn app_delete_user(state: &impl State, application: &str, proof: Proof<()>) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+fn app_delete_user(
+    state: &impl State,
+    application: &str,
+    proof: Proof<()>,
+) -> Result<(), OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
-    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Delete)).map_err(OneOf::broaden)?;
+    let mut proof_content = verify_proof_content(
+        proof,
+        &key,
+        AboutVerify::new(application, ActionType::Delete),
+    )
+    .map_err(OneOf::broaden)?;
 
     let tables = state.tables().app(application);
 
@@ -225,12 +240,11 @@ fn app_delete_user(state: &impl State, application: &str, proof: Proof<()>) -> R
 
 #[cfg(test)]
 mod tests {
-    use lazy_borink::Lazy;
 
     use super::*;
     use crate::data::get_login;
     use crate::ops::login::test_util::*;
-    use crate::ops::prove::{test_util::*, Target, TargetList};
+    use crate::ops::prove::{Target, TargetList};
     use crate::ops::register::test_util::*;
     use crate::state::test_util::TestState;
 
@@ -245,13 +259,13 @@ mod tests {
         register_flow(&state, user_id, app, password, None, None);
 
         let proof = Proof::new(
-            &app,
+            app,
             1800,
             ActionType::Reset,
             Target::Select,
             TargetList::user(user_id),
             ().into(),
-            state.proof_key(app)
+            state.proof_key(app),
         );
 
         let nonce = reset_password(&state, app, proof).unwrap();
@@ -319,13 +333,13 @@ mod tests {
         register_flow(&state, user_id, app, password, None, None);
 
         let proof = Proof::new(
-            &app,
+            app,
             1800,
             ActionType::Delete,
             Target::Select,
             TargetList::user(user_id),
             ().into(),
-            state.proof_key(app)
+            state.proof_key(app),
         );
 
         app_delete_user(&state, app, proof).unwrap();

@@ -1,17 +1,11 @@
-use crate::data::{
-    set_login_field_write, LoginFieldError, SetLoginOptions, StateEntry, StateType, Tables,
-};
-use crate::error::{OneOfTo, WrapErrorOneOf};
+use crate::data::Tables;
+use crate::error::WrapErrorOneOf;
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
-use crate::util::nonce_384;
 use redb::{Error as DbError, ReadableTable};
-use std::time::SystemTime;
 use terrors::OneOf;
 
-use super::prove::{
-    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, Target, CHANGE_AGE, DELETE_AGE, LEEWAY
-};
+use super::prove::{verify_proof_content, AboutVerify, ActionType, InvalidProof, Proof, Target};
 
 pub fn get_users_encoded(
     state: &impl State,
@@ -19,13 +13,15 @@ pub fn get_users_encoded(
     proof: Proof<()>,
 ) -> Result<Vec<Vec<u8>>, OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
-    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read)).map_err(OneOf::broaden)?;
+    let mut proof_content =
+        verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read))
+            .map_err(OneOf::broaden)?;
 
     if proof_content.about.target != Target::All {
-        return Err(OneOf::new(InvalidProof {}))
+        return Err(OneOf::new(InvalidProof {}));
     }
 
-    let tables = state.tables().app(&application);
+    let tables = state.tables().app(application);
 
     let write_txn = state.db().begin_write().to_one_of_two()?;
 
@@ -48,5 +44,4 @@ pub fn get_users_encoded(
     }
 
     Ok(users)
-    
 }

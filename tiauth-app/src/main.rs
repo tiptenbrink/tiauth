@@ -1,6 +1,3 @@
-use tiauth_server::functions::{PakeFinishRequest, PakeRequest, PakeResponse};
-use opaque_borink::client::{client_register, client_register_finish};
-
 #[tokio::main]
 async fn main() {
     // let client = reqwest::Client::new();

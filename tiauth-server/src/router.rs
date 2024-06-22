@@ -1,16 +1,21 @@
-use std::path::Path;
-use bytes::Bytes;
-use axum::{async_trait, extract::{FromRequest, Json, Request, State as ExtractState}, http::request, response::{IntoResponse, Response}, routing::{get, post}, Router};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tiauth_core::{
-    api::{Application, Proof, State},
-    crypto::{create_key, load_key, save_key},
-};
-use crate::{admin::GetUsers, functions::{PakeFinishRequest, PakeRequest, PakeResponse}};
-use crate::functions;
 use crate::admin;
+use crate::functions;
 use crate::state::ServerState;
-
+use crate::{
+    admin::GetUsers,
+    functions::{PakeFinishRequest, PakeRequest, PakeResponse},
+};
+use axum::{
+    async_trait,
+    extract::{FromRequest, Json, Request, State as ExtractState},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
+use bytes::Bytes;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::path::Path;
+use tiauth_core::api::{Application, State};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessagePack<T>(pub T);
@@ -24,10 +29,12 @@ where
     type Rejection = ErrorResponse;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let bytes = Bytes::from_request(req, state).await.map_err(|r| ErrorResponse {
-            error: "bytes_extractor".to_owned(),
-            description: r.to_string()
-        })?;
+        let bytes = Bytes::from_request(req, state)
+            .await
+            .map_err(|r| ErrorResponse {
+                error: "bytes_extractor".to_owned(),
+                description: r.to_string(),
+            })?;
         Self::from_bytes(&bytes)
     }
 }
@@ -35,7 +42,7 @@ where
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ErrorResponse {
     error: String,
-    description: String
+    description: String,
 }
 
 impl IntoResponse for ErrorResponse {
@@ -52,27 +59,37 @@ where
         let inner: Result<T, rmp_serde::decode::Error> = rmp_serde::from_slice(bytes);
         let inner = match inner {
             Ok(inner) => inner,
-            Err(err) => 
+            Err(err) => {
                 return Err(ErrorResponse {
                     error: "msgpack_decode".to_owned(),
-                    description: err.to_string()
+                    description: err.to_string(),
                 })
+            }
         };
         Ok(Self(inner))
     }
 }
 
-async fn start_register(ExtractState(state): ExtractState<ServerState>, Json(request): Json<PakeRequest>) -> Json<PakeResponse> { 
+async fn start_register(
+    ExtractState(state): ExtractState<ServerState>,
+    Json(request): Json<PakeRequest>,
+) -> Json<PakeResponse> {
     Json(functions::start_register(&state, request).await)
 }
 
-async fn register_finish(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<PakeFinishRequest>) -> Result<(), ErrorResponse> { 
+async fn register_finish(
+    ExtractState(state): ExtractState<ServerState>,
+    Json(payload): Json<PakeFinishRequest>,
+) -> Result<(), ErrorResponse> {
     functions::register_finish(&state, payload).await;
 
     Ok(())
 }
 
-async fn admin_get_users_encoded(ExtractState(state): ExtractState<ServerState>, Json(payload): Json<GetUsers>) -> Vec<u8> { 
+async fn admin_get_users_encoded(
+    ExtractState(state): ExtractState<ServerState>,
+    Json(payload): Json<GetUsers>,
+) -> Vec<u8> {
     admin::get_users_encoded(&state, payload).await
 }
 
@@ -86,7 +103,8 @@ where
     let public_key_pem = "-----BEGIN PUBLIC KEY-----
 MEMwBQYDK2VxAzoAYLYqlDb45JjRtqllCk3MVUWbodjBVY3Lkf+DAZOJIhWPt4ew
 VfAwioXbWygeZ6l1jVRqz5l+/Q8A
------END PUBLIC KEY-----".to_owned();
+-----END PUBLIC KEY-----"
+        .to_owned();
 
     let app = Application::new(public_key_pem, "some_app");
 
