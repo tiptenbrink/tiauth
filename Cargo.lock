@@ -1624,6 +1624,8 @@ name = "tiauth-app-py"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
+ "lazy-borink",
  "opaque-borink",
  "pyo3",
  "rand",
@@ -1631,6 +1633,7 @@ dependencies = [
  "reqwest",
  "serde",
  "terrors",
+ "tiauth-app",
  "tiauth-core",
  "tiauth-server",
  "tokio",

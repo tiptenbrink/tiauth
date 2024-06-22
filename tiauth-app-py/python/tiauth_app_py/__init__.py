@@ -1,3 +1,3 @@
-from .app import create_private_key_pem, create_proof, public_from_private_key_pem
+from .app import create_private_key_pem, create_set_claims_proof, public_from_private_key_pem, create_claims
 
-__all__ = ["create_private_key_pem", "create_proof", "public_from_private_key_pem"]
+__all__ = ["create_private_key_pem", "create_set_claims_proof", "public_from_private_key_pem", "create_claims"]
