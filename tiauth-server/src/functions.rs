@@ -27,18 +27,17 @@ pub async fn start_register(state: &impl State, request: PakeRequest) -> PakeRes
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PakeFinishRequest {
     pub application: String,
     pub opaque_request: String,
     pub register_start_nonce: String,
-    pub claims_proof: Option<Lazy<Proof>>
+    pub claims_proof: Option<Lazy<Proof<Claims>>>
 }
 
 pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
-    let claims_proof: Option<Proof> = request.claims_proof.map(|l| l.take());
-    println!("{:?}", claims_proof);
-    match register::register_finish(state, &request.application, &request.opaque_request, &request.register_start_nonce, claims_proof) {
+    let proof: Option<Proof<Claims>> = request.claims_proof.map(|p| p.take());
+    match register::register_finish(state, &request.application, &request.opaque_request, &request.register_start_nonce, proof) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {
             terrors::E4::A(e) => todo!(),

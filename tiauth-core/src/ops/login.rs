@@ -116,8 +116,7 @@ fn login_session<S: AsRef<str>>(
 #[cfg(test)]
 pub mod test_util {
     use crate::{
-        ops::{prove::Proof, register::test_util::*},
-        state::test_util::TestState,
+        data::Claims, ops::{prove::Proof, register::test_util::*}, state::test_util::TestState
     };
     use opaque_borink::client::{client_login, client_login_finish};
 
@@ -128,7 +127,7 @@ pub mod test_util {
         user_id: &str,
         application: &str,
         password: &str,
-        claims: Option<Proof>,
+        claims: Option<Proof<Claims>>,
         session_claims: Option<Vec<&str>>,
     ) -> Vec<u8> {
         register_flow(state, user_id, application, password, None, claims);

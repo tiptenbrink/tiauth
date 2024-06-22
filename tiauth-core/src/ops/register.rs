@@ -1,8 +1,7 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 
 use crate::data::{
-    pop_state, set_login_field_write, write_state, LoginFieldError, SetLoginOptions, StateEntry,
-    StateType,
+    pop_state, set_login_field_write, write_state, Claims, LoginFieldError, SetLoginOptions, StateEntry, StateType
 };
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::ops::prove::verify_proof_write;
@@ -13,7 +12,7 @@ use redb::Error as DbError;
 use std::str;
 use terrors::OneOf;
 
-use super::prove::{verify_proof_meta, InvalidProof, Proof, ProofScopeType};
+use super::prove::{verify_proof_content, AboutVerify, ActionType, InvalidProof, Proof};
 
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
@@ -41,7 +40,7 @@ pub fn register_finish(
     application: &str,
     request: &str,
     register_flow_nonce: &str,
-    claims_proof: Option<Proof>,
+    claims_proof: Option<Proof<Claims>>,
 ) -> Result<(), OneOf<(DbError, OpaqueError, InvalidProof, LoginFieldError)>> {
     let password_file = register_server_finish(request)
         .to_one_of()
@@ -62,17 +61,17 @@ pub fn register_finish(
 
     if let Some(entry) = entry {
         let proof = if let Some(proof) = claims_proof {
-            let (proof_info, proof_use) =
-                verify_proof_meta(state, proof, ProofScopeType::SetClaims)
+            let key: crate::crypto::PublicKey = state.app_key(application);
+            let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
                     .map_err(OneOf::broaden)?;
 
-            // The requested application/user_id must match the proof
-            if proof_info.application != application || proof_use.unwrap_user_id() != entry.user_id
+            let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+            if user_id != entry.user_id
             {
                 return Err(OneOf::new(InvalidProof {}));
             }
 
-            Some((proof_info, proof_use))
+            Some(proof_content)
         } else {
             None
         };
@@ -91,10 +90,10 @@ pub fn register_finish(
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
-        let claims = if let Some((proof_info, proof_use)) = proof {
-            verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
+        let claims = if let Some(mut proof) = proof {
+            verify_proof_write(state, &write_txn, &mut proof).map_err(OneOf::broaden)?;
 
-            Some(proof_use.unwrap_claims())
+            Some(proof.data.take())
         } else {
             None
         };
@@ -146,7 +145,7 @@ pub mod test_util {
         application: &str,
         password: &str,
         alt_nonce: Option<&str>,
-        claims_proof: Option<Proof>,
+        claims_proof: Option<Proof<Claims>>,
     ) {
         let (request, client_state) = client_register(password).unwrap();
         let (server_response, nonce) =

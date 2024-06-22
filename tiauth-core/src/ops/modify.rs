@@ -10,8 +10,7 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_meta, verify_session, InvalidProof, Proof, ProofScopeType, CHANGE_AGE, DELETE_AGE,
-    LEEWAY,
+    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 
 /// Resets the password based on application proof. This is necessary because otherwise any user could reset another's password.
@@ -26,16 +25,17 @@ use super::prove::{
 /// The function returns a "change nonce" that serves as a one-time token that allows one to re-enter the registration flow.
 fn reset_password(
     state: &impl State,
-    proof: Proof,
+    application: &str,
+    proof: Proof<()>,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
-    let (proof_info, proof_use) =
-        verify_proof_meta(state, proof, ProofScopeType::ResetPassword).map_err(OneOf::broaden)?;
+    let key = state.app_key(application);
+    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Reset)).map_err(OneOf::broaden)?;
 
-    let user_id = proof_use.unwrap_user_id();
+    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
     let entropy = nonce_384(&mut state.rng());
     let set_entry = StateEntry::new(
-        user_id,
+        &user_id,
         StateType::SetPassword,
         entropy,
         None,
@@ -43,7 +43,7 @@ fn reset_password(
     );
     let set_nonce = set_entry.key();
 
-    let tables = state.tables().app(&proof_info.application);
+    let tables = state.tables().app(application);
 
     let write_txn = state
         .db()
@@ -51,13 +51,13 @@ fn reset_password(
         .into_one_of::<DbError>()
         .map_err(OneOf::broaden)?;
     {
-        verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
+        verify_proof_write(state, &write_txn, &mut proof_content).map_err(OneOf::broaden)?;
 
         set_login_field_write(
             &write_txn,
             state,
-            &proof_info.application,
-            user_id,
+            &application,
+            &user_id,
             Some("".to_owned()),
             None,
             SetLoginOptions::new(false, false),
@@ -189,11 +189,13 @@ fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), One
     Ok(())
 }
 
-fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbError, InvalidProof)>> {
-    let (proof_info, proof_use) =
-        verify_proof_meta(state, proof, ProofScopeType::DeleteUser).map_err(OneOf::broaden)?;
+fn app_delete_user(state: &impl State, application: &str, proof: Proof<()>) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+    let key = state.app_key(application);
+    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Delete)).map_err(OneOf::broaden)?;
 
-    let tables = state.tables().app(&proof_info.application);
+    let tables = state.tables().app(application);
+
+    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
     let write_txn = state
         .db()
@@ -201,7 +203,7 @@ fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbErro
         .into_one_of::<DbError>()
         .map_err(OneOf::broaden)?;
     {
-        verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
+        verify_proof_write(state, &write_txn, &mut proof_content).map_err(OneOf::broaden)?;
 
         let mut table = write_txn
             .open_table(tables.users())
@@ -209,7 +211,7 @@ fn app_delete_user(state: &impl State, proof: Proof) -> Result<(), OneOf<(DbErro
             .map_err(OneOf::broaden)?;
 
         table
-            .remove(proof_use.unwrap_user_id())
+            .remove(user_id.as_str())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
     }
@@ -228,7 +230,7 @@ mod tests {
     use super::*;
     use crate::data::get_login;
     use crate::ops::login::test_util::*;
-    use crate::ops::prove::{test_util::*, ProofScope};
+    use crate::ops::prove::{test_util::*, Target, TargetList};
     use crate::ops::register::test_util::*;
     use crate::state::test_util::TestState;
 
@@ -242,17 +244,17 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let proof = Proof::create(
-            &mut state.rng(),
-            state.proof_key(app),
-            app,
-            None,
-            Lazy::from_inner(ProofScope::ResetPassword {
-                user_id: user_id.to_owned(),
-            }),
+        let proof = Proof::new(
+            &app,
+            1800,
+            ActionType::Reset,
+            Target::Select,
+            TargetList::user(user_id),
+            ().into(),
+            state.proof_key(app)
         );
 
-        let nonce = reset_password(&state, proof).unwrap();
+        let nonce = reset_password(&state, app, proof).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 
@@ -316,17 +318,17 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let proof = Proof::create(
-            &mut state.rng(),
-            state.proof_key(app),
-            app,
-            None,
-            Lazy::from_inner(ProofScope::DeleteUser {
-                user_id: user_id.to_owned(),
-            }),
+        let proof = Proof::new(
+            &app,
+            1800,
+            ActionType::Delete,
+            Target::Select,
+            TargetList::user(user_id),
+            ().into(),
+            state.proof_key(app)
         );
 
-        app_delete_user(&state, proof).unwrap();
+        app_delete_user(&state, app, proof).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap();
 

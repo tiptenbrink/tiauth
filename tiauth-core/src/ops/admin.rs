@@ -10,23 +10,27 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 use super::prove::{
-    verify_proof_meta, verify_session, InvalidProof, Proof, ProofScopeType, CHANGE_AGE, DELETE_AGE,
-    LEEWAY,
+    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, Target, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 
 pub fn get_users_encoded(
     state: &impl State,
-    proof: Proof,
+    application: &str,
+    proof: Proof<()>,
 ) -> Result<Vec<Vec<u8>>, OneOf<(DbError, InvalidProof)>> {
-    let (proof_info, _) =
-        verify_proof_meta(state, proof, ProofScopeType::ReadAll).map_err(OneOf::broaden)?;
+    let key = state.app_key(application);
+    let mut proof_content = verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read)).map_err(OneOf::broaden)?;
 
-    let tables = state.tables().app(&proof_info.application);
+    if proof_content.about.target != Target::All {
+        return Err(OneOf::new(InvalidProof {}))
+    }
+
+    let tables = state.tables().app(&application);
 
     let write_txn = state.db().begin_write().to_one_of_two()?;
 
     {
-        verify_proof_write(state, &write_txn, &proof_info).map_err(OneOf::broaden)?;
+        verify_proof_write(state, &write_txn, &mut proof_content).map_err(OneOf::broaden)?;
     }
 
     write_txn.commit().to_one_of_two()?;

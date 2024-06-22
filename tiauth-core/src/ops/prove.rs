@@ -1,135 +1,310 @@
-use crate::api::Tables;
-use crate::crypto::{self, sign_data, verify_signature, Key};
-use crate::data::{Claims, Session};
-use crate::error::WrapErrorOneOf;
-use crate::state::State;
-use crate::util::nonce_384;
-use base64::{engine::general_purpose as b64, Engine as _};
+//! reset:1:<user>
+//! delete:1:<user>
+//! set:<user>:
+//! read:all
+//! read:
+//! 
+//! <application>:<expires>:<action_type>:<target>:<nonce>
+//! 
+//! <target blob>
+//! <permission blob>
+
+use std::time::SystemTime;
+
 use lazy_borink::Lazy;
 use rand::rngs::StdRng;
+use rand::SeedableRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
-use rmp_serde::{decode, encode};
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
-use std::str;
-use std::time::SystemTime;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use terrors::OneOf;
 use thiserror::Error;
-use serde_bytes;
+use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey};
+use crate::data::{Claims, Session, Tables};
+use crate::error::WrapErrorOneOf;
+use crate::state::State;
+use crate::util::{nonce_384, nonce_384_bytes};
+use base64::{engine::general_purpose as b64, Engine as _};
 
-#[derive(PartialEq, Eq)]
-pub enum ProofScopeType {
-    ResetPassword,
-    DeleteUser,
-    SetClaims,
-    ReadAll
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub enum ActionType {
+    #[serde(rename = "reset")]
+    Reset,
+    #[serde(rename = "delete")]
+    Delete,
+    #[serde(rename = "set")]
+    Set,
+    #[serde(rename = "read")]
+    Read
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-#[serde(tag = "use")]
-pub enum ProofScope {
-    ResetPassword { user_id: String },
-    SetClaims { user_id: String, claims: Claims },
-    DeleteUser { user_id: String },
-    ReadAll
+pub enum Target {
+    #[serde(rename = "select")]
+    Select,
+    #[serde(rename = "all")]
+    All,
 }
 
-impl ProofScope {
-    fn encode(&self) -> String {
-        let encoded = encode::to_vec_named(self).unwrap();
-
-        b64::URL_SAFE_NO_PAD.encode(encoded)
-    }
-
-    pub fn verify_type(&self, verifier: ProofScopeType) -> bool {
-        match verifier {
-            ProofScopeType::DeleteUser => matches!(self, ProofScope::DeleteUser { .. }),
-            ProofScopeType::ResetPassword => matches!(self, ProofScope::ResetPassword { .. }),
-            ProofScopeType::SetClaims => matches!(self, ProofScope::SetClaims { .. }),
-            ProofScopeType::ReadAll => matches!(self, ProofScope::ReadAll),
-        }
-    }
-
-    pub fn unwrap_user_id(&self) -> &str {
-        match self {
-            ProofScope::DeleteUser { user_id } => user_id,
-            ProofScope::SetClaims { user_id, .. } => user_id,
-            ProofScope::ResetPassword { user_id } => user_id, 
-            _ => panic!("ProofScope {:?} has no user_id!", self)
-        }
-    }
-
-    pub fn unwrap_claims(self) -> Claims {
-        match self {
-            ProofScope::SetClaims { claims, .. } => claims,
-            _ => panic!("ProofScope must be SetClaims variant!"),
-        }
+impl Target {
+    fn name(&self) -> &'static str {
+        match &self {
+            Self::Select => "select",
+            Self::All => "all",
+        }   
     }
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct ProofInfo {
-    /// Nonce ensures it is used just once
-    pub nonce: String,
-    pub expires: u64,
+impl ActionType {
+    fn name(&self) -> &'static str {
+        match &self {
+            Self::Reset => "reset",
+            Self::Delete => "delete",
+            Self::Set => "set",
+            Self::Read => "read"
+        }   
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ProofAbout {
     pub application: String,
+    pub expires: u64,
+    pub action: ActionType,
+    pub target: Target
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct Proof {
-    /// For (de)serialization, the inner fields are put into the main Proof struct
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ProofContent<T> {
     #[serde(flatten)]
-    pub info: ProofInfo,
-    pub proof_use: Lazy<ProofScope>,
-    #[serde(with = "serde_bytes")]
-    pub signature: Vec<u8>,
+    pub about: ProofAbout,
+    pub nonce: Vec<u8>,
+    pub target_data: Lazy<Vec<String>>,
+    // TODO see if we can prevent this by fixing lazy-borink
+    #[serde(bound(deserialize = "T: DeserializeOwned"))]
+    pub data: Lazy<T>
 }
 
-impl Proof {
-    pub fn create(
-        rng: &mut StdRng,
-        app_key: &Key,
-        application: &str,
-        expires_in: Option<u64>,
-        mut proof_use: Lazy<ProofScope>,
-    ) -> Self {
-        let nonce = nonce_384(rng);
+impl<T> ProofContent<T> {
+    pub fn new(application: &str, expires: u64, action: ActionType, target: Target, target_data: Lazy<Vec<String>>, data: Lazy<T>) -> Self {
+        let nonce = nonce_384_bytes(&mut StdRng::from_entropy());
+
+        Self {
+            about: ProofAbout {
+                application: application.to_owned(),
+                expires,
+                action,
+                target
+            },
+            nonce,
+            target_data,
+            data
+        }
+    }
+
+    pub fn select_one(&mut self) -> Result<String, OneOf<(InvalidProof,)>> {
+        let targets = self.target_data.inner();
+
+        match self.about.target {
+            Target::Select => {
+                if targets.len() == 1 {
+                    Ok(targets[0].clone())
+                } else {
+                    Err(OneOf::new(InvalidProof {}))
+                }
+            },
+            Target::All => Err(OneOf::new(InvalidProof {}))
+        }
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProofInner<T> {
+    #[serde(bound(deserialize = "T: DeserializeOwned"))]
+    proof: Lazy<ProofContent<T>>,
+    signature: Vec<u8>
+}
+
+impl<T> ProofInner<T> 
+    where T: Serialize
+{
+    fn new(proof_content: ProofContent<T>, key: &Key) -> Self {
+        let mut proof_content = Lazy::from_inner(proof_content);
+    
+        let signature = sign_data(key, proof_content.bytes());
+    
+        Self {
+            proof: proof_content,
+            signature
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(transparent)]
+pub struct Proof<T> {
+    #[serde(bound(deserialize = "T: DeserializeOwned"))]
+    inner: ProofInner<T>
+}
+
+pub struct TargetList(Lazy<Vec<String>>);
+
+impl TargetList {
+    pub fn new<S: AsRef<str>>(vec: Vec<S>) -> Self {
+        Self(Lazy::from_inner(vec.into_iter().map(|s| s.as_ref().to_owned()).collect()))
+    }
+
+    pub fn user(user_id: &str) -> Self {
+        Self::new(vec![user_id])
+    }
+    
+    pub fn from_vec(vec: Vec<String>) -> Self {
+        Self(Lazy::from_inner(vec))
+    }
+}
+
+impl From<Lazy<Vec<String>>> for TargetList {
+    fn from(value: Lazy<Vec<String>>) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> Proof<T> 
+    where T: Serialize
+{
+    pub fn new(application: &str, expires_in: u64, action: ActionType, target: Target, target_data: TargetList, data: Lazy<T>, key: &Key) -> Self {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let expires = expires_in.unwrap_or(1800) + now;
+        let expires = expires_in + now;
+        
+        let proof_content = ProofContent::new(application, expires, action, target, target_data.0, data);
+        
+        Self {
+            inner: ProofInner::new(proof_content, key)
+        }
+    }
 
-        let info = ProofInfo {
-            nonce,
-            expires,
+    pub fn into_encoded(self) -> String {
+        b64::URL_SAFE_NO_PAD.encode(&Lazy::from_inner(self.inner).take_bytes())
+    }
+
+    // pub fn create_encoded(application: &str, expires: u64, action: ActionType, target: Target, target_data: Lazy<Vec<String>>, data: Lazy<T>, key: &Key) -> String {
+    //     let proof_content = ProofContent::new(application, expires, action, target, target_data, data);
+    //     let inner = ProofInner::new(proof_content, key);
+
+    //     b64::URL_SAFE_NO_PAD.encode(&Lazy::from_inner(inner).take_bytes())
+    // }
+
+    pub fn into_parts(self) -> (Lazy<ProofContent<T>>, Vec<u8>) {
+        (self.inner.proof, self.inner.signature)
+    }
+}
+
+pub struct AboutVerify {
+    pub application: String,
+    pub action: Option<ActionType>,
+}
+
+impl AboutVerify {
+    pub fn new(application: &str, action: ActionType) -> Self {
+        Self {
             application: application.to_owned(),
-        };
-
-        let data = proof_data(&info, &proof_use.inner());
-
-        let signature = sign_data(app_key, &data);
-
-        Proof {
-            info,
-            proof_use,
-            signature,
+            action: Some(action)
         }
     }
 }
 
-pub fn proof_data(info: &ProofInfo, proof_use: &ProofScope) -> Vec<u8> {
-    format!(
-        "{}:{}:{}:{}",
-        info.application,
-        info.nonce,
-        info.expires,
-        proof_use.encode()
-    )
-    .into_bytes()
+#[derive(Error, Debug)]
+#[error("Invalid proof.")]
+pub struct InvalidProof {}
+
+pub fn verify_proof_content<T>(proof: Proof<T>, public_key: &PublicKey, verify: AboutVerify) -> Result<ProofContent<T>, OneOf<(InvalidProof,)>>
+    where T: DeserializeOwned + Serialize
+{
+    let (mut lazy_proof, signature) = proof.into_parts();
+
+    // These are small and cheap to take out and clone
+    // TODO propagate the decode error?
+    let about = lazy_proof.inner().about.clone();
+
+    if verify.application != about.application {
+        return Err(OneOf::new(InvalidProof {}))
+    }
+    if let Some(action) = verify.action {
+        if action != about.action {
+            return Err(OneOf::new(InvalidProof {}))
+        }
+    }
+    
+    let time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if time > about.expires + LEEWAY {
+        return Err(OneOf::new(InvalidProof {}));
+    };
+
+    if verify_signature(
+        lazy_proof.bytes(),
+        &signature,
+        public_key,
+    ) {
+        Ok(lazy_proof.take())
+    } else {
+        Err(OneOf::new(InvalidProof {}))
+    }
 }
 
-// How outdated a session or other time-sensitive token is allowed to be
+
+pub fn verify_proof_write<T>(
+    state: &impl State,
+    write_txn: &WriteTransaction,
+    content: &mut ProofContent<T>
+) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+    let tables = state.tables().app(&content.about.application);
+    let nonce = b64::URL_SAFE_NO_PAD.encode(&content.nonce);
+    let mut state_table = write_txn.open_table(tables.state()).to_one_of_two()?;
+    {
+        // TODO clean up nonces every so often (after expiry)
+        
+        let nonce_exists = state_table.get(nonce.as_str()).to_one_of_two()?;
+
+        if nonce_exists.is_some() {
+            return Err(OneOf::new(InvalidProof {}));
+        }
+    }
+
+    let proof_expires = format!("{}", content.about.expires);
+    state_table
+        .insert(nonce.as_str(), proof_expires.as_str())
+        .to_one_of_two()?;
+
+    Ok(())
+}
+
+
+pub fn verify_proof<T>(
+    state: &impl State,
+    proof: Proof<T>,
+    verify: AboutVerify,
+) -> Result<ProofContent<T>, OneOf<(DbError, InvalidProof)>> 
+    where T: Serialize + DeserializeOwned
+{
+    let key = state.app_key(&verify.application);
+    let mut proof_content = verify_proof_content(proof, &key, verify).map_err(OneOf::broaden)?;
+
+    let write_txn = state.db().begin_write().to_one_of_two()?;
+
+    verify_proof_write(state, &write_txn, &mut proof_content)?;
+
+    write_txn.commit().to_one_of_two()?;
+
+    Ok(proof_content)
+}
+
 pub const LEEWAY: u64 = 10;
 
 // Can only delete account with session that is less than 10 minutes old
@@ -145,91 +320,12 @@ pub fn verify_session(state: &impl State, session: &[u8]) -> Result<Session, Inv
     let session = crypto::session_decrypt(session, &state.private().session)
         .map_err(|_e| InvalidSession {})?;
 
-    decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
-}
-
-#[derive(Error, Debug)]
-#[error("Invalid proof.")]
-pub struct InvalidProof {}
-
-/// This checks all parts of the proof that do not require reading inspecting the state table.
-/// It is still required to check if the nonce has already been used!
-pub fn verify_proof_meta(
-    state: &impl State,
-    proof: Proof,
-    verify_use: ProofScopeType,
-) -> Result<(ProofInfo, ProofScope), OneOf<(DbError, InvalidProof)>> {
-    let proof_use = proof.proof_use.take();
-    
-    if !proof_use.verify_type(verify_use) {
-        return Err(OneOf::new(InvalidProof {}));
-    }
-
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    if time > proof.info.expires + LEEWAY {
-        return Err(OneOf::new(InvalidProof {}));
-    };
-
-    let is_verified = verify_signature(
-        &proof_data(&proof.info, &proof_use),
-        &proof.signature,
-        &state.app_key(&proof.info.application),
-    );
-
-    if !is_verified {
-        return Err(OneOf::new(InvalidProof {}));
-    }
-
-    Ok((proof.info, proof_use))
-}
-
-pub fn verify_proof_write(
-    state: &impl State,
-    write_txn: &WriteTransaction,
-    proof_info: &ProofInfo,
-) -> Result<(), OneOf<(DbError, InvalidProof)>> {
-    let tables = state.tables().app(&proof_info.application);
-
-    let mut state_table = write_txn.open_table(tables.state()).to_one_of_two()?;
-    {
-        // TODO clean up nonces every so often (after expiry)
-        let nonce_exists = state_table.get(proof_info.nonce.as_str()).to_one_of_two()?;
-
-        if nonce_exists.is_some() {
-            return Err(OneOf::new(InvalidProof {}));
-        }
-    }
-
-    let proof_expires = format!("{}", proof_info.expires);
-    state_table
-        .insert(proof_info.nonce.as_str(), proof_expires.as_str())
-        .to_one_of_two()?;
-
-    Ok(())
-}
-
-fn verify_proof(
-    state: &impl State,
-    proof: Proof,
-    verify_use: ProofScopeType,
-) -> Result<(ProofInfo, ProofScope), OneOf<(DbError, InvalidProof)>> {
-    let (proof_info, proof_use) = verify_proof_meta(state, proof, verify_use)?;
-
-    let write_txn = state.db().begin_write().to_one_of_two()?;
-
-    verify_proof_write(state, &write_txn, &proof_info)?;
-
-    write_txn.commit().to_one_of_two()?;
-
-    Ok((proof_info, proof_use))
+    rmp_serde::decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
 }
 
 #[cfg(test)]
 pub mod test_util {
+    use crate::data::Session;
     use crate::state::test_util::*;
     use crate::EXPIRE_TIME;
     use std::time::UNIX_EPOCH;
@@ -257,19 +353,11 @@ pub mod test_util {
         user_id: &str,
         expires_in: Option<u64>,
         claims: Claims,
-    ) -> Proof {
-        let proof_use = ProofScope::SetClaims {
-            user_id: user_id.to_owned(),
-            claims,
-        };
+    ) -> Proof<Claims> {
+        let expires_in = expires_in.unwrap_or(1800);
+        let key = state.proof_key(application);
 
-        Proof::create(
-            &mut state.rng(),
-            state.proof_key(application),
-            application,
-            expires_in,
-            Lazy::from_inner(proof_use),
-        )
+        Proof::new(application, expires_in, ActionType::Set, Target::Select, TargetList::user(user_id), claims.into(), key)
     }
 }
 
@@ -277,6 +365,7 @@ pub mod test_util {
 mod tests {
     use crate::state::test_util::*;
 
+    use lazy_borink::UnwrapLazy;
     use test_util::*;
 
     use super::*;
@@ -313,6 +402,18 @@ mod tests {
         assert_eq!(claims.len(), 2);
     }
 
+    #[derive(Debug, Deserialize)]
+    struct ProofContentAttempt {
+        #[serde(flatten)]
+        pub about: ProofAbout,
+    }
+
+    // #[derive(Debug, Deserialize)]
+    // struct ProofContentAttempt {
+    //     #[serde(flatten)]
+    //     pub about: ProofAbout,
+    // }
+
     #[test]
     fn test_proof_verify() {
         let user_id = "hi";
@@ -322,12 +423,12 @@ mod tests {
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
         let proof = create_proof_claims(&state, app, user_id, None, claims.clone());
 
-        let (proof_info, proof_use) =
-            verify_proof(&state, proof.clone(), ProofScopeType::SetClaims).unwrap();
+        let mut proof_content =
+            verify_proof(&state, proof.clone(), AboutVerify::new(app, ActionType::Set)).unwrap();
 
-        let unwrapped_claims = proof_use.unwrap_claims();
+        let unwrapped_claims = proof_content.data.inner();
 
         assert_eq!(claims.0, unwrapped_claims.0);
-        assert_eq!(proof.info.application, proof_info.application);
+        assert_eq!(app, proof_content.about.application);
     }
 }

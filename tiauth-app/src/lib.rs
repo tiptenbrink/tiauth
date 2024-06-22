@@ -4,13 +4,10 @@ use rand::RngCore;
 use rand::{rngs::StdRng, SeedableRng};
 use rmp_serde::decode;
 use lazy_borink::Lazy;
-use tiauth_core::crypto::{create_key, load_key, save_key};
+use tiauth_core::api::prove::{ActionType, Target};
+use tiauth_core::crypto::{create_key, load_key, save_key, Key};
 use base64::{engine::general_purpose as b64, Engine as _};
-use tiauth_core::api::{Claims, Proof, ProofScope};
-
-mod app3;
-
-pub use app3::*;
+use tiauth_core::api::{Claims, Proof};
 
 pub fn create_private_key_pem() -> String {
     let key = create_key();
@@ -24,55 +21,40 @@ pub fn public_from_private_key_pem(private_key_pem: &str) -> String {
     save_key(&key).public
 }
 
-// pub trait LazyOr<T> {
-//     fn as_lazy(self) -> Lazy<T>;
-// }
 
-// impl<T> LazyOr<T> for T {
-//     fn as_lazy(self) -> Lazy<T> {
-//         Lazy::from_inner(self)
-//     }
-// }
+pub struct ProofBase {
+    pub application: String,
+    pub expires_in: u64,
+    pub key: Key
+}
 
-// impl<T> LazyOr<T> for Lazy<T> {
-//     fn as_lazy(self) -> Lazy<T> {
-//         self
-//     }
-// }
+impl ProofBase {
+    pub fn new(application: &str, private_key_pem: &str) -> Self {
+        let key = load_key(private_key_pem);
+        Self {
+            application: application.to_owned(),
+            expires_in: 1800,
+            key
+        }
+    }
+}
 
-// pub fn gen_claims() -> Lazy<Claims> {
-//     let mut rng = StdRng::from_entropy();
-//     let mut buf = [0u8; 16];
-//     rng.fill_bytes(&mut buf);
-//     let enc = b64::URL_SAFE_NO_PAD.encode(buf);
-
-//     let lazy_bytes = Lazy::from_inner(Claims::new(vec![("some_key", enc)])).take_bytes();
-
-//     Lazy::from_bytes(lazy_bytes)
-// }
-
-
-// fn set_claims_proof_use<C: LazyOr<Claims>>(user_id: &str, claims: C) -> Lazy<ProofScope> {
-//     let proof_use = ProofScope::SetClaims { user_id: user_id.to_owned(), claims: claims.as_lazy().take() };
-
-//     Lazy::from_inner(proof_use)
-// }
-
-// fn create_proof_struct(proof_use: Lazy<ProofScope>, application: &str, private_key_pem: &str, expires_in: Option<u64>) -> Lazy<Proof> {
-//     let key = load_key(private_key_pem);
+pub fn create_set_claims_proof(proof_base: ProofBase, user_id: &str, claims: Lazy<Claims>) -> String {
+    let action = ActionType::Set;
+    let target = Target::Select;
+    let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
     
-//     Lazy::from_inner(Proof::create(&mut StdRng::from_entropy(), &key, application, expires_in, proof_use))
-// }
+    let proof = Proof::new(&proof_base.application, proof_base.expires_in, action, target, target_data.into(), claims, &proof_base.key);
 
-// /// ProofScope encoded as MessagePack bytes, private key is PEM encoded PKCS#8 Ed448, returns MessagePack proof bytes.
-// pub fn create_proof_json(proof_use: &[u8], application: &str, private_key_pem: &str, expires_in: Option<u64>) -> String {
-//     let proof = create_proof_struct(proof_use, application, private_key_pem, expires_in);
+    proof.into_encoded()
+}
 
-//     serde_json::to_string(&Lazy::from_inner(proof)).unwrap()
-// }
+pub fn create_reset_proof(proof_base: ProofBase, user_id: &str) -> String {
+    let action = ActionType::Reset;
+    let target = Target::Select;
+    let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
+    
+    let proof = Proof::new(&proof_base.application, proof_base.expires_in, action, target, target_data.into(), Lazy::from_inner(()), &proof_base.key);
 
-// pub fn create_proof(proof_use: &[u8], application: &str, private_key_pem: &str, expires_in: Option<u64>) -> Vec<u8> {
-//     let proof = create_proof_struct(proof_use, application, private_key_pem, expires_in);
-
-//     rmp_serde::encode::to_vec_named(&Lazy::from_inner(proof)).unwrap()
-// }
+    proof.into_encoded()
+}
