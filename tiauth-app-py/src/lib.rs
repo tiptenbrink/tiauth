@@ -118,7 +118,7 @@ impl FromPython for Claims {
 #[pyfunction]
 fn create_claims<'a>(claims: LazyArg<Claims>) -> PyResult<Cow<'a, [u8]>> {
     let claims = claims.0;
-
+    println!("hi");
     Ok(Cow::from(claims.take_bytes()))
 }
 
