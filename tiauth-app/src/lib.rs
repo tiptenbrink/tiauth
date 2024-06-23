@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::time::Instant;
+
 use lazy_borink::Lazy;
 use tiauth_core::api::prove::{ActionType, Target, TargetList};
 use tiauth_core::api::{Claims, Proof};
@@ -39,10 +41,12 @@ pub fn create_set_claims_proof(
     user_id: &str,
     claims: Lazy<Claims>,
 ) -> String {
+    let now = Instant::now();
     let action = ActionType::Set;
     let target = Target::Select;
     let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
 
+    let now2 = Instant::now();
     let proof = Proof::new(
         &proof_base.application,
         proof_base.expires_in,
@@ -52,6 +56,9 @@ pub fn create_set_claims_proof(
         claims,
         &proof_base.key,
     );
+    let now3 = Instant::now();
+    println!("lazy target {} ms.", now2.duration_since(now).as_secs_f32()*1000f32);
+    println!("proof new {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
 
     proof.into_encoded()
 }

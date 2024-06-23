@@ -1736,6 +1736,7 @@ dependencies = [
  "base64",
  "lazy-borink",
  "opaque-borink",
+ "openssl",
  "rand",
  "redb",
  "reqwest",

@@ -15,3 +15,4 @@ Running `createSetClaimsProof()` on an i7-8750H (April 2018 laptop CPU) on Linux
 ```js
 const proof = createSetClaimsProof("some_app", key, "abc7", {"my_claim": "is_cool"})
 ```
+

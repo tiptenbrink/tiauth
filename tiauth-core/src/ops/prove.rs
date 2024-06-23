@@ -143,7 +143,7 @@ where
         let signature = sign_data(key, proof_content.bytes());
 
         let after = Instant::now();
-        println!("{} ms.", after.duration_since(now).as_secs_f64()*1000f64);
+        println!("sign {} ms.", after.duration_since(now).as_secs_f64()*1000f64);
 
         Self {
             proof: proof_content,
@@ -200,18 +200,27 @@ where
         data: Lazy<T>,
         key: &Key,
     ) -> Self {
+        let now0 = Instant::now();
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let expires = expires_in + now;
-
+        let now1 = Instant::now();
         let proof_content =
             ProofContent::new(application, expires, action, target, target_data.0, data);
 
-        Self {
+        let now2 = Instant::now();
+        let proof = Self {
             inner: ProofInner::new(proof_content, key),
-        }
+        };
+        let now3 = Instant::now();
+
+        println!("system time {} ms.", now1.duration_since(now0).as_secs_f32()*1000f32);
+        println!("content new {} ms.", now2.duration_since(now1).as_secs_f32()*1000f32);
+        println!("inner:all {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
+
+        proof
     }
 
     pub fn into_encoded(self) -> String {
