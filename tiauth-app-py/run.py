@@ -6,6 +6,7 @@ from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
 from tiauth_app_py.model import PakeFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
 from tiauth_app_py import create_set_claims_proof, create_read_all_proof
+from time import perf_counter
 
 class Login(Struct):
     user_id: str
@@ -60,6 +61,26 @@ def register_flow():
     if r.status_code != 200:
         raise ValueError(r.text)
 
-register_flow()
+def proof_time():
+    count = 1000
+    proofs = []
+    total = 0
+    for i in range(count):
+        time_start = perf_counter()
+        proof = create_set_claims_proof(APP_NAME, private, "abc7", {"my_claim": "is_cool"})
+        time_end = perf_counter()
+        proofs.append(proof)
+        total += time_end - time_start
+    # proof2 = create_set_claims_proof(APP_NAME, private, "abc20", {"my_claim": "is_cool"})
+    # proof3 = create_set_claims_proof(APP_NAME, private, "abc20", {"my_claim": "is_cool"})
+    # proof4 = create_set_claims_proof(APP_NAME, private, "abc20", {"my_claim": "is_cool"})
+    # time_last = perf_counter()
+    proofs = str(proofs)
+    print(f"{total*1000/count} ms.")
+    print(f"{proofs[:15]}...")
 
-get_users()
+proof_time()
+
+# register_flow()
+
+# get_users()

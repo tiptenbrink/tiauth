@@ -9,7 +9,7 @@
 //! <target blob>
 //! <permission blob>
 
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey};
 use crate::data::{Session, Tables};
@@ -138,7 +138,12 @@ where
     fn new(proof_content: ProofContent<T>, key: &Key) -> Self {
         let mut proof_content = Lazy::from_inner(proof_content);
 
+        let now = Instant::now();
+        
         let signature = sign_data(key, proof_content.bytes());
+
+        let after = Instant::now();
+        println!("{} ms.", after.duration_since(now).as_secs_f64()*1000f64);
 
         Self {
             proof: proof_content,

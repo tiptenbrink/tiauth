@@ -7,6 +7,19 @@ DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
 -----END PRIVATE KEY-----
 `.trim()
 
-console.log(createSetClaimsProof("some_app", key, "abc7", { something: "ab" }))
+const count = 1000
+let total = 0
+let proofs = []
 
-console.log(createResetProof("some_app", key, "abc7"))
+for (let i = 0; i < count; i++) {
+    const msStart =  performance.now()
+    const proof = createSetClaimsProof("some_app", key, "abc7", {"my_claim": "is_cool"})
+    const msEnd =  performance.now()
+    total += (msEnd - msStart)
+    proofs.push(proof)
+}
+
+console.log(`Time: ${total/count} ms.`)
+
+const proof_str = proofs.toString()
+console.log(`${proof_str.slice(0, 15)}...`)
