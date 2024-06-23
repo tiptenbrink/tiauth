@@ -6,5 +6,5 @@ members = [
     "tiauth", 
     "tiauth-app", 
     "tiauth-app-py",
-    "tiauth-app-js"
+    "tiauth-app-napi"
 ]
