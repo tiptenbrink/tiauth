@@ -1,10 +1,8 @@
 use base64::{engine::general_purpose as b64, Engine as _};
-use openssl::pkey::{Id, PKey, Private, Public};
-use openssl::sign::{Signer, Verifier};
-use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
+use aes_gcm_siv::{self as aead, aead::Aead, KeyInit};
 use rand::rngs::StdRng;
 use rand::RngCore;
-use ed25519_compact::{self as ed, KeyPair, Signature};
+use ed25519_compact::{self as ed};
 
 // const ALGORITHM: Id = Id::ED25519;
 
@@ -99,7 +97,10 @@ pub fn sign_data(key: &Key, data: &[u8]) -> Vec<u8> {
 }
 
 pub fn verify_signature(data: &[u8], signature: &[u8], public_key: &PublicKey) -> bool {
-    public_key.pk.verify(data, &Signature::from_slice(signature).unwrap()).is_ok()
+    match &ed::Signature::from_slice(signature) {
+        Ok(sig) =>  public_key.pk.verify(data, sig).is_ok(),
+        Err(_) => false
+    }
 }
 
 pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
@@ -108,12 +109,12 @@ pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
     rng.fill_bytes(&mut key_bytes);
 
     SessionKey {
-        key_256_raw: key_bytes,
+        key_256: key_bytes.into(),
     }
 }
 
 pub struct SessionKey {
-    key_256_raw: [u8; 32],
+    key_256: aead::Key<aead::Aes256GcmSiv>,
 }
 
 pub struct SavedSessionKey {
@@ -121,7 +122,7 @@ pub struct SavedSessionKey {
 }
 
 pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
-    let session = b64::URL_SAFE_NO_PAD.encode(key.key_256_raw);
+    let session = b64::URL_SAFE_NO_PAD.encode(key.key_256);
 
     SavedSessionKey { session }
 }
@@ -133,30 +134,21 @@ pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
         .decode_slice(session_key_encoded, &mut key_256_raw)
         .unwrap();
     assert_eq!(bytes_written, 32);
-
-    SessionKey { key_256_raw }
+    SessionKey { key_256: aead::Key::<aead::Aes256GcmSiv>::from_slice(&key_256_raw).to_owned() }
 }
 
 pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
-    let cipher = Cipher::aes_256_gcm();
+    let cipher = aead::Aes256GcmSiv::new(&key.key_256);
 
     let mut iv_bytes = vec![0u8; 12];
     rng.fill_bytes(&mut iv_bytes);
 
-    let mut tag = vec![0u8; 16];
+    let nonce = aead::Nonce::from_slice(&iv_bytes);
 
-    let mut ciphertext = encrypt_aead(
-        cipher,
-        &key.key_256_raw,
-        Some(&iv_bytes),
-        b"",
-        session_data,
-        &mut tag,
-    )
-    .unwrap();
+    // Tag is appended at the end
+    let mut ciphertext = cipher.encrypt(nonce, session_data).unwrap();
 
-    // We add the authentication tag to the end
-    ciphertext.append(&mut tag);
+    // We at the nonce at the end
     ciphertext.append(&mut iv_bytes);
 
     ciphertext
@@ -171,21 +163,15 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
     assert!(session_len >= 28);
 
     let iv = session.get((session_len - 12)..(session_len)).unwrap();
-    let tag = session.get((session_len - 28)..(session_len - 12)).unwrap();
-    let ciphertext = session.get(0..(session_len - 28)).unwrap();
+    let nonce = aead::Nonce::from_slice(&iv);
+    let ciphertext = session.get(0..(session_len - 12)).unwrap();
 
-    let cipher = Cipher::aes_256_gcm();
+    let cipher = aead::Aes256GcmSiv::new(&key.key_256);
 
-    match decrypt_aead(cipher, &key.key_256_raw, Some(iv), b"", ciphertext, tag) {
+    match cipher.decrypt(nonce, ciphertext) {
         Ok(decrypted) => Ok(decrypted),
         // If something with the data is wrong, no errors will be reported
-        Err(e) => {
-            if e.errors().is_empty() {
-                Err(DecryptFailed {})
-            } else {
-                panic!("Internal OpenSSL error!")
-            }
-        }
+        Err(e) => Err(DecryptFailed {})
     }
 }
 
