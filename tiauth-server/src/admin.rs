@@ -25,7 +25,7 @@ pub struct GetUsers {
 
 pub async fn get_users_encoded(state: &impl State, request: GetUsers) -> Vec<u8> {
     let proof = request.read_all_proof.take();
-    println!("{:?}", proof);
+    //println!("{:?}", proof);
     match admin::get_users_encoded(state, &request.application, proof) {
         Ok(users) => encode::to_vec_named(&StructList::from_vec_vec(users)).unwrap(),
         Err(e) => match e.to_enum() {

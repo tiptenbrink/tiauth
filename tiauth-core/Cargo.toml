@@ -4,8 +4,6 @@ version = "0.2.0"
 authors = ["Tip ten Brink <75669206+tiptenbrink@users.noreply.github.com>"]
 edition = "2021"
 
-
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -24,6 +22,7 @@ terrors = "=0.3.0"
 base64 = "0.22.1"
 openssl = "0.10"
 thiserror = "1.0"
+ed25519-compact = "=2.1.1"
 
 [dev-dependencies]
 tempfile = "3"

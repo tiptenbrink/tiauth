@@ -219,9 +219,9 @@ where
         };
         let now3 = Instant::now();
 
-        println!("system time {} ms.", now1.duration_since(now0).as_secs_f32()*1000f32);
-        println!("content new {} ms.", now2.duration_since(now1).as_secs_f32()*1000f32);
-        println!("inner:all {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
+        //println!("system time {} ms.", now1.duration_since(now0).as_secs_f32()*1000f32);
+        //println!("content new {} ms.", now2.duration_since(now1).as_secs_f32()*1000f32);
+        //println!("inner:all {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
 
         proof
     }

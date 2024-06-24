@@ -67,7 +67,7 @@ impl<T> FromNapiValue for LazyArg<T>
         let l: LazyArg<T> = LazyArg(inm);
         let after = Instant::now();
 
-        println!("to rust: {}", after.duration_since(now).as_secs_f64()*1000f64);
+        //println!("to rust: {}", after.duration_since(now).as_secs_f64()*1000f64);
 
         // match either {
         //     Either3::A(b) => Ok(LazyArg(Lazy::from_bytes(b.to_vec()))),

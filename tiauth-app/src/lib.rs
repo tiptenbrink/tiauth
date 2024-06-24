@@ -80,9 +80,6 @@ pub fn create_set_claims_proof(
     
     let enc = proof.into_encoded();
     let now4 = Instant::now();
-    println!("lazy target {} ms.", now2.duration_since(now).as_secs_f32()*1000f32);
-    println!("proof new {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
-    println!("finenc {} ms.", now4.duration_since(now3).as_secs_f32()*1000f32);
     enc
 
 }

@@ -96,7 +96,7 @@ where
 
         let now2 = Instant::now();
 
-        println!("to rust: {} ms.", now2.duration_since(now).as_secs_f64()*1000f64);
+        //println!("to rust: {} ms.", now2.duration_since(now).as_secs_f64()*1000f64);
 
         res
     }
@@ -115,8 +115,8 @@ impl FromPython for Claims {
     {
         let dict = ob.downcast::<PyDict>()?;
         let now = Instant::now();
-        let mut vs: Vec<(String, Vec<u8>)> = Vec::with_capacity(dict.len());
-        //let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
+        //let mut vs: Vec<(String, Vec<u8>)> = Vec::with_capacity(dict.len());
+        let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
 
         dict.iter().try_for_each(|(k, v)| {
             let k: String = k.extract().map_err(|e| {
@@ -133,16 +133,15 @@ impl FromPython for Claims {
                 PyValueError::new_err(msg)
             })?;
 
-            //map.insert(k, v);
-            vs.push((k, v));
+            map.insert(k, v);
 
             Ok::<(), PyErr>(())
         })?;
 
         let after = Instant::now();
-        println!("into strct {} ms.", after.duration_since(now).as_secs_f64()*1000f64);
+        //println!("into strct {} ms.", after.duration_since(now).as_secs_f64()*1000f64);
 
-        let map = HashMap::from_iter(vs);
+        //let map = HashMap::from_iter(vs);
 
         Ok(Claims(map))
     }
@@ -151,7 +150,7 @@ impl FromPython for Claims {
 #[pyfunction]
 fn create_claims<'a>(claims: LazyArg<Claims>) -> PyResult<Cow<'a, [u8]>> {
     let claims = claims.0;
-    println!("hi");
+    //println!("hi");
     Ok(Cow::from(claims.take_bytes()))
 }
 

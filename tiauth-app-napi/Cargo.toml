@@ -1,5 +1,5 @@
 [package]
-name = "tiauth-app-js"
+name = "tiauth-app-napi"
 version = "0.1.0"
 edition = "2021"
 
