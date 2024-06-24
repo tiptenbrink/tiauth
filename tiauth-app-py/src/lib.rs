@@ -1,13 +1,28 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::time::Instant;
 
 use base64::{engine::general_purpose as b64, Engine as _};
 use lazy_borink::Lazy;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::{prelude::*, PyTypeInfo};
-use tiauth_app::ProofBase;
+use tiauth_app::{ProofBase, ProofBaseView};
 use tiauth_core::api::Claims;
+use tiauth_core::crypto::{load_key, Key};
+
+
+#[pyclass(frozen)]
+struct ProofKey {
+    key: Key
+}
+
+#[pyfunction]
+fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
+    let key = load_key(private_key_pem);
+
+    Ok(ProofKey { key })
+}
 
 #[pymodule]
 fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -18,6 +33,8 @@ fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     internal.add_function(wrap_pyfunction!(create_claims, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_reset_proof, &internal)?)?;
     internal.add_function(wrap_pyfunction!(create_read_all_proof, &internal)?)?;
+    internal.add_function(wrap_pyfunction!(create_key, &internal)?)?;
+    internal.add_function(wrap_pyfunction!(create_reset_proof_key, &internal)?)?;
     m.add_submodule(&internal)?;
 
     Ok(())
@@ -54,10 +71,9 @@ where
     T: FromPython,
 {
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
-        if T::is_instance(ob) {
-            let inner = T::extract_bound(ob)?;
-            Ok(LazyArg(Lazy::from_inner(inner)))
-        } else if ob.is_instance_of::<PyBytes>() {
+        let now = Instant::now();
+        
+        let res = if ob.is_instance_of::<PyBytes>() {
             let claim_bytes: Vec<u8> = ob.extract()?;
             return Ok(LazyArg(Lazy::from_bytes(claim_bytes)));
         } else if ob.is_instance_of::<PyString>() {
@@ -66,6 +82,9 @@ where
                 .decode(str)
                 .map_err(|_e| PyValueError::new_err("Failed to decode Python string as base64."))?;
             return Ok(LazyArg(Lazy::from_bytes(bytes)));
+        } else if T::is_instance(ob) {
+            let inner = T::extract_bound(ob)?;
+            Ok(LazyArg(Lazy::from_inner(inner)))
         } else {
             let msg = format!(
                 "Unable to interpret {} type as {}!",
@@ -73,7 +92,13 @@ where
                 T::name()
             );
             Err(PyValueError::new_err(msg))
-        }
+        };
+
+        let now2 = Instant::now();
+
+        println!("to rust: {} ms.", now2.duration_since(now).as_secs_f64()*1000f64);
+
+        res
     }
 }
 
@@ -89,7 +114,9 @@ impl FromPython for Claims {
         Self: Sized,
     {
         let dict = ob.downcast::<PyDict>()?;
-        let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
+        let now = Instant::now();
+        let mut vs: Vec<(String, Vec<u8>)> = Vec::with_capacity(dict.len());
+        //let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
 
         dict.iter().try_for_each(|(k, v)| {
             let k: String = k.extract().map_err(|e| {
@@ -106,10 +133,16 @@ impl FromPython for Claims {
                 PyValueError::new_err(msg)
             })?;
 
-            map.insert(k, v);
+            //map.insert(k, v);
+            vs.push((k, v));
 
             Ok::<(), PyErr>(())
         })?;
+
+        let after = Instant::now();
+        println!("into strct {} ms.", after.duration_since(now).as_secs_f64()*1000f64);
+
+        let map = HashMap::from_iter(vs);
 
         Ok(Claims(map))
     }
@@ -123,13 +156,13 @@ fn create_claims<'a>(claims: LazyArg<Claims>) -> PyResult<Cow<'a, [u8]>> {
 }
 
 #[pyfunction]
-fn create_set_claims_proof(
+fn create_set_claims_proof<'py>(
     application: &str,
-    private_key_pem: &str,
+    key: &Bound<'py, ProofKey>,
     user_id: &str,
     claims: LazyArg<Claims>,
 ) -> PyResult<String> {
-    let proof_base = ProofBase::new(application, private_key_pem);
+    let proof_base = ProofBaseView::new(application, &key.get().key);
 
     Ok(tiauth_app::create_set_claims_proof(
         proof_base, user_id, claims.0,
@@ -140,6 +173,13 @@ fn create_set_claims_proof(
 fn create_reset_proof(application: &str, private_key_pem: &str, user_id: &str) -> PyResult<String> {
     let proof_base = ProofBase::new(application, private_key_pem);
 
+    Ok(tiauth_app::create_reset_proof(proof_base.view(), user_id))
+}
+
+#[pyfunction]
+fn create_reset_proof_key<'py>(application: &str, key: &Bound<'py, ProofKey>, user_id: &str) -> PyResult<String> {
+    let proof_base = ProofBaseView::new(application, &key.get().key);
+
     Ok(tiauth_app::create_reset_proof(proof_base, user_id))
 }
 
@@ -147,7 +187,7 @@ fn create_reset_proof(application: &str, private_key_pem: &str, user_id: &str) -
 fn create_read_all_proof(application: &str, private_key_pem: &str) -> PyResult<String> {
     let proof_base = ProofBase::new(application, private_key_pem);
 
-    Ok(tiauth_app::create_read_all_proof(proof_base))
+    Ok(tiauth_app::create_read_all_proof(proof_base.view()))
 }
 
 // #[pyfunction]

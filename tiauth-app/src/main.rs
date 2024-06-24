@@ -79,7 +79,7 @@ DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
     let now2 = Instant::now();
     //let cl_claims = new_claims.clone();
     let now3 = Instant::now();
-    let proof = create_set_claims_proof(proof_base, "abc7", cl_claims);
+    let proof = create_set_claims_proof(proof_base.view(), "abc7", cl_claims);
     proofs.push(proof);
     
     println!("claims {} ms.", nowm2.duration_since(nowm1).as_secs_f32()*1000f32);

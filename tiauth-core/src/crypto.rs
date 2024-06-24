@@ -5,6 +5,8 @@ use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use rand::rngs::StdRng;
 use rand::RngCore;
 
+const ALGORITHM: Id = Id::ED25519;
+
 struct CryptoError {}
 
 pub struct Key {
@@ -14,7 +16,7 @@ pub struct Key {
 impl Key {
     pub fn to_public_key(&self) -> PublicKey {
         let key = self.openssl_ed448.raw_public_key().unwrap();
-        let openssl_ed448 = PKey::public_key_from_raw_bytes(&key, Id::ED448).unwrap();
+        let openssl_ed448 = PKey::public_key_from_raw_bytes(&key, ALGORITHM).unwrap();
 
         PublicKey { openssl_ed448 }
     }
@@ -34,8 +36,8 @@ pub struct PublicKey {
 }
 
 pub fn create_key() -> Key {
-    let openssl_ed448 = PKey::generate_ed448().unwrap();
-
+    //let openssl_ed448 = PKey::generate_ed448().unwrap();
+    let openssl_ed448 = PKey::generate_ed25519().unwrap();
     Key { openssl_ed448 }
 }
 
@@ -64,7 +66,8 @@ pub fn load_public_key(public_key_pem: &str) -> PublicKey {
 
 pub fn sign_data(key: &Key, data: &[u8]) -> Vec<u8> {
     // Only accept Ed448 keys
-    assert_eq!(Id::ED448, key.openssl_ed448.id());
+    assert!(key.openssl_ed448.id() == Id::ED25519 || key.openssl_ed448.id() == Id::ED448);
+    //assert_eq!(Id::ED448, key.openssl_ed448.id());
 
     let mut signer = Signer::new_without_digest(&key.openssl_ed448).unwrap();
 

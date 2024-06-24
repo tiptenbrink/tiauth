@@ -133,17 +133,20 @@ struct ProofInner<T> {
 
 impl<T> ProofInner<T>
 where
-    T: Serialize,
+    T: Serialize + core::fmt::Debug,
 {
     fn new(proof_content: ProofContent<T>, key: &Key) -> Self {
         let mut proof_content = Lazy::from_inner(proof_content);
-
+        //println!("{:?}", proof_content);
         let now = Instant::now();
-        
-        let signature = sign_data(key, proof_content.bytes());
+        let is_ser = proof_content.is_deserialized();
+        let bytes = proof_content.bytes();
+        let nowb = Instant::now();
+        let len = bytes.len();
+        let signature = sign_data(key, bytes);
 
         let after = Instant::now();
-        println!("sign {} ms.", after.duration_since(now).as_secs_f64()*1000f64);
+        println!("convrt deser={} {} ms. sign {} ms. {} kB.", is_ser, nowb.duration_since(now).as_secs_f64()*1000f64, after.duration_since(nowb).as_secs_f64()*1000f64, (len as f64)/1000f64);
 
         Self {
             proof: proof_content,
@@ -189,7 +192,7 @@ impl From<Lazy<Vec<String>>> for TargetList {
 
 impl<T> Proof<T>
 where
-    T: Serialize,
+    T: Serialize + core::fmt::Debug,
 {
     pub fn new(
         application: &str,
@@ -263,7 +266,7 @@ pub fn verify_proof_content<T>(
     verify: AboutVerify,
 ) -> Result<ProofContent<T>, OneOf<(InvalidProof,)>>
 where
-    T: DeserializeOwned + Serialize,
+    T: DeserializeOwned + Serialize + core::fmt::Debug,
 {
     let (mut lazy_proof, signature) = proof.into_parts();
 
@@ -328,7 +331,7 @@ pub fn verify_proof<T>(
     verify: AboutVerify,
 ) -> Result<ProofContent<T>, OneOf<(DbError, InvalidProof)>>
 where
-    T: Serialize + DeserializeOwned,
+    T: Serialize + DeserializeOwned + core::fmt::Debug,
 {
     let key = state.app_key(&verify.application);
     let mut proof_content = verify_proof_content(proof, &key, verify).map_err(OneOf::broaden)?;

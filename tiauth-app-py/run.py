@@ -5,8 +5,10 @@ from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
 from tiauth_app_py.model import PakeFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
-from tiauth_app_py import create_set_claims_proof, create_read_all_proof
+from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_private_key_pem
+import tiauth_app_py
 from time import perf_counter
+import random
 
 class Login(Struct):
     user_id: str
@@ -14,13 +16,17 @@ class Login(Struct):
     claims: bytes
 
 app = "some_app"
-
 private = """
 -----BEGIN PRIVATE KEY-----
-MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
-DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
+MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 -----END PRIVATE KEY-----
 """.strip()
+# private = """
+# -----BEGIN PRIVATE KEY-----
+# MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
+# DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
+# -----END PRIVATE KEY-----
+# """.strip()
 
 json_client = Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
 APP_NAME = "some_app"
@@ -62,12 +68,25 @@ def register_flow():
         raise ValueError(r.text)
 
 def proof_time():
-    count = 1000
+    ob = {}
+    d_size = 2000
+    for i in range(int(d_size/20)):
+        val = random.random()
+        a = bytes([random.randint(0, 255) for j in range(8)])
+        k_str = f"{val}"[0:12]
+        ob[k_str] = a
+
+
+
+    proof_key = tiauth_app_py.tiauth_app_py._internal.create_key(private)
+    count = 10
     proofs = []
     total = 0
     for i in range(count):
         time_start = perf_counter()
-        proof = create_set_claims_proof(APP_NAME, private, "abc7", {"my_claim": "is_cool"})
+        # proof = tiauth_app_py.tiauth_app_py._internal.create_reset_proof_key(APP_NAME, proof_key, "user")
+        # ob = msgpack.encode(ob)
+        proof = create_set_claims_proof(APP_NAME, proof_key, "abc7", ob)
         time_end = perf_counter()
         proofs.append(proof)
         total += time_end - time_start
@@ -80,6 +99,8 @@ def proof_time():
     print(f"{proofs[:15]}...")
 
 proof_time()
+
+# print(create_private_key_pem())
 
 # register_flow()
 

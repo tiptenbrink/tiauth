@@ -16,3 +16,6 @@ Running `createSetClaimsProof()` on an i7-8750H (April 2018 laptop CPU) on Linux
 const proof = createSetClaimsProof("some_app", key, "abc7", {"my_claim": "is_cool"})
 ```
 
+For small claim objects, the difference in sign time is significant between Ed448 and Ed25519, namely 0.21 ms vs 0.038 ms. 
+
+For big claim objects (1 MB), the difference is ~5 vs ~4 ms, much smaller than the overhead of moving the bytes to Rust.

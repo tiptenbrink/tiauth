@@ -25,6 +25,12 @@ pub struct ProofBase {
     pub key: Key,
 }
 
+pub struct ProofBaseView<'a> {
+    pub application: &'a str,
+    pub expires_in: u64,
+    pub key: &'a Key,
+}
+
 impl ProofBase {
     pub fn new(application: &str, private_key_pem: &str) -> Self {
         let key = load_key(private_key_pem);
@@ -34,10 +40,24 @@ impl ProofBase {
             key,
         }
     }
+
+    pub fn view(&self) -> ProofBaseView {
+        ProofBaseView { application: &self.application, expires_in: self.expires_in, key: &self.key }
+    }
+}
+
+impl<'a> ProofBaseView<'a> {
+    pub fn new(application: &'a str, key: &'a Key) -> Self {
+        Self {
+            application: application,
+            expires_in: 1800,
+            key,
+        }
+    }
 }
 
 pub fn create_set_claims_proof(
-    proof_base: ProofBase,
+    proof_base: ProofBaseView,
     user_id: &str,
     claims: Lazy<Claims>,
 ) -> String {
@@ -54,16 +74,20 @@ pub fn create_set_claims_proof(
         target,
         target_data.into(),
         claims,
-        &proof_base.key,
+        proof_base.key,
     );
     let now3 = Instant::now();
+    
+    let enc = proof.into_encoded();
+    let now4 = Instant::now();
     println!("lazy target {} ms.", now2.duration_since(now).as_secs_f32()*1000f32);
     println!("proof new {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
+    println!("finenc {} ms.", now4.duration_since(now3).as_secs_f32()*1000f32);
+    enc
 
-    proof.into_encoded()
 }
 
-pub fn create_reset_proof(proof_base: ProofBase, user_id: &str) -> String {
+pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
     let action = ActionType::Reset;
     let target = Target::Select;
     let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
@@ -75,13 +99,13 @@ pub fn create_reset_proof(proof_base: ProofBase, user_id: &str) -> String {
         target,
         target_data.into(),
         Lazy::from_inner(()),
-        &proof_base.key,
+        proof_base.key,
     );
 
     proof.into_encoded()
 }
 
-pub fn create_read_all_proof(proof_base: ProofBase) -> String {
+pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
     let action = ActionType::Read;
     let target = Target::All;
 
@@ -92,7 +116,7 @@ pub fn create_read_all_proof(proof_base: ProofBase) -> String {
         target,
         TargetList::empty(),
         Lazy::from_inner(()),
-        &proof_base.key,
+        proof_base.key,
     );
 
     proof.into_encoded()
