@@ -9,8 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::crypto::{
-    create_key, create_session_key, load_key, load_session_key, save_key, save_session_key, Key,
-    PublicKey, SessionKey,
+    create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key, Key, PublicKey, SessionKey
 };
 use crate::data::{open_db, Application, MapTables, Tables, APPS, SERVER};
 
@@ -155,9 +154,9 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, D
             load_key(&private_key)
         } else {
             let keypair = create_key();
-            let saved_private_key = save_key(&keypair);
+            let saved_private_key = save_private_key(&keypair);
 
-            table.insert("private_key", saved_private_key.private)?;
+            table.insert("private_key", saved_private_key)?;
             keypair
         };
 
@@ -215,14 +214,12 @@ fn get_apps(db: &Database) -> Result<Vec<Application>, DbError> {
 #[cfg(test)]
 pub mod test_util {
     use super::*;
-    use crate::crypto::Key;
+    use crate::crypto::{save_public_key, Key};
 
     fn create_app(application: &str) -> (Key, Application) {
         let key = create_key();
 
-        let saved_key = save_key(&key);
-
-        let public_key = saved_key.public;
+        let public_key = save_public_key(&key.to_public_key());
 
         let app = Application::new(public_key, application);
 

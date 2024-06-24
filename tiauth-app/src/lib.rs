@@ -5,18 +5,18 @@ use std::time::Instant;
 use lazy_borink::Lazy;
 use tiauth_core::api::prove::{ActionType, Target, TargetList};
 use tiauth_core::api::{Claims, Proof};
-use tiauth_core::crypto::{create_key, load_key, save_key, Key};
+use tiauth_core::crypto::{create_key, load_key, save_private_key, save_public_key, Key};
 
 pub fn create_private_key_pem() -> String {
     let key = create_key();
 
-    save_key(&key).private
+    save_private_key(&key)
 }
 
 pub fn public_from_private_key_pem(private_key_pem: &str) -> String {
     let key = load_key(private_key_pem);
 
-    save_key(&key).public
+    save_public_key(&key.to_public_key())
 }
 
 pub struct ProofBase {

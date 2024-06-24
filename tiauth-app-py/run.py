@@ -21,12 +21,12 @@ private = """
 MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 -----END PRIVATE KEY-----
 """.strip()
-private = """
------BEGIN PRIVATE KEY-----
-MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
-DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
------END PRIVATE KEY-----
-""".strip()
+# private = """
+# -----BEGIN PRIVATE KEY-----
+# MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
+# DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
+# -----END PRIVATE KEY-----
+# """.strip()
 
 json_client = Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
 APP_NAME = "some_app"
