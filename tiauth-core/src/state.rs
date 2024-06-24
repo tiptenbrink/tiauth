@@ -9,10 +9,11 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::crypto::{
-    create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key, Key, PublicKey, SessionKey
+    create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key,
+    Key, PublicKey, SessionKey,
 };
-use crate::data::{open_db, Application, MapTables, Tables, APPS, SERVER};
-
+use crate::data::Application;
+use crate::store::{open_db, MapTables, Tables, APPS, SERVER};
 pub trait State {
     fn register_application_internal(&mut self, application: &Application);
 

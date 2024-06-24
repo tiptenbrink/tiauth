@@ -1,18 +1,16 @@
-use crate::data::{
-    set_login_field_write, LoginFieldError, SetLoginOptions, StateEntry, StateType, Tables,
-};
+use super::prove::{verify_proof_content, verify_session};
+use crate::data::{AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE, DELETE_AGE, LEEWAY};
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
+use crate::store::{
+    set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
+};
 use crate::util::nonce_384;
+use crate::Tables;
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
-
-use super::prove::{
-    verify_proof_content, verify_session, AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE,
-    DELETE_AGE, LEEWAY,
-};
 
 /// Resets the password based on application proof. This is necessary because otherwise any user could reset another's password.
 /// For example, an application could provide a proof to the client after a user presses a button in a reset password email.
@@ -40,9 +38,9 @@ fn reset_password(
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
     let entropy = nonce_384(&mut state.rng());
-    let set_entry = StateEntry::new(
+    let set_entry = EphemeralEntry::new(
         &user_id,
-        StateType::SetPassword,
+        EphemeralType::SetPassword,
         entropy,
         None,
         "".to_owned(),
@@ -70,12 +68,12 @@ fn reset_password(
         )
         .map_err(OneOf::broaden)?;
 
-        let mut state_table = write_txn
-            .open_table(tables.state())
+        let mut eph_table = write_txn
+            .open_table(tables.ephemeral())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
-        state_table
+        eph_table
             .insert(set_entry.key().as_str(), set_entry.value.unwrap().as_str())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
@@ -105,9 +103,9 @@ fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, One
     }
 
     let entropy = nonce_384(&mut state.rng());
-    let change_entry = StateEntry::new(
+    let change_entry = EphemeralEntry::new(
         &session.user_id,
-        StateType::ChangePassword,
+        EphemeralType::ChangePassword,
         entropy,
         None,
         "".to_owned(),
@@ -125,9 +123,9 @@ fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, One
             panic!("Session has been revoked!");
         }
 
-        let mut state_table = write_txn.open_table(tables.state()).into_one_of()?;
+        let mut eph_table = write_txn.open_table(tables.ephemeral()).into_one_of()?;
 
-        state_table
+        eph_table
             .insert(
                 change_entry.key().as_str(),
                 change_entry.value.unwrap().as_str(),
@@ -242,11 +240,11 @@ fn app_delete_user(
 mod tests {
 
     use super::*;
-    use crate::data::get_login;
+    use crate::data::{Target, TargetList};
     use crate::ops::login::test_util::*;
-    use crate::ops::prove::{Target, TargetList};
     use crate::ops::register::test_util::*;
     use crate::state::test_util::TestState;
+    use crate::store::get_login;
 
     #[test]
     fn test_reset_password() {

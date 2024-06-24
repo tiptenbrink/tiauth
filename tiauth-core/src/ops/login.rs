@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use crate::crypto::{self};
-use crate::data::{get_login, pop_state, write_state, Session, StateEntry, StateType};
+use crate::data::EXPIRE_TIME;
+use crate::data::{Session, LEEWAY};
 use crate::error::WrapErrorOneOf;
-use crate::ops::prove::LEEWAY;
 use crate::state::State;
+use crate::store::{get_login, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
 use crate::util::nonce_384;
-use crate::EXPIRE_TIME;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
@@ -34,10 +34,10 @@ fn login_start(
 
     let entropy = nonce_384(&mut state.rng());
 
-    let entry = StateEntry::new(user_id, StateType::Opaque, entropy, None, state_data);
+    let entry = EphemeralEntry::new(user_id, EphemeralType::Opaque, entropy, None, state_data);
     let nonce = entry.key();
 
-    write_state(state, application, entry).to_one_of_two()?;
+    write_ephemeral(state, application, entry).to_one_of_two()?;
 
     Ok((response, nonce))
 }
@@ -51,7 +51,7 @@ fn login_finish(
     request: &str,
     nonce: &str,
 ) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
-    let entry = pop_state(state, application, nonce, vec![StateType::Opaque])
+    let entry = pop_ephemeral(state, application, nonce, vec![EphemeralType::Opaque])
         .to_one_of_two()?
         .unwrap();
 
@@ -115,8 +115,8 @@ fn login_session<S: AsRef<str>>(
 #[cfg(test)]
 pub mod test_util {
     use crate::{
-        data::Claims,
-        ops::{prove::Proof, register::test_util::*},
+        data::{Claims, Proof},
+        ops::register::test_util::*,
         state::test_util::TestState,
     };
     use opaque_borink::client::{client_login, client_login_finish};

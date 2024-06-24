@@ -2,12 +2,10 @@ use redb::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tiauth_core::api::AppTable;
-use tiauth_core::api::Application;
-use tiauth_core::api::InitState;
-use tiauth_core::api::PrivateState;
-use tiauth_core::api::{State, TableStore, Tables};
 use tiauth_core::crypto::PublicKey;
+use tiauth_core::state_impl::{AppTable, InitState, PrivateState, TableStore};
+use tiauth_core::Application;
+use tiauth_core::{State, Tables};
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -36,7 +34,7 @@ impl Tables for ServerTables {
     fn register_application(&mut self, application: &str) {
         let session_name = format!("{}:sessions", application);
         let user_name = format!("{}:users", application);
-        let state_name = format!("{}:state", application);
+        let state_name = format!("{}:ephemeral", application);
 
         self.tables.lock().unwrap().insert(
             application.to_owned(),

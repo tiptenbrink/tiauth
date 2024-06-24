@@ -1,10 +1,16 @@
-use std::{collections::HashMap, time::Instant};
-use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use lazy_borink::Lazy;
-use napi::{bindgen_prelude::{Either3, FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue}, Either, Error, JsObject, JsUnknown, ValueType};
-use tiauth_app::{ProofBase, ProofBaseView};
-use tiauth_core::{api::Claims, crypto::{load_key, Key}};
+use napi::{
+    bindgen_prelude::{FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
+    Either, Error, JsObject, ValueType,
+};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, time::Instant};
+use tiauth_core::app;
+use tiauth_core::{
+    app::ProofBaseView,
+    crypto::{load_key, Key},
+    Claims,
+};
 
 #[macro_use]
 extern crate napi_derive;
@@ -13,7 +19,10 @@ extern crate napi_derive;
 pub struct ClaimsArg(Claims);
 
 impl FromNapiValue for ClaimsArg {
-    unsafe fn from_napi_value(env: napi::sys::napi_env, napi_val: napi::sys::napi_value) -> napi::Result<Self> {
+    unsafe fn from_napi_value(
+        env: napi::sys::napi_env,
+        napi_val: napi::sys::napi_value,
+    ) -> napi::Result<Self> {
         let obj = JsObject::from_napi_value(env, napi_val)?;
         let keys = Object::keys(&obj)?;
         let mut map = HashMap::with_capacity(keys.len());
@@ -23,11 +32,11 @@ impl FromNapiValue for ClaimsArg {
                     Either::A(bytes) => bytes.to_vec(),
                     Either::B(string) => string.into_bytes(),
                 };
-                
+
                 map.insert(key, bytes);
             }
         }
-    
+
         Ok(ClaimsArg(Claims(map)))
     }
 }
@@ -42,21 +51,23 @@ impl TypeName for ClaimsArg {
     }
 }
 
-impl ValidateNapiValue for ClaimsArg {
-
-}
+impl ValidateNapiValue for ClaimsArg {}
 
 #[napi]
 pub struct ProofKey {
-  key: Key,
+    key: Key,
 }
 
 pub struct LazyArg<T>(Lazy<T>);
 
-impl<T> FromNapiValue for LazyArg<T> 
-    where T: FromNapiValue + TypeName + ValidateNapiValue + core::fmt::Debug
+impl<T> FromNapiValue for LazyArg<T>
+where
+    T: FromNapiValue + TypeName + ValidateNapiValue + core::fmt::Debug,
 {
-    unsafe fn from_napi_value(env: napi::sys::napi_env, napi_val: napi::sys::napi_value) -> napi::Result<Self> {
+    unsafe fn from_napi_value(
+        env: napi::sys::napi_env,
+        napi_val: napi::sys::napi_value,
+    ) -> napi::Result<Self> {
         let now = Instant::now();
         //let b = Uint8Array::from_napi_value(env, napi_val)?;
 
@@ -95,8 +106,10 @@ pub fn create_set_claims_proof_map(
 ) -> Result<String, Error> {
     let proof_base = ProofBaseView::new(&application, &key.key);
     let b = claims.0.take();
-    Ok(tiauth_app::create_set_claims_proof(
-        proof_base, &user_id, Lazy::from_inner(b.0),
+    Ok(app::create_set_claims_proof(
+        proof_base,
+        &user_id,
+        Lazy::from_inner(b.0),
     ))
 }
 
@@ -108,28 +121,30 @@ pub fn create_set_claims_proof_bytes(
     claims: Uint8Array,
 ) -> Result<String, Error> {
     let proof_base = ProofBaseView::new(&application, &key.key);
-    Ok(tiauth_app::create_set_claims_proof(
-        proof_base, &user_id, Lazy::from_bytes(claims.to_vec()),
+    Ok(app::create_set_claims_proof(
+        proof_base,
+        &user_id,
+        Lazy::from_bytes(claims.to_vec()),
     ))
 }
 
 #[napi(js_name = createResetProof)]
-pub fn create_reset_proof(application: String, private_key_pem: String, user_id: String) -> String {
-    let proof_base = ProofBase::new(&application, &private_key_pem);
+pub fn create_reset_proof(application: String, key: &ProofKey, user_id: String) -> String {
+    let proof_base = ProofBaseView::new(&application, &key.key);
 
-    tiauth_app::create_reset_proof(proof_base.view(), &user_id)
+    app::create_reset_proof(proof_base, &user_id)
 }
 
 #[napi(js_name = createResetProofKey)]
 pub fn create_reset_proof_key(application: String, key: &ProofKey, user_id: String) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    tiauth_app::create_reset_proof(proof_base, &user_id)
+    app::create_reset_proof(proof_base, &user_id)
 }
 
 #[napi(js_name = createReadAllProof)]
-pub fn create_read_all_proof(application: String, private_key_pem: String) -> String {
-    let proof_base = ProofBase::new(&application, &private_key_pem);
+pub fn create_read_all_proof(application: String, key: &ProofKey) -> String {
+    let proof_base = ProofBaseView::new(&application, &key.key);
 
-    tiauth_app::create_read_all_proof(proof_base.view())
+    app::create_read_all_proof(proof_base)
 }

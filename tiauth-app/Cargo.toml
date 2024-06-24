@@ -5,9 +5,8 @@ edition = "2021"
 
 [dependencies]
 tiauth-core = { path = "../tiauth-core" }
-tiauth-server = { path = "../tiauth-server", features = ["functions"] }
+# tiauth-server = { path = "../tiauth-server", features = ["functions"] }
 redb = "2.1.1"
-axum = "0.7.5"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 rand = "0.8"
 terrors = "=0.3.0"
@@ -17,4 +16,3 @@ opaque-borink = "0.4.0"
 lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2" }
 rmp-serde = "1.3.0"
 base64 = "0.22"
-openssl = "0.10"

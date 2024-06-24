@@ -1,11 +1,12 @@
-use crate::data::Tables;
 use crate::error::WrapErrorOneOf;
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
+use crate::Tables;
 use redb::{Error as DbError, ReadableTable};
 use terrors::OneOf;
 
-use super::prove::{verify_proof_content, AboutVerify, ActionType, InvalidProof, Proof, Target};
+use super::prove::verify_proof_content;
+use crate::data::{AboutVerify, ActionType, InvalidProof, Proof, Target};
 
 pub fn get_users_encoded(
     state: &impl State,

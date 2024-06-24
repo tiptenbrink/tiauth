@@ -15,7 +15,7 @@ use axum::{
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
-use tiauth_core::api::{Application, State};
+use tiauth_core::{Application, State};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessagePack<T>(pub T);

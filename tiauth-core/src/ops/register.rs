@@ -1,19 +1,21 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 
-use crate::data::{
-    pop_state, set_login_field_write, write_state, Claims, LoginFieldError, SetLoginOptions,
-    StateEntry, StateType,
-};
+use crate::data::Claims;
+use crate::data::{AboutVerify, ActionType, InvalidProof, Proof};
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
+use crate::store::{
+    pop_ephemeral, set_login_field_write, write_ephemeral, EphemeralEntry, EphemeralType,
+    LoginFieldError, SetLoginOptions,
+};
 use crate::util::nonce_384;
 use opaque_borink::server::register_server_finish;
 use redb::Error as DbError;
 use std::str;
 use terrors::OneOf;
 
-use super::prove::{verify_proof_content, AboutVerify, ActionType, InvalidProof, Proof};
+use super::prove::verify_proof_content;
 
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
@@ -27,10 +29,16 @@ pub fn start_register(
     let response = register_server(&state.private().opaque, request, user_id).to_one_of_twond()?;
 
     let entropy = nonce_384(&mut state.rng());
-    let entry = StateEntry::new(user_id, StateType::NewUser, entropy, None, "".to_owned());
+    let entry = EphemeralEntry::new(
+        user_id,
+        EphemeralType::NewUser,
+        entropy,
+        None,
+        "".to_owned(),
+    );
     let nonce = entry.key();
 
-    write_state(state, application, entry).to_one_of_two()?;
+    write_ephemeral(state, application, entry).to_one_of_two()?;
 
     Ok((response, nonce))
 }
@@ -47,14 +55,14 @@ pub fn register_finish(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-    let entry = pop_state(
+    let entry = pop_ephemeral(
         state,
         application,
         register_flow_nonce,
         vec![
-            StateType::SetPassword,
-            StateType::ChangePassword,
-            StateType::NewUser,
+            EphemeralType::SetPassword,
+            EphemeralType::ChangePassword,
+            EphemeralType::NewUser,
         ],
     )
     .to_one_of()
@@ -77,13 +85,13 @@ pub fn register_finish(
             None
         };
 
-        let require_unset_password = match entry.state_type {
-            StateType::ChangePassword => false,
-            StateType::SetPassword => true,
+        let require_unset_password = match entry.eph_type {
+            EphemeralType::ChangePassword => false,
+            EphemeralType::SetPassword => true,
             _ => true,
         };
 
-        let create_user = matches!(entry.state_type, StateType::NewUser);
+        let create_user = matches!(entry.eph_type, EphemeralType::NewUser);
 
         let write_txn = state
             .db()
@@ -109,8 +117,8 @@ pub fn register_finish(
             SetLoginOptions::new(require_unset_password, create_user),
         ) {
             Ok(()) => Ok(()),
-            Err(e) => match entry.state_type {
-                StateType::NewUser => match e.to_enum() {
+            Err(e) => match entry.eph_type {
+                EphemeralType::NewUser => match e.to_enum() {
                     terrors::E2::A(e) => Err(OneOf::new(e)),
                     // If it already exists, we do not want to cause an error to alert the user exists, it is up to the application to handle the rest of the defense against client enumeration
                     terrors::E2::B(LoginFieldError::AlreadyExists(_)) => Ok(()),
@@ -163,8 +171,9 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{get_login, Claims, Login},
+        data::{Claims, Login},
         state::test_util::TestState,
+        store::get_login,
     };
 
     use super::test_util::*;

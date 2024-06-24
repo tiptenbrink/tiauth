@@ -1833,11 +1833,9 @@ dependencies = [
 name = "tiauth-app"
 version = "0.2.0"
 dependencies = [
- "axum",
  "base64",
  "lazy-borink",
  "opaque-borink",
- "openssl",
  "rand",
  "redb",
  "reqwest",
@@ -1845,7 +1843,6 @@ dependencies = [
  "serde",
  "terrors",
  "tiauth-core",
- "tiauth-server",
  "tokio",
 ]
 
@@ -1864,7 +1861,6 @@ dependencies = [
  "serde_json",
  "terrors",
  "thiserror",
- "tiauth-app",
  "tiauth-core",
  "tiauth-server",
 ]

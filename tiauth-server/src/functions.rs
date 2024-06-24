@@ -1,6 +1,6 @@
 use lazy_borink::Lazy;
 use serde::{Deserialize, Serialize};
-use tiauth_core::api::{register, Claims, Proof, State};
+use tiauth_core::{register, Claims, Proof, State};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -59,3 +59,6 @@ pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
         },
     }
 }
+
+#[cfg(feature = "app")]
+mod appfn {}

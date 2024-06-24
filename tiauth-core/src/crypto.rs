@@ -1,8 +1,8 @@
-use base64::{engine::general_purpose as b64, Engine as _};
 use aes_gcm_siv::{self as aead, aead::Aead, KeyInit};
+use base64::{engine::general_purpose as b64, Engine as _};
+use ed25519_compact::{self as ed};
 use rand::rngs::StdRng;
 use rand::RngCore;
-use ed25519_compact::{self as ed};
 
 // const ALGORITHM: Id = Id::ED25519;
 
@@ -49,7 +49,6 @@ pub fn save_public_key(key: &PublicKey) -> String {
     // let public_pem = key.openssl_ed448.public_key_to_pem().unwrap();
     // let public = String::from_utf8(public_pem).unwrap();
 
-    
     key.pk.to_pem()
 }
 
@@ -89,17 +88,17 @@ pub fn sign_data(key: &Key, data: &[u8]) -> Vec<u8> {
     // let mut signer = Signer::new_without_digest(&key.openssl_ed448).unwrap();
     // let open_ssl_key = PKey::public_key_from_pem(key.kp.pk.to_pem().as_bytes()).unwrap();
     // let mut verifier = Verifier::new_without_digest(&open_ssl_key).unwrap();
-    let signature_bytes = signature.to_vec();
+
     // assert!(verifier.verify_oneshot(&signature_bytes, data).unwrap());
 
     // signer.sign_oneshot_to_vec(data).unwrap()
-    signature_bytes
+    signature.to_vec()
 }
 
 pub fn verify_signature(data: &[u8], signature: &[u8], public_key: &PublicKey) -> bool {
     match &ed::Signature::from_slice(signature) {
-        Ok(sig) =>  public_key.pk.verify(data, sig).is_ok(),
-        Err(_) => false
+        Ok(sig) => public_key.pk.verify(data, sig).is_ok(),
+        Err(_) => false,
     }
 }
 
@@ -134,7 +133,9 @@ pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
         .decode_slice(session_key_encoded, &mut key_256_raw)
         .unwrap();
     assert_eq!(bytes_written, 32);
-    SessionKey { key_256: aead::Key::<aead::Aes256GcmSiv>::from_slice(&key_256_raw).to_owned() }
+    SessionKey {
+        key_256: aead::Key::<aead::Aes256GcmSiv>::from_slice(&key_256_raw).to_owned(),
+    }
 }
 
 pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
@@ -163,7 +164,7 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
     assert!(session_len >= 28);
 
     let iv = session.get((session_len - 12)..(session_len)).unwrap();
-    let nonce = aead::Nonce::from_slice(&iv);
+    let nonce = aead::Nonce::from_slice(iv);
     let ciphertext = session.get(0..(session_len - 12)).unwrap();
 
     let cipher = aead::Aes256GcmSiv::new(&key.key_256);
@@ -171,7 +172,7 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
     match cipher.decrypt(nonce, ciphertext) {
         Ok(decrypted) => Ok(decrypted),
         // If something with the data is wrong, no errors will be reported
-        Err(e) => Err(DecryptFailed {})
+        Err(e) => Err(DecryptFailed {}),
     }
 }
 

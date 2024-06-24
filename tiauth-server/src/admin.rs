@@ -2,7 +2,7 @@ use lazy_borink::Lazy;
 use rmp_serde::encode;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use tiauth_core::api::{admin, prove::Proof, State};
+use tiauth_core::{admin, Proof, State};
 
 #[derive(Serialize)]
 pub struct StructList {
