@@ -15,6 +15,7 @@ use axum::{
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
+use tiauth_core::crypto::SavedPublicKey;
 use tiauth_core::{Application, State};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -106,7 +107,10 @@ VfAwioXbWygeZ6l1jVRqz5l+/Q8A
 -----END PUBLIC KEY-----"
         .to_owned();
 
-    let app = Application::new(public_key_pem, "some_app");
+    let app = Application::new(
+        SavedPublicKey::validate_pem(&public_key_pem).unwrap(),
+        "some_app",
+    );
 
     state.register_application(&app, true).unwrap();
 

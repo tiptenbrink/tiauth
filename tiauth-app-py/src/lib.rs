@@ -17,7 +17,8 @@ struct ProofKey {
 
 #[pyfunction]
 fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
-    let key = load_key(private_key_pem);
+    let key = load_key(private_key_pem)
+        .map_err(|_| PyValueError::new_err("Could not parse PEM file as Ed25519 private key."))?;
 
     Ok(ProofKey { key })
 }
@@ -43,7 +44,8 @@ fn create_private_key_pem() -> PyResult<String> {
 
 #[pyfunction]
 fn public_from_private_key_pem(private_key_pem: &str) -> PyResult<String> {
-    Ok(app::public_from_private_key_pem(private_key_pem))
+    app::public_from_private_key_pem(private_key_pem)
+        .map_err(|_| PyValueError::new_err("Could not parse PEM file as Ed25519 private key."))
 }
 
 struct LazyArg<T>(Lazy<T>);

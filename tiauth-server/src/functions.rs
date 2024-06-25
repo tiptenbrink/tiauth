@@ -61,4 +61,6 @@ pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
 }
 
 #[cfg(feature = "app")]
-mod appfn {}
+mod appfn {
+    //! In the future maybe allow apps to request proofs over TLS or similar
+}

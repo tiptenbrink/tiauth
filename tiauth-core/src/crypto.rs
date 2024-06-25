@@ -3,10 +3,7 @@ use base64::{engine::general_purpose as b64, Engine as _};
 use ed25519_compact::{self as ed};
 use rand::rngs::StdRng;
 use rand::RngCore;
-
-// const ALGORITHM: Id = Id::ED25519;
-
-struct CryptoError {}
+use thiserror::Error;
 
 pub struct Key {
     kp: ed::KeyPair,
@@ -15,18 +12,9 @@ pub struct Key {
 impl Key {
     pub fn to_public_key(&self) -> PublicKey {
         let pk = self.kp.pk;
-        //let openssl_ed448 = PKey::public_key_from_raw_bytes(&key, ALGORITHM).unwrap();
 
         PublicKey { pk }
     }
-}
-
-pub struct SavedKeypair {
-    // PEM encoded SubjectPublicKeyInfo
-    pub public: String,
-
-    // PEM encoded PKCS#8
-    pub private: String,
 }
 
 #[derive(Clone)]
@@ -35,63 +23,53 @@ pub struct PublicKey {
 }
 
 pub fn create_key() -> Key {
-    //let openssl_ed448 = PKey::generate_ed448().unwrap();
     let kp = ed::KeyPair::generate();
-    // let openssl_ed448 = PKey::generate_ed25519().unwrap();
+
     Key { kp }
 }
 
-pub fn save_public_key(key: &PublicKey) -> String {
-    // // PEM encoded PKCS#8
-    // let private_pem = key.openssl_ed448.private_key_to_pem_pkcs8().unwrap();
-    // let private = String::from_utf8(private_pem).unwrap();
-    // // PEM encoded SubjectPublicKeyInfo
-    // let public_pem = key.openssl_ed448.public_key_to_pem().unwrap();
-    // let public = String::from_utf8(public_pem).unwrap();
+pub struct SavedPublicKey(String);
 
-    key.pk.to_pem()
+impl SavedPublicKey {
+    pub fn validate_pem(public_key_pem: &str) -> Result<Self, KeyError> {
+        let key = load_public_key(public_key_pem)?;
+
+        Ok(save_public_key(&key))
+    }
+
+    pub fn pem(self) -> String {
+        self.0
+    }
+}
+
+pub fn save_public_key(key: &PublicKey) -> SavedPublicKey {
+    SavedPublicKey(key.pk.to_pem())
 }
 
 pub fn save_private_key(key: &Key) -> String {
-    // // PEM encoded PKCS#8
-    // let private_pem = key.openssl_ed448.private_key_to_pem_pkcs8().unwrap();
-    // let private = String::from_utf8(private_pem).unwrap();
-    // // PEM encoded SubjectPublicKeyInfo
-    // let public_pem = key.openssl_ed448.public_key_to_pem().unwrap();
-    // let public = String::from_utf8(public_pem).unwrap();
-
     key.kp.sk.to_pem()
 }
 
-pub fn load_key(private_key_pem: &str) -> Key {
-    let sk = ed::SecretKey::from_pem(private_key_pem).unwrap();
-    //let openssl_ed448 = PKey::private_key_from_pem(private_key_pem.as_bytes()).unwrap();
+#[derive(Error, Debug)]
+#[error("Failed to parse PEM file as Ed25519 key.")]
+pub struct KeyError;
+
+pub fn load_key(private_key_pem: &str) -> Result<Key, KeyError> {
+    // The PEM file contains only the seed, so public key is recomputed and we don't have to validate it
+    let sk = ed::SecretKey::from_pem(private_key_pem).map_err(|_| KeyError)?;
     let pk = sk.public_key();
     let kp = ed::KeyPair { pk, sk };
-    Key { kp }
+    Ok(Key { kp })
 }
 
-pub fn load_public_key(public_key_pem: &str) -> PublicKey {
-    //let openssl_ed448 = PKey::public_key_from_pem(public_key_pem.as_bytes()).unwrap();
-    let pk = ed::PublicKey::from_pem(public_key_pem).unwrap();
-    PublicKey { pk }
+pub fn load_public_key(public_key_pem: &str) -> Result<PublicKey, KeyError> {
+    let pk = ed::PublicKey::from_pem(public_key_pem).map_err(|_| KeyError)?;
+    Ok(PublicKey { pk })
 }
 
 pub fn sign_data(key: &Key, data: &[u8]) -> Vec<u8> {
     let signature = key.kp.sk.sign(data, Some(ed::Noise::generate()));
-    //let s = ed::Signature::
 
-    // // Only accept Ed448 keys
-    // assert!(key.openssl_ed448.id() == Id::ED25519 || key.openssl_ed448.id() == Id::ED448);
-    // //assert_eq!(Id::ED448, key.openssl_ed448.id());
-
-    // let mut signer = Signer::new_without_digest(&key.openssl_ed448).unwrap();
-    // let open_ssl_key = PKey::public_key_from_pem(key.kp.pk.to_pem().as_bytes()).unwrap();
-    // let mut verifier = Verifier::new_without_digest(&open_ssl_key).unwrap();
-
-    // assert!(verifier.verify_oneshot(&signature_bytes, data).unwrap());
-
-    // signer.sign_oneshot_to_vec(data).unwrap()
     signature.to_vec()
 }
 
@@ -149,15 +127,16 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u
     // Tag is appended at the end
     let mut ciphertext = cipher.encrypt(nonce, session_data).unwrap();
 
-    // We at the nonce at the end
+    // We put the nonce at the end
     ciphertext.append(&mut iv_bytes);
 
     ciphertext
 }
 
 /// The decryption failed. This can be due to tampered data, an invalid key, invalid IV or incorrect tag.
-#[derive(Debug)]
-pub struct DecryptFailed {}
+#[derive(Error, Debug)]
+#[error("Decryption failed.")]
+pub struct DecryptFailed;
 
 pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, DecryptFailed> {
     let session_len = session.len();
@@ -169,11 +148,7 @@ pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, Decr
 
     let cipher = aead::Aes256GcmSiv::new(&key.key_256);
 
-    match cipher.decrypt(nonce, ciphertext) {
-        Ok(decrypted) => Ok(decrypted),
-        // If something with the data is wrong, no errors will be reported
-        Err(e) => Err(DecryptFailed {}),
-    }
+    cipher.decrypt(nonce, ciphertext).map_err(|_| DecryptFailed)
 }
 
 #[cfg(test)]
@@ -182,38 +157,31 @@ mod tests {
 
     use super::*;
 
-    // #[test]
-    // fn generate_key_length() {
-    //     let key = create_key();
+    #[test]
+    fn generate_key_length() {
+        let key = create_key();
 
-    //     let raw_private = key.openssl_ed448.raw_private_key().unwrap();
+        let raw_private = key.kp.sk.as_slice();
 
-    //     // Ed448 private should be 57 bytes
-    //     assert_eq!(raw_private.len(), 57);
+        // Ed25519 private should be 32 bytes, but it also includes public key so 64 bytes
+        assert_eq!(raw_private.len(), 64);
 
-    //     let raw_public = key.openssl_ed448.raw_public_key().unwrap();
+        let raw_public = key.kp.pk.as_slice();
 
-    //     // Ed448 public should be 57 bytes
-    //     assert_eq!(raw_public.len(), 57);
-    // }
+        // Ed25519 public should be 32 bytes
+        assert_eq!(raw_public.len(), 32);
+    }
 
-    // #[test]
-    // fn save_load_key() {
-    //     let key = create_key();
+    #[test]
+    fn save_load_key() {
+        let key = create_key();
 
-    //     let saved_key = save_key(&key);
+        let saved_key = save_private_key(&key);
 
-    //     let loaded_key = load_key(&saved_key.private);
+        let loaded_key = load_key(&saved_key).unwrap();
 
-    //     assert_eq!(
-    //         key.openssl_ed448.raw_public_key().unwrap(),
-    //         loaded_key.openssl_ed448.raw_public_key().unwrap()
-    //     );
-    //     assert_eq!(
-    //         key.openssl_ed448.raw_private_key().unwrap(),
-    //         loaded_key.openssl_ed448.raw_private_key().unwrap()
-    //     );
-    // }
+        assert_eq!(key.kp, loaded_key.kp);
+    }
 
     #[test]
     fn sign_verify_data() {

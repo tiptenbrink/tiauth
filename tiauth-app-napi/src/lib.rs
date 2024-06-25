@@ -1,10 +1,10 @@
 use lazy_borink::Lazy;
 use napi::{
-    bindgen_prelude::{FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
+    bindgen_prelude::{Either3, FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
     Either, Error, JsObject, ValueType,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 use tiauth_core::app;
 use tiauth_core::{
     app::ProofBaseView,
@@ -68,32 +68,32 @@ where
         env: napi::sys::napi_env,
         napi_val: napi::sys::napi_value,
     ) -> napi::Result<Self> {
-        let now = Instant::now();
+        //let now = Instant::now();
         //let b = Uint8Array::from_napi_value(env, napi_val)?;
 
         // let l = LazyArg(Lazy::from_bytes(b.to_vec()));
-        //let either: Either3<Uint8Array, String, T> = Either3::from_napi_value(env, napi_val)?;
-        let inm = Lazy::from_inner(T::from_napi_value(env, napi_val)?);
-        //println!("{:?}", inm);
-        let l: LazyArg<T> = LazyArg(inm);
-        let after = Instant::now();
+        let either: Either3<Uint8Array, String, T> = Either3::from_napi_value(env, napi_val)?;
+        // let inm = Lazy::from_inner(T::from_napi_value(env, napi_val)?);
+        // //println!("{:?}", inm);
+        // let l: LazyArg<T> = LazyArg(inm);
+        // let after = Instant::now();
 
         //println!("to rust: {}", after.duration_since(now).as_secs_f64()*1000f64);
 
-        // match either {
-        //     Either3::A(b) => Ok(LazyArg(Lazy::from_bytes(b.to_vec()))),
-        //     Either3::B(s) => Ok(LazyArg(Lazy::from_bytes(s.into_bytes()))),
-        //     Either3::C(map) => Ok(LazyArg(map.into())),
-        // }
-        Ok(l)
+        match either {
+            Either3::A(b) => Ok(LazyArg(Lazy::from_bytes(b.to_vec()))),
+            Either3::B(s) => Ok(LazyArg(Lazy::from_bytes(s.into_bytes()))),
+            Either3::C(map) => Ok(LazyArg(map.into())),
+        }
     }
 }
 
 #[napi(js_name = createProofKey)]
-pub fn create_proof_key(private_key_pem: String) -> ProofKey {
-    let key = load_key(&private_key_pem);
+pub fn create_proof_key(private_key_pem: String) -> Result<ProofKey, Error> {
+    let key = load_key(&private_key_pem)
+        .map_err(|_| Error::from_reason("Failed to parse PEM file as Ed25519 private key."))?;
 
-    ProofKey { key }
+    Ok(ProofKey { key })
 }
 
 #[napi(js_name = createSetClaimsProof)]
@@ -113,30 +113,8 @@ pub fn create_set_claims_proof_map(
     ))
 }
 
-#[napi(js_name = createSetClaimsProofBytes)]
-pub fn create_set_claims_proof_bytes(
-    application: String,
-    key: &ProofKey,
-    user_id: String,
-    claims: Uint8Array,
-) -> Result<String, Error> {
-    let proof_base = ProofBaseView::new(&application, &key.key);
-    Ok(app::create_set_claims_proof(
-        proof_base,
-        &user_id,
-        Lazy::from_bytes(claims.to_vec()),
-    ))
-}
-
 #[napi(js_name = createResetProof)]
 pub fn create_reset_proof(application: String, key: &ProofKey, user_id: String) -> String {
-    let proof_base = ProofBaseView::new(&application, &key.key);
-
-    app::create_reset_proof(proof_base, &user_id)
-}
-
-#[napi(js_name = createResetProofKey)]
-pub fn create_reset_proof_key(application: String, key: &ProofKey, user_id: String) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
     app::create_reset_proof(proof_base, &user_id)

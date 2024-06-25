@@ -67,7 +67,7 @@ pub struct PrivateState {
     pub private: Key,
 }
 
-/// It seems like giving them the same lifetime doesn't cause any issues
+/// CoreState is a single-threaded implementation of State. See `tiauth-server`'s ServerState for a multi-threaded impelementation.
 pub struct CoreState {
     table_map: MapTables,
     app_keys: HashMap<String, PublicKey>,
@@ -152,7 +152,7 @@ fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, D
         let private_key = table.get("private_key")?.map(|a| a.value());
 
         let keypair = if let Some(private_key) = private_key {
-            load_key(&private_key)
+            load_key(&private_key).unwrap()
         } else {
             let keypair = create_key();
             let saved_private_key = save_private_key(&keypair);
@@ -227,6 +227,7 @@ pub mod test_util {
         (key, app)
     }
 
+    /// TestState also contains application private keys for easier testing.
     pub struct TestState {
         table_map: MapTables,
         app_keys: HashMap<String, Key>,

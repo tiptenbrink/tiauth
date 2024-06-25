@@ -10,7 +10,6 @@ use tiauth_core::{State, Tables};
 #[derive(Clone)]
 pub struct ServerState {
     table_map: ServerTables,
-    // pub app_keys: &'a mut HashMap<String, PublicKey>,
     db: Arc<Database>,
     private: Arc<PrivateState>,
     // TODO change to just arc and do writing only before app starts?

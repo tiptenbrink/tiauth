@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key};
+use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::{ActionType, Target, TargetList};
 use crate::{Claims, Proof};
 use lazy_borink::Lazy;
@@ -11,10 +11,10 @@ pub fn create_private_key_pem() -> String {
     save_private_key(&key)
 }
 
-pub fn public_from_private_key_pem(private_key_pem: &str) -> String {
-    let key = load_key(private_key_pem);
+pub fn public_from_private_key_pem(private_key_pem: &str) -> Result<String, KeyError> {
+    let key = load_key(private_key_pem)?;
 
-    save_public_key(&key.to_public_key())
+    Ok(save_public_key(&key.to_public_key()).pem())
 }
 
 pub struct ProofBaseView<'a> {

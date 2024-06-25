@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::crypto::{self, load_public_key, sign_data, Key, PublicKey, SessionKey};
+use crate::crypto::{self, load_public_key, sign_data, Key, PublicKey, SavedPublicKey, SessionKey};
 use crate::util::nonce_384_bytes;
 use base64::{engine::general_purpose as b64, Engine as _};
 use lazy_borink::Lazy;
@@ -84,15 +84,16 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn new(public_key_pem: String, name: &str) -> Self {
+    pub fn new(saved_public_key: SavedPublicKey, name: &str) -> Self {
         Self {
-            public_key: public_key_pem,
+            public_key: saved_public_key.pem(),
             name: name.to_owned(),
         }
     }
 
     pub fn public_key(&self) -> PublicKey {
-        load_public_key(&self.public_key)
+        // We safely unwrap because it can only have been constructed with SavedPublicKey
+        load_public_key(&self.public_key).unwrap()
     }
 }
 
