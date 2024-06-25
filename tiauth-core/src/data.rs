@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str;
+/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::SystemTime;
+#[cfg(any(not(target_family="wasm"), not(target_os="unknown")))]
 use std::time::SystemTime;
 use terrors::OneOf;
 use thiserror::Error;

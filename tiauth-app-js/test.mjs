@@ -1,5 +1,10 @@
-import { createResetProof, createSetClaimsProof, createProofKey } from './index.js'
- 
+import fs from 'node:fs'
+
+import { initSync, createResetProof, createProofKey } from './out/tiauth_app_js.js'
+const data = fs.readFileSync('./out/tiauth_app_js_bg.wasm');
+initSync(data)
+
+
 // const private_pem = `
 // -----BEGIN PRIVATE KEY-----
 // MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
@@ -13,11 +18,11 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 `.trim()
 
 
-const count = 5
+const count = 1000
 let total = 0
 let proofs = []
 
-let size = 1000;
+let size = 100;
 let ob_len = size/18;
 
 let ob = {}
@@ -57,7 +62,6 @@ for (let j = 0; j < ob_len; j++) {
 // }
 
 const key = createProofKey(private_pem)
-
 // console.log(ob)
 
 for (let i = 0; i < count; i++) {

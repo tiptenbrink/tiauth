@@ -10,9 +10,6 @@ def public_from_private_key_pem(private_key_pem: str) -> str:
 def create_set_claims_proof(application: str, private_key_pem: str, user_id: str, claims: Lazy[Claims]) -> str:
    return  _internal.create_set_claims_proof(application, private_key_pem, user_id, claims)
 
-def create_claims(claims: Lazy[Claims]) -> bytes:
-   return  _internal.create_claims(claims)
-
 def create_reset_proof(application: str, private_key_pem: str, user_id: str) -> ClaimsProof:
    return  _internal.create_reset_proof(application, private_key_pem, user_id)
 

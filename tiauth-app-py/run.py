@@ -5,7 +5,7 @@ from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
 from tiauth_app_py.model import PakeFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
-from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_private_key_pem
+from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof
 import tiauth_app_py
 from time import perf_counter
 import random
@@ -58,7 +58,7 @@ def register_flow():
 
     res = json.decode(r.content, type=PakeResponse)
     request = register_client_finish(state, password, res.opaque_response)
-
+    
     proof = create_set_claims_proof(APP_NAME, private, user_id, {"my_claim": "is_cool"})
 
     req = PakeFinishRequest(APP_NAME, request, res.register_start_nonce, claims_proof=proof)
@@ -69,7 +69,7 @@ def register_flow():
 
 def proof_time():
     ob = {}
-    d_size = 1000000
+    d_size = 1000
     for i in range(int(d_size/20)):
         val = random.random()
         a = bytes([random.randint(0, 255) for j in range(8)])
@@ -88,8 +88,8 @@ def proof_time():
         # obb = msgpack.encode(ob)
         time_start = perf_counter()
         # proof = tiauth_app_py.tiauth_app_py._internal.create_reset_proof_key(APP_NAME, proof_key, "user")
-        
-        proof = create_set_claims_proof(APP_NAME, proof_key, "abc7", ob)
+        proof = create_reset_proof(APP_NAME, proof_key, "abc8")
+        # proof = create_set_claims_proof(APP_NAME, proof_key, "abc7", ob)
         time_end = perf_counter()
         proofs.append(proof)
         total += time_end - time_start
