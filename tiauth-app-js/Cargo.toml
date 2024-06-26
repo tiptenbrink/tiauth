@@ -9,7 +9,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-tiauth-core = { path = "../tiauth-core", features = ["app"] }
+tiauth-core = { path = "../tiauth-core", default-features = false, features = ["app"] }
 
 lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2"}
 
@@ -25,7 +25,6 @@ thiserror = "1"
 wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
 serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
-tsify = { version = "0.4.5", features = ["js"] }
 
 
 [build-dependencies]

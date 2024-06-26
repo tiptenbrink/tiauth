@@ -6,10 +6,24 @@ Setup `wasm32-unknown-unknown` target if you did not do so already:
 rustup target add wasm32-unknown-unknown
 ```
 
+Install `wasm-bindgen` CLI:
+
+```
+cargo binstall wasm-bindgen-cli
+```
+
+Build:
 ```
 cargo build --target=wasm32-unknown-unknown --release
 wasm-bindgen --out-dir out --target web ../target/wasm32-unknown-unknown/release/tiauth_app_js.wasm
 ```
+
+Optimization/minification (inside `out` dir):
+```
+./wasm-opt tiauth_app_js_bg.wasm -o tiauth_app_js_bg.wasm -O3
+```
+
+This last step (using Binaryen wasm-opt) compresses the output by up to 30%.
 
 ## Performance
 

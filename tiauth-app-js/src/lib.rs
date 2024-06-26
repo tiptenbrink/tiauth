@@ -5,7 +5,6 @@ use lazy_borink::Lazy;
 //     Either, Error, JsObject, ValueType,
 // };
 use serde::{Deserialize, Serialize};
-use tiauth_core::crypto::save_private_key;
 use std::collections::HashMap;
 use tiauth_core::app;
 use tiauth_core::{
@@ -14,7 +13,6 @@ use tiauth_core::{
     Claims,
 };
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::convert::{FromWasmAbi, TryFromJsValue};
 use base64::{engine::general_purpose as b64, Engine as _};
 // #[macro_use]
 // extern crate napi_derive;
