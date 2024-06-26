@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 
-import { initSync, createResetProof, createProofKey } from './out/tiauth_app_js.js'
+import { initSync, createSetClaimsProof, createProofKey } from './out/tiauth_app_js.js'
 const data = fs.readFileSync('./out/tiauth_app_js_bg.wasm');
 initSync(data)
 
@@ -18,11 +18,11 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 `.trim()
 
 
-const count = 1000
+const count = 10
 let total = 0
 let proofs = []
 
-let size = 100;
+let size = 800000;
 let ob_len = size/18;
 
 let ob = {}
@@ -62,12 +62,13 @@ for (let j = 0; j < ob_len; j++) {
 // }
 
 const key = createProofKey(private_pem)
+
 // console.log(ob)
 
 for (let i = 0; i < count; i++) {
     const msStart =  performance.now()
-    const proof = createResetProof("some_app", key, "abc7")
-    //const proof = createSetClaimsProof("some_app", key, "abc7", ob)
+    //const proof = createResetProof("some_app", key, "abc7")
+    const proof = createSetClaimsProof("some_app", key, "abc7", ob)
     //const proof = createSetClaimsProofBytes("some_app", key, "abc7", uarr)
     // const proof = createSetClaimsProof("some_app", key, "abc7", { "some_key": "my_claim" })
     const msEnd =  performance.now()

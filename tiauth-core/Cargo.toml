@@ -26,7 +26,7 @@ aes-gcm-siv = "=0.11.1"
 web-time = "1.1"
 
 [features]
-default = []
+default = ["action"]
 action = ["dep:redb"]
 app = []
 

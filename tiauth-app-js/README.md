@@ -8,9 +8,16 @@ rustup target add wasm32-unknown-unknown
 
 ```
 cargo build --target=wasm32-unknown-unknown --release
-wasm-bindgen ../target/wasm32-unknown-unknown/release/tiauth_app_js.wasm
+wasm-bindgen --out-dir out --target web ../target/wasm32-unknown-unknown/release/tiauth_app_js.wasm
 ```
 
+## Performance
+
+On small claims (< 1 kB), NAPI does around 92 us for a set_claims proof, while WASM does around ~500 us.
+
+On very big claims (~ 1.1 MB), NAPI and WASM perform around the same, both around ~52-54 ms. 
+
+Note: this was tested on objects with large amounts of keys and binary values, on a Ryzen 7 5800X.
 
 <!-- ## Performance
 

@@ -69,7 +69,7 @@ def register_flow():
 
 def proof_time():
     ob = {}
-    d_size = 1000
+    d_size = 1000000
     for i in range(int(d_size/20)):
         val = random.random()
         a = bytes([random.randint(0, 255) for j in range(8)])
@@ -88,8 +88,8 @@ def proof_time():
         # obb = msgpack.encode(ob)
         time_start = perf_counter()
         # proof = tiauth_app_py.tiauth_app_py._internal.create_reset_proof_key(APP_NAME, proof_key, "user")
-        proof = create_reset_proof(APP_NAME, proof_key, "abc8")
-        # proof = create_set_claims_proof(APP_NAME, proof_key, "abc7", ob)
+        # proof = create_reset_proof(APP_NAME, proof_key, "abc8")
+        proof = create_set_claims_proof(APP_NAME, proof_key, "abc7", ob)
         time_end = perf_counter()
         proofs.append(proof)
         total += time_end - time_start

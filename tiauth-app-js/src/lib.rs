@@ -1,4 +1,4 @@
-use js_sys::Error;
+use js_sys::{Array, Error, JsString, Object, Uint8Array};
 use lazy_borink::Lazy;
 // use napi::{
 //     bindgen_prelude::{Either3, FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
@@ -14,7 +14,8 @@ use tiauth_core::{
     Claims,
 };
 use wasm_bindgen::prelude::*;
-
+use wasm_bindgen::convert::{FromWasmAbi, TryFromJsValue};
+use base64::{engine::general_purpose as b64, Engine as _};
 // #[macro_use]
 // extern crate napi_derive;
 
@@ -61,7 +62,7 @@ pub struct ProofKey {
     key: Key,
 }
 
-// pub struct LazyArg<T>(Lazy<T>);
+pub struct LazyArg<T>(Lazy<T>);
 
 // impl<T> FromNapiValue for LazyArg<T>
 // where
@@ -99,22 +100,69 @@ pub fn create_proof_key(private_key_pem: String) -> Result<ProofKey, Error> {
     Ok(ProofKey { key })
 }
 
+// impl<T> TryFromJsValue for LazyArg<T> 
+//     where T: TryFromJsValue
+// {
+//     type Error = JsError;
 
-// #[wasm_bindgen(js_name = createSetClaimsProof)]
-// pub fn create_set_claims_proof_map(
-//     application: String,
-//     key: &ProofKey,
-//     user_id: String,
-//     claims: LazyArg<ClaimsArg>,
-// ) -> Result<String, Error> {
-//     let proof_base = ProofBaseView::new(&application, &key.key);
-//     let b = claims.0.take();
-//     Ok(app::create_set_claims_proof(
-//         proof_base,
-//         &user_id,
-//         Lazy::from_inner(b.0),
-//     ))
+//     fn try_from_js_value(value: JsValue) -> Result<Self, Self::Error> {
+//         LazyArg(Lazy::fr)
+//     }
 // }
+
+
+#[wasm_bindgen(js_name = createSetClaimsProof)]
+pub fn create_set_claims_proof_map(
+    application: String,
+    key: &ProofKey,
+    user_id: String,
+    claims: JsValue,
+) -> Result<String, JsValue> {
+    let proof_base = ProofBaseView::new(&application, &key.key);
+
+    let claims = if claims.is_instance_of::<Uint8Array>() {
+        let bytes: Uint8Array = claims.unchecked_into();
+        Lazy::from_bytes(bytes.to_vec())
+    } else if claims.is_string() {
+        let encoded: JsString = claims.unchecked_into();
+        let bytes = b64::URL_SAFE_NO_PAD.decode(encoded.as_string().unwrap()).unwrap();
+        Lazy::from_bytes(bytes)
+    } else if claims.is_object() {
+        let entries = Object::entries(claims.unchecked_ref());
+        let mut map = HashMap::with_capacity(entries.length() as usize);
+        for e in entries {
+            let e: &Array = e.unchecked_ref();
+            let key = e.get(0);
+            let value = e.get(1);
+            let k = if key.is_string() {
+                key.as_string().unwrap()
+            } else {
+                return Err(Error::new("Key is not string!").into())
+            };
+
+            let v = if value.is_instance_of::<Uint8Array>() {
+                let bytes: Uint8Array = value.unchecked_into();
+                bytes.to_vec()
+            } else if value.is_string() {
+                key.as_string().unwrap().into_bytes()
+            } else {
+                return Err(Error::new("Value is not string or bytes!").into())
+            };
+
+            map.insert(k, v);
+        }
+
+        Lazy::from_inner(Claims(map))
+    } else {
+        return Err(Error::new("Cannot interpret claims argument as Claims type!").into())
+    };
+
+    Ok(app::create_set_claims_proof(
+        proof_base,
+        &user_id,
+        claims,
+    ))
+}
 
 #[wasm_bindgen(js_name = createResetProof)]
 pub fn create_reset_proof(application: String, key: &ProofKey, user_id: String) -> String {

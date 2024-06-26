@@ -13,11 +13,11 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 `.trim()
 
 
-const count = 5
+const count = 10000
 let total = 0
 let proofs = []
 
-let size = 1000;
+let size = 18;
 let ob_len = size/18;
 
 let ob = {}
@@ -62,8 +62,8 @@ const key = createProofKey(private_pem)
 
 for (let i = 0; i < count; i++) {
     const msStart =  performance.now()
-    const proof = createResetProof("some_app", key, "abc7")
-    //const proof = createSetClaimsProof("some_app", key, "abc7", ob)
+    //const proof = createResetProof("some_app", key, "abc7")
+    const proof = createSetClaimsProof("some_app", key, "abc7", ob)
     //const proof = createSetClaimsProofBytes("some_app", key, "abc7", uarr)
     // const proof = createSetClaimsProof("some_app", key, "abc7", { "some_key": "my_claim" })
     const msEnd =  performance.now()
