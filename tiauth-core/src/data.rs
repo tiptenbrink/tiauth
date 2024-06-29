@@ -3,6 +3,7 @@
 use crate::crypto::{self, load_public_key, sign_data, Key, PublicKey, SavedPublicKey, SessionKey};
 use crate::util::nonce_384_bytes;
 use base64::{engine::general_purpose as b64, Engine as _};
+use serde_bytes::ByteBuf;
 use lazy_borink::Lazy;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -19,6 +20,9 @@ use web_time::SystemTime;
 use std::time::SystemTime;
 use terrors::OneOf;
 use thiserror::Error;
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct ClaimsBytes(ByteBuf);
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct Login {

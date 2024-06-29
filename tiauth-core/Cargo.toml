@@ -21,6 +21,7 @@ base64 = "0.22.1"
 thiserror = "1.0"
 ed25519-compact = "=2.1.1"
 aes-gcm-siv = "=0.11.1"
+zerovec = "0.10.4"
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 web-time = "1.1"

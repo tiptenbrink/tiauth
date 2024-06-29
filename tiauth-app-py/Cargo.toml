@@ -12,7 +12,7 @@ tiauth-core = { path = "../tiauth-core" }
 tiauth-app = { path = "../tiauth-app" }
 tiauth-server = { path = "../tiauth-server", features = ["functions"] }
 
-lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2" }
+lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2", features = ["python"] }
 
 base64 = "0.22"
 
@@ -23,5 +23,5 @@ terrors = "=0.3.0"
 
 
 [dependencies.pyo3]
-version = "0.21"
+version = "0.22"
 features = ["extension-module"]

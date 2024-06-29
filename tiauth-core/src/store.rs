@@ -387,4 +387,60 @@ mod tests {
         assert_eq!(value.password_file, read_login.password_file);
         assert_eq!(value.claims.take(), read_login.claims.take());
     }
+    use rkyv::{Archive, Deserialize, Serialize};
+
+    #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
+    // We can pass attributes through to generated types with archive_attr
+    #[archive_attr(derive(Debug))]
+    struct TestLogin {
+        int: u8,
+        claims: HashMap<String, Vec<u8>>,
+    }
+
+    #[test]
+    fn test_rkyv() {
+        let claims = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]);
+
+        let pre_login = Login {
+            user_id: "hi".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: Claims::none().into(),
+        };
+
+        let value = TestLogin {
+            int: 3,
+            claims: claims.0,
+        };
+        let user_id = "3";
+
+        let app = "abc";
+
+        let state = TestState::setup_test(vec![app]);
+    
+        let bytes = rkyv::to_bytes::<_, 256>(&value).unwrap();
+        bytes
+    
+        let tables = state.tables().app(app);
+        let write_txn = state.db().begin_write().unwrap();
+        {
+            let mut table = write_txn.open_table(tables.users()).unwrap();
+            table.insert(user_id, bytes.as_slice()).unwrap();
+        }
+        write_txn.commit().unwrap();
+
+        set_login(&state, &pre_login, app).unwrap();
+
+        let read_txn = state.db().begin_read().unwrap();
+
+        let table = read_txn.open_table(tables.users()).unwrap();
+
+        let access = table.get(user_id).unwrap();
+
+        let access = access.unwrap();
+        let access_bytes = access.value();
+    
+        let archived = unsafe { rkyv::archived_root::<TestLogin>(access_bytes) };
+
+        println!("{:?}", archived);
+    }
 }

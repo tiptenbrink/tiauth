@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use base64::{engine::general_purpose as b64, Engine as _};
 use lazy_borink::Lazy;
+use lazy_borink::lib2::LazyPack;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::{prelude::*, PyTypeInfo};
@@ -130,6 +131,18 @@ impl FromPython for Claims {
         Ok(Claims(map))
     }
 }
+
+// #[pyfunction]
+// fn create_set_claims_proof_lazy(
+//     application: &str,
+//     key: &Bound<'_, ProofKey>,
+//     user_id: &str,
+//     claims: LazyPack<Claims>,
+// ) -> PyResult<String> {
+//     let proof_base = ProofBaseView::new(application, &key.get().key);
+
+//     Ok(app::create_set_claims_proof(proof_base, user_id, claims.0))
+// }
 
 #[pyfunction]
 fn create_set_claims_proof(

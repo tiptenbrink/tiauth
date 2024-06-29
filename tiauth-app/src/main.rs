@@ -36,42 +36,43 @@
 //     // println!("{:?}", res);
 // }
 
-fn main() {
-    let key = "-----BEGIN PRIVATE KEY-----
+
+const key_pem: &'static str = "-----BEGIN PRIVATE KEY-----
 MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
 DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
 -----END PRIVATE KEY-----";
 
-    // let mut proofs = Vec::with_capacity(1000);
-    // let mut rng = StdRng::from_entropy();
-    // let mut cl_claims: Vec<u8> = Vec::with_capacity(100000);
-    // for i in 0..10 {
-    //     let v = rng.next_u32();
-    //     let vu = (v % 8) as u8;
-    //     cl_claims.push(vu);
-    // }
+use std::collections::HashMap;
 
-    // let know2 = Instant::now();
-    // println!("load_key {} ms.", know2.duration_since(know).as_secs_f32()*1000f32);
-    // println!("{:?}", pkey2.private_key_to_pem_pkcs8().unwrap());
-    // let cl_claims: Lazy<Claims> = Lazy::from_bytes(cl_claims);
-    // let nowm1 = Instant::now();
-    // let mut claims: Lazy<Claims> = Claims::new(vec![("my_claim", "is_cool")]).into();
-    // let claim_bytes = claims.bytes().to_vec();
-    // let nowm2 = Instant::now();
-    // let new_claims = claims.clone();
-    // let now = Instant::now();
-    // let proof_base = ProofBaseView::new("some_app", key);
-    // let now2 = Instant::now();
-    // //let cl_claims = new_claims.clone();
-    // let now3 = Instant::now();
-    // let proof = create_set_claims_proof(proof_base.view(), "abc7", cl_claims);
-    // proofs.push(proof);
+use rkyv::{Archive, Deserialize, Serialize};
+use tiauth_core::crypto::{load_key, sign_data};
 
-    // println!("claims {} ms.", nowm2.duration_since(nowm1).as_secs_f32()*1000f32);
-    // println!("base {} ms.", now2.duration_since(now).as_secs_f32()*1000f32);
-    // println!("claims {} ms.", now3.duration_since(now2).as_secs_f32()*1000f32);
-    // let proofs = format!("{:?}", proofs);
-    // println!("{}...", &proofs[0..15]);
-    // println!("{:?}", claim_bytes);
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
+// We can pass attributes through to generated types with archive_attr
+#[archive_attr(derive(Debug))]
+struct Test {
+    int: u8,
+    string: String,
+    claims: HashMap<String, Vec<u8>>,
+}
+
+fn main() {
+    let key = load_key(key_pem).unwrap();
+
+    let value = Test {
+        int: 42,
+        string: "hello world".to_string(),
+        claims: HashMap::from_iter(vec![("some".to_owned(), "other".as_bytes().to_vec())]),
+    };
+
+    let bytes = rkyv::to_bytes::<_, 256>(&value).unwrap();
+
+    sign_data(&key, &bytes);
+
+    let archived = unsafe { rkyv::archived_root::<Test>(&bytes[..]) };
+
+    archived.claims.
+
+    let deserialized: Test = archived.deserialize(&mut rkyv::Infallible).unwrap();
 }
