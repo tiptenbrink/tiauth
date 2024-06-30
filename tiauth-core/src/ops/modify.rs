@@ -1,7 +1,8 @@
 use super::prove::{verify_proof_content, verify_session};
-use crate::data::{AboutVerify, ActionType, InvalidProof, Proof, CHANGE_AGE, DELETE_AGE, LEEWAY};
+use crate::data::{AboutVerify, ActionType, InvalidProof, ProofContent, SessionContent, CHANGE_AGE, DELETE_AGE, LEEWAY};
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
+use crate::prove::Proof;
 use crate::state::State;
 use crate::store::{
     set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
@@ -25,7 +26,7 @@ use terrors::OneOf;
 fn reset_password(
     state: &impl State,
     application: &str,
-    proof: Proof<()>,
+    proof: &Proof<()>,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let key = state.app_key(application);
     let mut proof_content = verify_proof_content(
@@ -87,7 +88,8 @@ fn reset_password(
 }
 
 fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, OneOf<(DbError,)>> {
-    let session = verify_session(state, raw_session).unwrap();
+    let session_bytes = verify_session(state, raw_session).unwrap();
+    let session = SessionContent::from_bytes(&session_bytes);
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -138,7 +140,8 @@ fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, One
 }
 
 fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), OneOf<(DbError,)>> {
-    let session = verify_session(state, raw_session).unwrap();
+    let session_bytes = verify_session(state, raw_session).unwrap();
+    let session = SessionContent::from_bytes(&session_bytes);
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -196,10 +199,10 @@ fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), One
 fn app_delete_user(
     state: &impl State,
     application: &str,
-    proof: Proof<()>,
+    proof: &Proof<()>,
 ) -> Result<(), OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
-    let mut proof_content = verify_proof_content(
+    let mut proof_content: ProofContent<()> = verify_proof_content(
         proof,
         &key,
         AboutVerify::new(application, ActionType::Delete),
@@ -240,9 +243,10 @@ fn app_delete_user(
 mod tests {
 
     use super::*;
-    use crate::data::{Target, TargetList};
+    use crate::data::{BytePacked, Target, TargetList};
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
+    use crate::prove::create_proof;
     use crate::state::test_util::TestState;
     use crate::store::get_login;
 
@@ -255,18 +259,10 @@ mod tests {
         let state = TestState::setup_test(vec![app]);
 
         register_flow(&state, user_id, app, password, None, None);
+        let key = state.proof_key(app);
+        let proof = create_proof(app, 1800, ActionType::Reset, Target::Select, TargetList::user(user_id), BytePacked::empty(), key);
 
-        let proof = Proof::new(
-            app,
-            1800,
-            ActionType::Reset,
-            Target::Select,
-            TargetList::user(user_id),
-            ().into(),
-            state.proof_key(app),
-        );
-
-        let nonce = reset_password(&state, app, proof).unwrap();
+        let nonce = reset_password(&state, app, &proof).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 
@@ -289,7 +285,7 @@ mod tests {
 
         let session = login_create_session(&state, user_id, app, password, None, None);
 
-        let nonce = change_password(&state, &session).unwrap();
+        let nonce = change_password(&state, &session.raw_bytes()).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
         let initial_pw_file = login.password_file;
@@ -313,7 +309,7 @@ mod tests {
 
         let session = login_create_session(&state, user_id, app, password, None, None);
 
-        session_delete_user(&state, &session).unwrap();
+        session_delete_user(&state, &session.raw_bytes()).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap();
 
@@ -330,17 +326,10 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let proof = Proof::new(
-            app,
-            1800,
-            ActionType::Delete,
-            Target::Select,
-            TargetList::user(user_id),
-            ().into(),
-            state.proof_key(app),
-        );
+        let key = state.proof_key(app);
+        let proof = create_proof(app, 1800, ActionType::Delete, Target::Select, TargetList::user(user_id), BytePacked::empty(), key);
 
-        app_delete_user(&state, app, proof).unwrap();
+        app_delete_user(&state, app, &proof).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap();
 

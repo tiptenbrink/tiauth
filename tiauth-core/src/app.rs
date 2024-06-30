@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
+use crate::data::BytePacked;
+use crate::prove::{create_proof, Proof};
 use crate::{ActionType, Target, TargetList};
-use crate::{Claims, Proof};
+use crate::{Claims};
 use lazy_borink::Lazy;
 
 pub fn create_private_key_pem() -> String {
@@ -36,20 +38,20 @@ impl<'a> ProofBaseView<'a> {
 pub fn create_set_claims_proof(
     proof_base: ProofBaseView,
     user_id: &str,
-    claims: Lazy<Claims>,
+    claims: BytePacked<Claims>,
 ) -> String {
     let action = ActionType::Set;
     let target = Target::Select;
-    let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
+    let target_data = vec![user_id.to_owned()];
 
-    let proof = Proof::new(
+    let proof = create_proof(
         proof_base.application,
         proof_base.expires_in,
         action,
         target,
-        target_data.into(),
+        TargetList::from_vec(target_data),
         claims,
-        proof_base.key,
+        proof_base.key
     );
 
     proof.into_encoded()
@@ -80,16 +82,16 @@ pub fn create_set_claims_proof(
 pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
     let action = ActionType::Reset;
     let target = Target::Select;
-    let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
+    let target_data = TargetList::from_vec(vec![user_id.to_owned()]);
 
-    let proof = Proof::new(
+    let proof: Proof<()> = create_proof(
         proof_base.application,
         proof_base.expires_in,
         action,
         target,
-        target_data.into(),
-        Lazy::from_inner(()),
-        proof_base.key,
+        target_data,
+        BytePacked::new(&[]),
+        proof_base.key
     );
 
     proof.into_encoded()
@@ -99,14 +101,14 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
     let action = ActionType::Read;
     let target = Target::All;
 
-    let proof = Proof::new(
+    let proof: Proof<()> = create_proof(
         proof_base.application,
         proof_base.expires_in,
         action,
         target,
         TargetList::empty(),
-        Lazy::from_inner(()),
-        proof_base.key,
+        BytePacked::new(&[]),
+        proof_base.key
     );
 
     proof.into_encoded()

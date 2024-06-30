@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
 use crate::crypto::{self};
-use crate::data::EXPIRE_TIME;
-use crate::data::{Session, LEEWAY};
+use crate::data::{BytePacked, EXPIRE_TIME};
+use crate::data::{LEEWAY};
 use crate::error::WrapErrorOneOf;
+use crate::prove::{create_session, Session};
 use crate::state::State;
-use crate::store::{get_login, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
+use crate::store::{get_login, get_login_claims_subset_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
 use crate::util::nonce_384;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
@@ -76,48 +77,27 @@ fn login_session<S: AsRef<str>>(
     nonce: &str,
     secret: &str,
     requested_claims: Vec<S>,
-) -> Result<Vec<u8>, OneOf<(Error, OpaqueError)>> {
+) -> Result<Session, OneOf<(Error, OpaqueError)>> {
     let (server_secret, user_id) = login_finish(state, application, request, nonce)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
     }
 
-    let claims = get_login(state, application, &user_id)
-        .to_one_of_two()?
-        .unwrap()
-        .claims;
+    let claims = get_login_claims_subset_bytes(state, application, &user_id, requested_claims)
+        .to_one_of_two()?.unwrap();
 
-    let session_claims = claims.take().into_subset(requested_claims);
+    let key = &state.private().session;
 
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let session = create_session(application, &user_id, EXPIRE_TIME, BytePacked::new(&claims), key);
 
-    let session = Session {
-        user_id: user_id.to_owned(),
-        application: application.to_owned(),
-        issued: time,
-        expires: time + EXPIRE_TIME,
-        session_claims,
-    };
-
-    let session_encoded = encode::to_vec_named(&session).unwrap();
-
-    Ok(crypto::session(
-        &session_encoded,
-        &state.private().session,
-        &mut state.rng(),
-    ))
+    Ok(session)
 }
 
-#[cfg(test)]
+#[cfg(feature = "test")]
 pub mod test_util {
     use crate::{
-        data::{Claims, Proof},
-        ops::register::test_util::*,
-        state::test_util::TestState,
+        data::Claims, ops::register::test_util::*, prove::Proof, state::test_util::TestState
     };
     use opaque_borink::client::{client_login, client_login_finish};
 
@@ -128,9 +108,9 @@ pub mod test_util {
         user_id: &str,
         application: &str,
         password: &str,
-        claims: Option<Proof<Claims>>,
+        claims: Option<&Proof<Claims>>,
         session_claims: Option<Vec<&str>>,
-    ) -> Vec<u8> {
+    ) -> Session {
         register_flow(state, user_id, application, password, None, claims);
 
         let (request, client_state) = client_login(password).unwrap();
@@ -185,7 +165,8 @@ mod tests {
 
     #[test]
     fn test_login_session() {
-        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let claims = todo!();
+        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
         let user_id = "hi";
         let app = "abc";
@@ -195,7 +176,7 @@ mod tests {
 
         let claims_proof = create_proof_claims(&state, app, user_id, None, claims);
 
-        register_flow(&state, user_id, app, password, None, Some(claims_proof));
+        register_flow(&state, user_id, app, password, None, Some(&claims_proof));
 
         let (request, client_state) = client_login(password).unwrap();
 
@@ -205,6 +186,7 @@ mod tests {
 
         let session = login_session(&state, app, &request, &nonce, &secret, vec!["email"]).unwrap();
 
-        assert!(!session.is_empty());
+        todo!();
+        //assert!(!session.);
     }
 }

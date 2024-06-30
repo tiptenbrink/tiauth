@@ -44,17 +44,17 @@ DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
 
 use std::collections::HashMap;
 
-use rkyv::{Archive, Deserialize, Serialize};
-use tiauth_core::crypto::{load_key, sign_data};
+use zerovec::{VarZeroVec, ZeroVec};
 
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-// We can pass attributes through to generated types with archive_attr
-#[archive_attr(derive(Debug))]
-struct Test {
-    int: u8,
-    string: String,
-    claims: HashMap<String, Vec<u8>>,
+// This example requires the "serde" feature
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct DataStruct<'data> {
+    #[serde(borrow)]
+    nums: ZeroVec<'data, u32>,
+    #[serde(borrow)]
+    chars: ZeroVec<'data, char>,
+    #[serde(borrow)]
+    strs: VarZeroVec<'data, str>,
 }
 
 fn main() {
@@ -72,7 +72,7 @@ fn main() {
 
     let archived = unsafe { rkyv::archived_root::<Test>(&bytes[..]) };
 
-    archived.claims.
+    // archived.claims.
 
     let deserialized: Test = archived.deserialize(&mut rkyv::Infallible).unwrap();
 }

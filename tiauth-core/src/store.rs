@@ -3,10 +3,12 @@ use std::{collections::HashMap, path::Path, time::SystemTime};
 use lazy_borink::Lazy;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use rmp_serde::{decode, encode};
+use serde::{Deserialize, Serialize};
 use terrors::OneOf;
 use thiserror::Error;
+use zerovec::{make_varule, maps::ZeroMapKV, ule::VarULE, vecs::Index32, VarZeroSlice, VarZeroVec};
 
-use crate::{data::Login, error::WrapErrorOneOf, state::State, Claims};
+use crate::{data::{BytePacked, Login, LoginPassword}, error::WrapErrorOneOf, state::State, Claims};
 
 pub type TableStore = (String, String, String);
 
@@ -248,7 +250,7 @@ pub fn pop_ephemeral(
 }
 
 pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
-    let buf = encode::to_vec_named(login).unwrap();
+    let buf = login.serialize();
     let user_id = login.user_id.as_str();
     let tables = state.tables().app(application);
     let write_txn = state.db().begin_write()?;
@@ -296,7 +298,7 @@ pub fn set_login_field_write(
     application: &str,
     user_id: &str,
     password_file: Option<String>,
-    claims: Option<Lazy<Claims>>,
+    claims: Option<BytePacked<Claims>>,
     options: SetLoginOptions,
 ) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
     // One of the two must be set
@@ -304,44 +306,48 @@ pub fn set_login_field_write(
 
     let tables = state.tables().app(application);
     let mut table = write_txn.open_table(tables.users()).to_one_of_two()?;
-    let access = table.get(user_id).to_one_of_two()?;
-    let user: Option<Login> = access.map(|a| decode::from_read(a.value()).unwrap());
 
-    if let Some(mut user) = user {
-        if options.create_user {
-            return Err(OneOf::new(LoginFieldError::AlreadyExists(
-                user_id.to_owned(),
-            )));
+    let user_bytes = {
+        let access = table.get(user_id).to_one_of_two()?;
+
+        if let Some(access) = access {
+            let user_bytes = access.value();
+            let mut user: Login =  Login::deserialize(user_bytes);
+            if options.create_user {
+                return Err(OneOf::new(LoginFieldError::AlreadyExists(
+                    user_id.to_owned(),
+                )));
+            }
+            if options.require_unset_password && !user.password_file.is_empty() {
+                return Err(OneOf::new(LoginFieldError::PasswordSet(user_id.to_owned())));
+            }
+
+            if let Some(password_file) = password_file {
+                user.password_file = password_file;
+            }
+            if let Some(claims) = claims {
+                user.claims = claims;
+            }
+            user.serialize()
+        } else if options.create_user {
+            // Password file must contain value when creating user!
+            assert!(password_file.is_some());
+
+            let login = Login {
+                user_id: user_id.to_owned(),
+                password_file: password_file.unwrap(),
+                claims: todo!(),
+                // claims: claims.unwrap_or_else(|| Claims::none().into()),
+            };
+
+            login.serialize()
+        } else {
+            return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
         }
-        if options.require_unset_password && !user.password_file.is_empty() {
-            return Err(OneOf::new(LoginFieldError::PasswordSet(user_id.to_owned())));
-        }
-
-        if let Some(password_file) = password_file {
-            user.password_file = password_file;
-        }
-        if let Some(claims) = claims {
-            user.claims = claims;
-        }
-
-        let buf = encode::to_vec_named(&user).unwrap();
-        table.insert(user_id, buf.as_slice()).to_one_of_two()?;
-    } else if options.create_user {
-        // Password file must contain value when creating user!
-        assert!(password_file.is_some());
-
-        let login = Login {
-            user_id: user_id.to_owned(),
-            password_file: password_file.unwrap(),
-            claims: claims.unwrap_or_else(|| Claims::none().into()),
-        };
-
-        let buf = encode::to_vec_named(&login).unwrap();
-
-        table.insert(user_id, buf.as_slice()).to_one_of_two()?;
-    } else {
-        return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
-    }
+    };
+    
+    table.insert(user_id, user_bytes.as_slice()).to_one_of_two()?;
+    
 
     Ok(())
 }
@@ -350,7 +356,7 @@ pub fn get_login(
     state: &impl State,
     application: &str,
     user_id: &str,
-) -> Result<Option<Login>, DbError> {
+) -> Result<Option<LoginPassword>, DbError> {
     let read_txn = state.db().begin_read()?;
     let tables = state.tables().app(application);
 
@@ -358,7 +364,153 @@ pub fn get_login(
 
     let access = table.get(user_id)?;
 
-    Ok(access.map(|a| decode::from_read(a.value()).unwrap()))
+    if let Some(access) = access {
+        let login_bytes = access.value();
+
+        Ok(Some(LoginPassword::deserialize_from_login(login_bytes)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn get_login_claims_subset_bytes<S: AsRef<str>>(
+    state: &impl State,
+    application: &str,
+    user_id: &str,
+    requested_claims: Vec<S>,
+) -> Result<Option<Vec<u8>>, DbError> {
+    let read_txn = state.db().begin_read()?;
+    let tables = state.tables().app(application);
+
+    let table = read_txn.open_table(tables.users())?;
+
+    let access = table.get(user_id)?;
+
+    if let Some(access) = access {
+        let login_bytes = access.value();
+
+        let login = Login::deserialize(login_bytes);
+
+        Ok(Some(Vec::new()))
+    } else {
+        Ok(None)
+    }
+}
+
+
+#[cfg(feature = "test")]
+pub mod test_util {
+    use std::sync::Arc;
+
+    use crate::test::TestState;
+
+    use super::*;
+    use rand::{rngs::StdRng, RngCore, SeedableRng};
+    use serde::{Deserialize, Serialize};
+    use zerovec::ZeroMap;
+
+    
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct Data<'a> {
+        #[serde(borrow)]
+        map: ZeroMap<'a, str, [u8]>,
+    }
+
+    // pub fn big_claims() -> (Vec<u8>, Lazy<Claims>) {
+    //     let mut rng = StdRng::from_entropy();
+    //     let len = 4500;
+    //     let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(len);
+    //     let mut zmap: ZeroMap<'_, str, [u8]> = ZeroMap::with_capacity(len);
+        
+    //     for i in 0..len {
+    //         let mut value_vec = Vec::with_capacity(10);
+    //         for _ in 0..12 {
+    //             let v = rng.next_u32();
+    //             let vu = (v % 8) as u8;
+    //             value_vec.push(vu)
+    //         }
+    //         let k = format!("{}", rng.next_u64());
+    //         let k_small = k[0..8].to_string();
+    //         //println!("{} yes here!", i);
+    //         zmap.insert(&k_small, &value_vec);
+    //         map.insert(k_small, value_vec);
+    //     }
+    //     //println!("got here!");
+    //     let claims = Claims(map);
+    //     let zmap_bytes = rmp_serde::to_vec_named(&Data { map: zmap }).unwrap();
+
+    //     let lazy_claims = Lazy::from_inner(claims);
+    //     let bytes = lazy_claims.take_bytes();
+    //     (zmap_bytes, Lazy::from_bytes(bytes))
+    // }
+
+    // pub fn test_lazy_claims(state: &impl State, app: &str, mut lazy_claims: Lazy<Claims>) -> Claims {
+    //     let mut rng = StdRng::from_entropy();
+    //     let user_id = rng.next_u32().to_string();
+    //     // let pre_login = Login {
+    //     //     user_id: "hi".to_owned(),
+    //     //     password_file: "pw".to_owned(),
+    //     //     claims: Claims::none().into(),
+    //     // };
+            
+    //     let tables = state.tables().app(app);
+    //     let write_txn = state.db().begin_write().unwrap();
+    //     {
+    //         let mut table = write_txn.open_table(tables.users()).unwrap();
+    //         table.insert(user_id.as_str(), lazy_claims.bytes()).unwrap();
+    //     }
+    //     write_txn.commit().unwrap();
+
+    //     //set_login(state, &pre_login, app).unwrap();
+
+    //     let read_txn = state.db().begin_read().unwrap();
+
+    //     let table = read_txn.open_table(tables.users()).unwrap();
+
+    //     let access = table.get(user_id.as_str()).unwrap();
+
+    //     let access = access.unwrap();
+    
+    //     let _deserialized: Lazy<Claims> = Lazy::from_bytes(access.value().to_vec());
+    //     let _deserialized = _deserialized.take();
+        
+    //     _deserialized
+    // }
+
+    // pub fn test_zero_vec(state: &impl State, app: &str, data_serial: Vec<u8>) -> Vec<u8> {
+    //     let mut rng = StdRng::from_entropy();
+    //     let user_id = rng.next_u32().to_string();
+    //     // let pre_login = Login {
+    //     //     user_id: "hi".to_owned(),
+    //     //     password_file: "pw".to_owned(),
+    //     //     claims: Claims::none().into(),
+    //     // };
+            
+    //     let tables = state.tables().app(app);
+    //     let write_txn = state.db().begin_write().unwrap();
+    //     {
+    //         let mut table = write_txn.open_table(tables.users()).unwrap();
+    //         table.insert(user_id.as_str(), data_serial.as_slice()).unwrap();
+    //     }
+    //     write_txn.commit().unwrap();
+
+    //     //set_login(state, &pre_login, app).unwrap();
+
+    //     let read_txn = state.db().begin_read().unwrap();
+
+    //     let table = read_txn.open_table(tables.users()).unwrap();
+
+    //     let access = table.get(user_id.as_str()).unwrap();
+
+    //     let access = access.unwrap();
+    //     let access_bytes = access.value();
+    
+    //     let _deserialized: Data = rmp_serde::from_slice(access_bytes).unwrap();
+
+        
+        
+    //     access_bytes.to_vec()
+    // }
 }
 
 #[cfg(test)]
@@ -372,7 +524,7 @@ mod tests {
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Claims::none().into(),
+            claims: todo!(),
         };
 
         let app = "abc";
@@ -385,41 +537,43 @@ mod tests {
 
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);
-        assert_eq!(value.claims.take(), read_login.claims.take());
+        //assert_eq!(value.claims.take(), read_login.claims.take());
     }
-    use rkyv::{Archive, Deserialize, Serialize};
+    use serde::{Deserialize, Serialize};
+    use zerovec::ZeroMap;
 
-    #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-    // We can pass attributes through to generated types with archive_attr
-    #[archive_attr(derive(Debug))]
-    struct TestLogin {
-        int: u8,
-        claims: HashMap<String, Vec<u8>>,
+    
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct Data<'a> {
+        #[serde(borrow)]
+        map: ZeroMap<'a, u32, str>,
     }
+
 
     #[test]
-    fn test_rkyv() {
-        let claims = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]);
+    fn test_zero_vec() {
+        //let claims = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]);
 
         let pre_login = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: Claims::none().into(),
+            claims: todo!(),
         };
 
-        let value = TestLogin {
-            int: 3,
-            claims: claims.0,
-        };
+        let mut map = ZeroMap::new();
+        map.insert(&1, "one");
+        map.insert(&2, "two");
+        map.insert(&4, "four");
         let user_id = "3";
+
+        let data = Data { map };
 
         let app = "abc";
 
         let state = TestState::setup_test(vec![app]);
-    
-        let bytes = rkyv::to_bytes::<_, 256>(&value).unwrap();
-        bytes
-    
+
+        let bytes = rmp_serde::to_vec_named(&data).unwrap();
+            
         let tables = state.tables().app(app);
         let write_txn = state.db().begin_write().unwrap();
         {
@@ -439,8 +593,8 @@ mod tests {
         let access = access.unwrap();
         let access_bytes = access.value();
     
-        let archived = unsafe { rkyv::archived_root::<TestLogin>(access_bytes) };
+        let deserialized: Data = rmp_serde::from_slice(access_bytes).unwrap();
 
-        println!("{:?}", archived);
+        println!("{:?}", deserialized);
     }
 }

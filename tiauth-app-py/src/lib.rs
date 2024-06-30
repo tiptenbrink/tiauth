@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use base64::{engine::general_purpose as b64, Engine as _};
 use lazy_borink::Lazy;
-use lazy_borink::lib2::LazyPack;
+// use lazy_borink::lib2::LazyPack;
 use pyo3::exceptions::PyValueError;
+use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::{prelude::*, PyTypeInfo};
 use tiauth_core::app;
@@ -15,6 +17,8 @@ use tiauth_core::Claims;
 struct ProofKey {
     key: Key,
 }
+
+
 
 #[pyfunction]
 fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
@@ -132,17 +136,72 @@ impl FromPython for Claims {
     }
 }
 
-// #[pyfunction]
-// fn create_set_claims_proof_lazy(
-//     application: &str,
-//     key: &Bound<'_, ProofKey>,
-//     user_id: &str,
-//     claims: LazyPack<Claims>,
-// ) -> PyResult<String> {
-//     let proof_base = ProofBaseView::new(application, &key.get().key);
+impl<'py> FromPyObject<'py> for ClaimsSerialized {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if ob.is_instance_of::<PyBytes>() {
+            let claim_bytes = ob.downcast::<PyBytes>().unwrap();
+            Ok(ClaimsSerialized::PyBytes(claim_bytes.clone().into()))
+        } else if ob.is_instance_of::<PyDict>() {
+            let claim_dict = ob.downcast::<PyDict>().unwrap();
+            let mut buf: Vec<u8> = Vec::new();
+            rmp::encode::write_array_len(&mut buf, claim_dict.len() as u32);
+            for (k, v) in claim_dict.into_iter() {
+                rmp::encode::write_array_len(&mut buf, 2);
+                
+                let key: &str = k.extract().map_err(|e| {
+                    let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
+                    PyValueError::new_err(msg)
+                })?;
+                rmp::encode::write_str(&mut buf, key);
 
-//     Ok(app::create_set_claims_proof(proof_base, user_id, claims.0))
-// }
+                let value: &[u8] = if v.is_instance_of::<PyString>() {
+                    let str_v: PyResult<&str> = v.extract();
+                    str_v.map(|v| v.as_bytes())
+                } else {
+                    v.extract()
+                }.map_err(|e| {
+                    let msg = format!("Failed to convert dictionary to claims map. Value '{}' is not a string and could not be extracted as bytes: {}", v, e);
+                    PyValueError::new_err(msg)
+                })?;
+                rmp::encode::write_bin(&mut buf, value);
+            }
+
+            Ok(ClaimsSerialized::Serialized(buf))
+        } else {
+            let msg = format!(
+                "Unable to interpret {} type as claims, provide either a dict[str, str | bytes] or bytes!",
+                ob.get_type().name()?
+            );
+            Err(PyValueError::new_err(msg))
+        }
+    }
+}
+
+enum ClaimsSerialized {
+    Serialized(Vec<u8>),
+    PyBytes(PyBackedBytes)
+}
+
+impl ClaimsSerialized {
+    fn as_bytes(&self) -> &[u8] {
+        match &self {
+            Self::PyBytes(bytes) => bytes.deref(),
+            Self::Serialized(vec) => vec.as_slice()
+        }
+    }
+}
+
+#[pyfunction]
+fn create_set_claims_proof_lazy(
+    application: &str,
+    key: &Bound<'_, ProofKey>,
+    user_id: &str,
+    claims: ClaimsSerialized,
+) -> PyResult<String> {
+    let proof_base = ProofBaseView::new(application, &key.get().key);
+
+    Ok(app::create_set_claims_proof(proof_base, user_id, claims.0))
+}
 
 #[pyfunction]
 fn create_set_claims_proof(

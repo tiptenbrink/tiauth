@@ -1,9 +1,10 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 
 use crate::data::Claims;
-use crate::data::{AboutVerify, ActionType, InvalidProof, Proof};
+use crate::data::{AboutVerify, ActionType, InvalidProof};
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::ops::prove::verify_proof_write;
+use crate::prove::Proof;
 use crate::state::State;
 use crate::store::{
     pop_ephemeral, set_login_field_write, write_ephemeral, EphemeralEntry, EphemeralType,
@@ -49,7 +50,7 @@ pub fn register_finish(
     application: &str,
     request: &str,
     register_flow_nonce: &str,
-    claims_proof: Option<Proof<Claims>>,
+    claims_proof: Option<&Proof<Claims>>,
 ) -> Result<(), OneOf<(DbError, OpaqueError, InvalidProof, LoginFieldError)>> {
     let password_file = register_server_finish(request)
         .to_one_of()
@@ -140,7 +141,7 @@ pub fn register_finish(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(feature = "test")]
 pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
@@ -154,7 +155,7 @@ pub mod test_util {
         application: &str,
         password: &str,
         alt_nonce: Option<&str>,
-        claims_proof: Option<Proof<Claims>>,
+        claims_proof: Option<&Proof<Claims>>,
     ) {
         let (request, client_state) = client_register(password).unwrap();
         let (server_response, nonce) =
@@ -185,7 +186,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Claims::none().into(),
+            claims: todo!(),
         };
         let app = "abc";
         let password = "pass";
@@ -206,7 +207,7 @@ mod tests {
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: Claims::none().into(),
+            claims: todo!(),
         };
         let app = "abc";
         let password = "pass";

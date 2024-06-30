@@ -9,38 +9,145 @@
 //! <target blob>
 //! <permission blob>
 
+use std::io::Read;
+use std::marker::PhantomData;
 use std::time::SystemTime;
 
-use crate::crypto::{self, verify_signature, PublicKey};
-use crate::data::{AboutVerify, InvalidProof, Proof, ProofContent};
-use crate::data::{Session, LEEWAY};
+use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
+use crate::data::{AboutVerify, BytePacked, ByteSerial, InvalidProof, ProofContent, SessionContent};
+use crate::data::{LEEWAY};
 use crate::error::WrapErrorOneOf;
 use crate::state::State;
-use crate::Tables;
+use crate::{ActionType, Claims, Tables, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use serde::{de::DeserializeOwned, Serialize};
 use terrors::OneOf;
 
-pub fn verify_proof_content<T>(
-    proof: Proof<T>,
-    public_key: &PublicKey,
+pub struct Proof<T> {
+    phantom: PhantomData<T>,
+    content: Vec<u8>,
+    signature: Vec<u8>
+}
+
+/// Efficiently encode multiple slices into a base64url string, allocating O(n) only once, otherwise only allocating for a maximum of 3 bytes at the boundary of the slices.
+fn combine_encode(inputs: &[&[u8]], total_len: usize) -> String {
+    let total_triplets = total_len / 3;
+    let max_str_len = (total_triplets+1) * 4;
+
+    let mut buf: Vec<u8> = Vec::with_capacity(max_str_len);
+    let mut position: usize = 0;
+    let mut remaining: Vec<u8> = Vec::with_capacity(3);
+    for slice in inputs {
+        let mut slice = *slice;
+        let slice_len = slice.len();
+        if slice_len == 0 {
+            continue;
+        }
+
+        if remaining.len() > 0 {
+            let necessary = 3 - remaining.len();
+            if slice_len >= necessary {
+                let slice_taken = &slice[0..necessary];
+                // Remove used bytes from slice
+                slice = &slice[necessary..slice_len];
+                // Remaining is now always 3 bytes
+                remaining.extend_from_slice(slice_taken);
+                assert_eq!(remaining.len(), 3);
+                let mut buf_slice = &mut buf[position..(position+3)];
+                b64::URL_SAFE.encode_slice(&remaining, &mut buf_slice).unwrap();
+                // 4 characters per 3 bytes
+                position += 4;
+                remaining = Vec::with_capacity(3);
+            } else {
+                // slice_len and remaining_len must be 1, otherwise it would always have enough
+                assert_eq!(slice_len, 1);
+                assert_eq!(remaining.len(), 1);
+
+                remaining[1] = slice[0];
+                // We can continue since we dealt with the slice
+                continue;
+            }
+        }
+        // Now remaining is always empty
+        assert_eq!(remaining.len(), 0);
+
+        let slice_len = slice.len();
+        let slice_triplets = slice_len / 3;
+        let slice_triplet_len = slice_triplets * 3;
+        let remainder = slice_len - slice_triplet_len;
+        remaining.extend_from_slice(&slice[slice_triplet_len..slice_len]);
+        assert_eq!(remainder, remaining.len());
+
+        let slice_aligned = &slice[0..slice_triplet_len];
+        let buf_added = slice_triplets * 4;
+        let mut buf_slice = &mut buf[position..(position+buf_added)];
+        b64::URL_SAFE.encode_slice(&slice_aligned, &mut buf_slice).unwrap();
+        position += buf_added;
+    }
+
+
+    let last_part = b64::URL_SAFE_NO_PAD.encode(&remaining);
+    buf.extend_from_slice(last_part.as_bytes());
+
+    String::from_utf8(buf).unwrap()
+}
+
+impl<T> Proof<T> {
+    pub fn into_encoded(self) -> String {
+        let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
+        let total_len = content_length.len() + self.content.len() + self.signature.len();
+        
+        combine_encode(&[&content_length, &self.content, &self.signature], total_len)
+    }
+}
+
+pub fn create_proof<T>(application: &str,
+    expires_in: u64,
+    action: ActionType,
+    target: Target,
+    target_data: TargetList,
+    data: BytePacked<T>,
+    key: &Key) -> Proof<T> {
+    let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+    let expires = expires_in + now;
+    let content = ProofContent::new(application, expires, action, target, target_data, data);
+
+    write_proof(&content, key)
+}
+
+fn write_proof<T>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
+    let content = proof_content.to_bytes();
+    let signature = sign_data(key, &content);
+
+    Proof { content, signature, phantom: PhantomData }
+}
+
+pub fn verify_proof_content<'a, 'b, T>(
+    proof_bytes: &'a Proof<T>,
+    public_key: &'b PublicKey,
     verify: AboutVerify,
-) -> Result<ProofContent<T>, OneOf<(InvalidProof,)>>
-where
-    T: DeserializeOwned + Serialize + core::fmt::Debug,
+) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>>
+
 {
-    let (mut lazy_proof, signature) = proof.into_parts();
+    let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content);
 
-    // These are small and cheap to take out and clone
-    // TODO propagate the decode error?
-    let about = lazy_proof.inner().about.clone();
+    // let (mut lazy_proof, signature) = proof.into_parts();
 
-    if verify.application != about.application {
+    // // These are small and cheap to take out and clone
+    // // TODO propagate the decode error?
+    // let about = lazy_proof.inner().about.clone();
+
+    if verify.application != proof_input.about.application {
         return Err(OneOf::new(InvalidProof {}));
     }
     if let Some(action) = verify.action {
-        if action != about.action {
+        if action != proof_input.about.action {
             return Err(OneOf::new(InvalidProof {}));
         }
     }
@@ -50,12 +157,12 @@ where
         .unwrap()
         .as_secs();
 
-    if time > about.expires + LEEWAY {
+    if time > proof_input.about.expires + LEEWAY {
         return Err(OneOf::new(InvalidProof {}));
     };
 
-    if verify_signature(lazy_proof.bytes(), &signature, public_key) {
-        Ok(lazy_proof.take())
+    if verify_signature(&proof_bytes.content, &proof_bytes.signature, public_key) {
+        Ok(proof_input)
     } else {
         Err(OneOf::new(InvalidProof {}))
     }
@@ -87,13 +194,12 @@ pub fn verify_proof_write<T>(
     Ok(())
 }
 
-pub fn verify_proof<T>(
+pub fn verify_proof<'a, T>(
     state: &impl State,
-    proof: Proof<T>,
+    proof: &'a Proof<T>,
     verify: AboutVerify,
-) -> Result<ProofContent<T>, OneOf<(DbError, InvalidProof)>>
+) -> Result<ProofContent<'a, T>, OneOf<(DbError, InvalidProof)>>
 where
-    T: Serialize + DeserializeOwned + core::fmt::Debug,
 {
     let key = state.app_key(&verify.application);
     let mut proof_content = verify_proof_content(proof, &key, verify).map_err(OneOf::broaden)?;
@@ -107,66 +213,101 @@ where
     Ok(proof_content)
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Session {
+    bytes: Vec<u8>,
+}
+
+impl Session {
+    pub fn into_encoded(&self) -> String {
+        b64::URL_SAFE_NO_PAD.encode(&self.bytes)
+    }
+
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+pub fn create_session(application: &str,
+    user_id: &str,
+    expires_in: u64,
+    session_claims: BytePacked<Claims>,
+    key: &SessionKey) -> Session {
+    let issued = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+    let expires = expires_in + issued;
+    let content = SessionContent::new(application, user_id, issued, expires, session_claims);
+
+    Session {
+        bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy())
+    }
+    
+}
+
 #[derive(Debug)]
 pub struct InvalidSession {}
 
-pub fn verify_session(state: &impl State, session: &[u8]) -> Result<Session, InvalidSession> {
+pub fn verify_session<'a, 'b>(state: &'a impl State, session: &'b [u8]) -> Result<Vec<u8>, InvalidSession> {
     let session = crypto::session_decrypt(session, &state.private().session)
         .map_err(|_e| InvalidSession {})?;
 
-    rmp_serde::decode::from_read(session.as_slice()).map_err(|_e| InvalidSession {})
+    Ok(session)
 }
-
-#[cfg(test)]
+#[cfg(feature = "test")]
 pub mod test_util {
-    use crate::data::EXPIRE_TIME;
-    use crate::data::{ActionType, Claims, Session, Target, TargetList};
+    use crate::data::{BytePacked, EXPIRE_TIME};
+    use crate::data::{ActionType, Claims, Target, TargetList};
     use crate::state::test_util::*;
     use std::time::UNIX_EPOCH;
 
     use super::*;
 
-    pub fn create_session(user_id: &str, application: &str, session_claims: Claims) -> Session {
-        let time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+    // pub fn create_session(user_id: &str, application: &str, session_claims: Claims) -> Session {
+    //     let time = SystemTime::now()
+    //         .duration_since(UNIX_EPOCH)
+    //         .unwrap()
+    //         .as_secs();
 
-        Session {
-            user_id: user_id.to_owned(),
-            application: application.to_owned(),
-            issued: time,
-            expires: time + EXPIRE_TIME,
-            session_claims,
-        }
-    }
+    //     Session {
+    //         user_id: user_id.to_owned(),
+    //         application: application.to_owned(),
+    //         issued: time,
+    //         expires: time + EXPIRE_TIME,
+    //         session_claims,
+    //     }
+    // }
 
     pub fn create_proof_claims(
         state: &TestState,
         application: &str,
         user_id: &str,
         expires_in: Option<u64>,
-        claims: Claims,
+        claims: BytePacked<Claims>,
     ) -> Proof<Claims> {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);
+        // let claims = rmp_serde::to_vec(claims).unwrap();
+        // let claims_packed = BytePacked::new(&claims);
 
-        Proof::new(
+        let content = ProofContent::new(
             application,
             expires_in,
             ActionType::Set,
             Target::Select,
             TargetList::user(user_id),
-            claims.into(),
-            key,
-        )
+            claims
+        );
+
+        write_proof(&content, &key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{ActionType, Claims, ProofAbout},
+        data::{ActionType, Claims, ProofAbout, EXPIRE_TIME},
         state::test_util::*,
     };
 
@@ -182,29 +323,32 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        //let claims: Claims = todo!();
+        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
-        let session = create_session(user_id, app, claims);
+        let session = create_session(user_id, app, EXPIRE_TIME, todo!(), &state.private().session);
 
         let session = verify_session(
             &state,
-            &session.token(&state.private().session, &mut state.rng()),
+            &session.bytes,
         )
         .unwrap();
 
-        let claims = session.session_claims.0;
 
-        assert_eq!(
-            claims
-                .iter()
-                .filter(|(k, v)| {
-                    *k == "email" && std::str::from_utf8(v).unwrap() == "hi@abc.nl"
-                })
-                .count(),
-            1
-        );
+        todo!();
+        // let claims = session.session_claims.0;
 
-        assert_eq!(claims.len(), 2);
+        // assert_eq!(
+        //     claims
+        //         .iter()
+        //         .filter(|(k, v)| {
+        //             *k == "email" && std::str::from_utf8(v).unwrap() == "hi@abc.nl"
+        //         })
+        //         .count(),
+        //     1
+        // );
+
+        // assert_eq!(claims.len(), 2);
     }
 
     #[derive(Debug, Deserialize)]
@@ -225,19 +369,19 @@ mod tests {
         let app = "abc";
 
         let state = TestState::setup_test(vec![app]);
-        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
-        let proof = create_proof_claims(&state, app, user_id, None, claims.clone());
+        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let proof = create_proof_claims(&state, app, user_id, None, todo!());
 
         let mut proof_content = verify_proof(
             &state,
-            proof.clone(),
+            &proof,
             AboutVerify::new(app, ActionType::Set),
         )
         .unwrap();
+        todo!();
+        // let unwrapped_claims = proof_content.data.inner();
 
-        let unwrapped_claims = proof_content.data.inner();
-
-        assert_eq!(claims.0, unwrapped_claims.0);
-        assert_eq!(app, proof_content.about.application);
+        // assert_eq!(claims.0, unwrapped_claims.0);
+        // assert_eq!(app, proof_content.about.application);
     }
 }

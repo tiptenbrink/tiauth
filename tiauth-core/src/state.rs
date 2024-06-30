@@ -212,7 +212,7 @@ fn get_apps(db: &Database) -> Result<Vec<Application>, DbError> {
     Ok(apps)
 }
 
-#[cfg(test)]
+#[cfg(feature = "test")]
 pub mod test_util {
     use super::*;
     use crate::crypto::{save_public_key, Key};

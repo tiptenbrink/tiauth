@@ -21,7 +21,8 @@ base64 = "0.22.1"
 thiserror = "1.0"
 ed25519-compact = "=2.1.1"
 aes-gcm-siv = "=0.11.1"
-zerovec = "0.10.4"
+zerovec = { version = "0.10.4", features = ["serde", "derive"] }
+tempfile = { version = "3", optional = true }
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 web-time = "1.1"
@@ -30,6 +31,12 @@ web-time = "1.1"
 default = ["action"]
 action = ["dep:redb", "dep:opaque-borink"]
 app = []
+test = ["dep:tempfile"]
 
 [dev-dependencies]
-tempfile = "3"
+criterion = "0.5"
+tiauth-core = { path = ".", features = ["test", "action", "app"] }
+
+[[bench]]
+name = "deser"
+harness = false

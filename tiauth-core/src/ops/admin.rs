@@ -1,4 +1,4 @@
-use crate::error::WrapErrorOneOf;
+use crate::{error::WrapErrorOneOf, prove::Proof};
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
 use crate::Tables;
@@ -6,12 +6,12 @@ use redb::{Error as DbError, ReadableTable};
 use terrors::OneOf;
 
 use super::prove::verify_proof_content;
-use crate::data::{AboutVerify, ActionType, InvalidProof, Proof, Target};
+use crate::data::{AboutVerify, ActionType, InvalidProof, Target};
 
 pub fn get_users_encoded(
     state: &impl State,
     application: &str,
-    proof: Proof<()>,
+    proof: &Proof<()>,
 ) -> Result<Vec<Vec<u8>>, OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
     let mut proof_content =
