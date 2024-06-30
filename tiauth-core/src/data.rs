@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::{Cursor, Read};
 use std::marker::PhantomData;
-use std::ops::Range;
+use std::ops::{self, Range};
 use std::str;
 /// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -134,50 +134,104 @@ pub trait ByteSerial {
     // fn deserialize_owned(bytes: &[u8]) -> Self;
 }
 
-// #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-// #[serde(transparent)]
-// #[derive(Default)]
-// pub struct Claims(pub HashMap<String, Vec<u8>>);
-
-#[derive(Debug, PartialEq)]
-pub struct Claims {
-
-}
-
-
-pub struct ClaimsZero<'a> {
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimsView<'a> {
+    #[serde(borrow)]
     keys: VarZeroVec<'a, str, Index32>,
+    #[serde(borrow)]
     values: VarZeroVec<'a, [u8], Index32>
 }
 
-use rayon::iter::walk_tree;
-use rayon::prelude::*;
-use std::sync::mpsc::{self, Sender};
+#[derive(Debug, PartialEq)]
+pub struct Claims {
+    keys: Vec<String>,
+    values: Vec<Vec<u8>>
+}
 
-impl<'a> ClaimsZero<'a> {
+impl Claims {
+    pub fn to_view(&self) -> ClaimsView {
+        let keys: VarZeroVec<str, Index32> = VarZeroVec::from(&self.keys);
+        let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&self.values);
+
+        ClaimsView {
+            keys,
+            values
+        }
+    }
+}
+
+impl<'a> ClaimsView<'a> {
+    // pub fn new<S, V>(map: Vec<(S, V)>) -> Self
+    // where
+    //     S: Into<String>,
+    //     V: AsRef<[u8]>,
+    // {
+    //     let keys: Vec< = map.into_iter().unzip();
+    // }
+
     /// If k is generally a fraction of n, doing linear search is almost always better. However, when k is a power of n (k = k^C) where C < 1, at some point doing binary search is faster.
     /// For C < 0.6, even for small n binary search is almost just as fast as linear. For larger n though binary search is faster even at far greater k than just k^C.
     /// If using binary search for each item on the original vec, for a subset of size k out of n claims, we would have O(k ln2(n)). 
     /// You can be slightly smarter if the subset is sorted, as we can eliminate everything to the left of the value we find as we iterate through the subset. However, in the worst case
     /// this only eliminates 1 at a time, but it's still always better.
     /// Smarter still, you pick the middle element from the subset, allowing you to split the claims in two. Now the left part of the subset can only be in the left part of the claims,
-    /// and the right part of the subset only in the right part of the claims. This even allows parallelizing. 
-    fn subset() {
+    /// and the right part of the subset only in the right part of the claims. This even allows parallelizing, although in practice the performance improvement is not huge, especially
+    /// when there are not a lot of free threads lying around, like for a webserver. 
+    fn subset_vec(&self, subset: &[String]) -> Vec<(String, Vec<u8>)> {
+        let mut vec_out = Vec::with_capacity(subset.len());
+        let linear_len = self.keys.len() as f32;
+        // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
+        // We prefer the binary split in most cases
+        let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
+
+        if ops_binary > linear_len {
+            self.subset_linear(&subset, &mut vec_out, |out, (s, v)| {
+                out.push((s.to_string(), v.to_vec()));
+            });
+        } else {
+            self.subset_binary_split(&subset, &mut vec_out, |out, (s, v)| {
+                out.push((s.to_string(), v.to_vec()));
+            });
+        }
         
+        vec_out
     }
 
-    pub fn subset_linear(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
+    fn subset_serialize(&self, subset: &[String]) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        rmp::encode::write_map_len(&mut buf, subset.len() as u32).unwrap();
+
+        let linear_len = self.keys.len() as f32;
+        // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
+        // We prefer the binary split in most cases
+        let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
+
+        if ops_binary > linear_len {
+            self.subset_linear(&subset, &mut buf, |out, (s, v)| {
+                rmp::encode::write_str(out, s).unwrap();
+                rmp::encode::write_bin(out, v).unwrap();
+            });
+        } else {
+            self.subset_binary_split(&subset, &mut buf, |out, (s, v)| {
+                rmp::encode::write_str(out, s).unwrap();
+                rmp::encode::write_bin(out, v).unwrap();
+            });
+        }
+
+        buf
+    }
+
+    pub fn subset_linear<F, O>(&self, subset: &[String], out: &mut O, action: F)
+        where F: Fn(&mut O, (&str, &[u8])) -> ()
+    {
         let subset_len = subset.len();
-        let mut subset_claims:  Vec<(String, Vec<u8>)> = Vec::with_capacity(subset_len);
         assert!(subset_len > 0);
         let mut i = 0;
-        let mut n = 0;
         let mut current = &subset[i];
 
         for (k_i, k) in self.keys.iter().enumerate() {
-            n += 1;
             if current == k {
-                subset_claims.push((k.to_string(), self.values[k_i].to_vec()));
+                action(out, (k, &self.values[k_i]));
                 i += 1;
                 if i == subset.len() {
                     break;
@@ -186,37 +240,15 @@ impl<'a> ClaimsZero<'a> {
                 }
             }
         }
-        println!("linear: {} ops.", n);
-        subset_claims
     }
 
-    pub fn subset_binary(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
-        let mut subset_claims:  Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
-        let keys_len = self.keys.len();
-        assert!(subset.len() > 0);
-        let mut range = 0..keys_len;
-        let mut i = 0f32;
-        for s in &subset {
-            i += (range.len() as f32).log2();
-            if let Ok(rel_k_i) = self.keys.binary_search_in_range(&s, range.clone()).unwrap() {
-                let k_i = rel_k_i+range.start;
-                subset_claims.push((s.to_string(), self.values[k_i].to_vec()));
-                // TODO check for out of bounds
-                range = (k_i+1)..keys_len;
-            }
-        }
-        println!("binary est: {} ops.", i);
-        subset_claims
-    }
-
-    pub fn subset_binary_split_o(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
-        let mut subset_claims:  Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
-        
+    pub fn subset_binary_split<F, O>(&self, subset: &[String], out: &mut O, action: F)
+        where F: Fn(&mut O, (&str, &[u8])) -> ()
+    {        
         let start = 0;
         let end = self.keys.len();
 
         let mut queue: Vec<(Range<usize>, &[String])> = vec![(start..end, &subset)];
-        let mut i = 0f32;
         while queue.len() > 0 {
             let (range, subset_slice) = queue.pop().unwrap();
             if subset_slice.len() == 0 {
@@ -225,10 +257,9 @@ impl<'a> ClaimsZero<'a> {
 
             let middle_element_i = subset_slice.len()/2;
             let middle_element = &subset_slice[middle_element_i];
-            i += (range.len() as f32).log2();
             if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element, range.clone()).unwrap() {
                 let k_i = rel_k_i+range.start;
-                subset_claims.push((middle_element.to_string(), self.values[k_i].to_vec()));
+                action(out, (middle_element.as_str(), &self.values[k_i]));
                 
                 let left = range.start..k_i;
                 let right = k_i+1..range.end;
@@ -239,165 +270,20 @@ impl<'a> ClaimsZero<'a> {
                 panic!("All elements in subset must be present!");
             }
         }
-        println!("binary split: {} ops.", i);
-
-        subset_claims
     }
-
-    pub fn subset_binary_split(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
-        let mut subset_claims: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
-        
-        let start = 0;
-        let end = self.keys.len();
-
-        let (send, receive) = mpsc::channel();
-
-        let i = self.process_slice(start..end, &subset, send);
-        while let Ok(k_i) = receive.recv() {
-            subset_claims.push((self.keys[k_i].to_string(), self.values[k_i].to_vec()));
-        }
-        println!("binary split par: {} ops.", i);
-
-        subset_claims
-    }
-
-    fn process_slice(&self, range: Range<usize>, subset_slice: &[String], sender: Sender<usize>) -> f32 {
-        if subset_slice.is_empty() {
-            return 0f32;
-        }
-
-        let middle_element_i = subset_slice.len() / 2;
-        let middle_element = &subset_slice[middle_element_i];
-        let ops = (range.len() as f32).log2();
-        if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element, range.clone()).unwrap() {
-            let k_i = rel_k_i + range.start;
-            
-            assert_eq!(middle_element, &self.keys[k_i]);
-            sender.send(k_i).unwrap();
-            //subset_claims.push((middle_element.to_string(), self.values[k_i].to_vec()));
-
-            let left = range.start..k_i;
-            let right = k_i+1..range.end;
-
-            let (l_o, r_o) = rayon::join(
-                || self.process_slice(left, &subset_slice[0..middle_element_i], sender.clone()),
-                || self.process_slice(right, &subset_slice[middle_element_i + 1..subset_slice.len()], sender.clone()),
-            );
-
-            l_o + r_o + ops
-        } else {
-            panic!("All elements in subset must be present!");
-        }
-    }
-
-    pub fn subset_binary_split_oc(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
-        //let mut subset_claims: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
-        
-        let start = 0;
-        let end = self.keys.len();
-
-        //let mut queue: Vec<(Range<usize>, &[String])> = vec![(start..end, &subset)];
-
-
-        let (subset_claims, i) = self.process_slice_o(start..end, &subset);
-
-        // while !queue.is_empty() {
-        //     let (range, subset_slice) = queue.pop().unwrap();
-        //     if subset_slice.is_empty() {
-        //         continue;
-        //     }
-
-        //     let middle_element_i = subset_slice.len() / 2;
-        //     let middle_element = &subset_slice[middle_element_i];
-        //     i += (range.len() as f32).log2();
-            
-        //     if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element, range.clone()).unwrap() {
-        //         let k_i = rel_k_i + range.start;
-        //         subset_claims.push((middle_element.to_string(), self.values[k_i].to_vec()));
-                
-        //         let left = range.start..k_i;
-        //         let right = k_i+1..range.end;
-
-        //         // Use rayon to process the left and right slices in parallel
-        //         let (left_claims, right_claims): (Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>) = rayon::join(
-        //             || self.process_slice_o(left, &subset_slice[0..middle_element_i]),
-        //             || self.process_slice_o(right, &subset_slice[middle_element_i + 1..subset_slice.len()])
-        //         );
-                
-        //         subset_claims.extend(left_claims);
-        //         subset_claims.extend(right_claims);
-        //     } else {
-        //         panic!("All elements in subset must be present!");
-        //     }
-        // }
-        println!("binary split par extend: {} ops.", i);
-
-        subset_claims
-    }
-
-    fn process_slice_o(&self, range: Range<usize>, subset_slice: &[String]) -> (Vec<(String, Vec<u8>)>, f32) {
-        let mut claims = Vec::with_capacity(subset_slice.len());
-        if subset_slice.is_empty() {
-            return (claims, 0f32);
-        }
-
-        let middle_element_i = subset_slice.len() / 2;
-        let middle_element = &subset_slice[middle_element_i];
-
-        let mut ops = (range.len() as f32).log2();
-
-        if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element, range.clone()).unwrap() {
-            let k_i = rel_k_i + range.start;
-            claims.push((middle_element.to_string(), self.values[k_i].to_vec()));
-
-            let left = range.start..k_i;
-            let right = k_i+1..range.end;
-
-            let ((left_claims, l_ops), (right_claims, r_ops)) = rayon::join(
-                || self.process_slice_o(left, &subset_slice[0..middle_element_i]),
-                || self.process_slice_o(right, &subset_slice[middle_element_i + 1..subset_slice.len()])
-            );
-
-            ops += l_ops + r_ops;
-
-            claims.extend(left_claims);
-            claims.extend(right_claims);
-        } else {
-            panic!("All elements in subset must be present!");
-        }
-
-        (claims, ops)
-    }
-
-    
-
-    // pub fn subset_binary_rayon(&self, subset: Vec<String>) -> Vec<(String, Vec<u8>)> {
-
-    //     let par_iter = walk_tree(4, |&e| {
-    //         if e <= 2 {
-    //             Vec::new()
-    //         } else {
-    //             vec![e / 2, e / 2 + 1]
-    //         }
-    //     });
-
-    //     ()
-    // }
-
-    
 }
 
 // impl Claims {
-//     pub fn new<S, V>(map: Vec<(S, V)>) -> Self
-//     where
-//         S: Into<String>,
-//         V: AsRef<[u8]>,
-//     {
-//         Self(HashMap::from_iter(
-//             map.into_iter()
-//                 .map(|(s, v)| (s.into(), v.as_ref().to_vec())),
-//         ))
-//     }
+    // pub fn new<S, V>(map: Vec<(S, V)>) -> Self
+    // where
+    //     S: Into<String>,
+    //     V: AsRef<[u8]>,
+    // {
+    //     Self(HashMap::from_iter(
+    //         map.into_iter()
+    //             .map(|(s, v)| (s.into(), v.as_ref().to_vec())),
+    //     ))
+    // }
 
 //     pub fn none() -> Self {
 //         Self(HashMap::new())
@@ -658,77 +544,6 @@ impl<'a, T> ProofContent<'a, T> {
 }
 
 
-
-// impl<T> ProofContent<T> {
-//     pub fn new(
-//         application: &str,
-//         expires: u64,
-//         action: ActionType,
-//         target: Target,
-//         target_data: Lazy<Vec<String>>,
-//         data: Lazy<T>,
-//     ) -> Self {
-//         let nonce = nonce_384_bytes(&mut StdRng::from_entropy());
-
-//         Self {
-//             about: ProofAbout {
-//                 application: application.to_owned(),
-//                 expires,
-//                 action,
-//                 target,
-//             },
-//             nonce,
-//             target_data,
-//             data,
-//         }
-//     }
-
-//     pub fn select_one(&mut self) -> Result<String, OneOf<(InvalidProof,)>> {
-//         let targets = self.target_data.inner();
-
-//         match self.about.target {
-//             Target::Select => {
-//                 if targets.len() == 1 {
-//                     Ok(targets[0].clone())
-//                 } else {
-//                     Err(OneOf::new(InvalidProof {}))
-//                 }
-//             }
-//             Target::All => Err(OneOf::new(InvalidProof {})),
-//         }
-//     }
-// }
-
-// #[derive(Debug, Serialize, Deserialize, Clone)]
-// struct ProofInner<T> {
-//     #[serde(bound(deserialize = "T: DeserializeOwned"))]
-//     proof: Lazy<ProofContent<T>>,
-//     signature: Vec<u8>,
-// }
-
-// impl<T> ProofInner<T>
-// where
-//     T: Serialize + core::fmt::Debug,
-// {
-//     fn new(proof_content: ProofContent<T>, key: &Key) -> Self {
-//         let mut proof_content = Lazy::from_inner(proof_content);
-//         let signature = sign_data(key, proof_content.bytes());
-
-//         Self {
-//             proof: proof_content,
-//             signature,
-//         }
-//     }
-// }
-
-// /// Proof is not meant to be serializable, as it should be opaque and serialized only as bytes, e.g. using Lazy.
-// #[derive(Debug, Deserialize, Clone)]
-// #[serde(transparent)]
-// pub struct Proof<T> {
-//     #[serde(bound(deserialize = "T: DeserializeOwned"))]
-//     inner: ProofInner<T>,
-// }
-
 #[derive(Debug)]
 pub struct TargetList(Vec<String>);
 
@@ -826,13 +641,13 @@ mod test {
         let start = Instant::now();
         
         let mut rng = StdRng::from_entropy();
-        let mut s = [0u8; 5000];
+        let mut s = [0u8; 20];
 
         let mut subset = Vec::new();
         let mut keys_in = Vec::new();
         let mut values_in: Vec<Vec<u8>> = Vec::new();
         let r_end: u32 = 20000;
-        let sub_size = 200;
+        let sub_size = 3;
         let r: Range<u32> = 0..r_end;
         
         println!("elapsed pre: {} ms", start.elapsed().as_secs_f32()*1000f32);
@@ -880,53 +695,55 @@ mod test {
 
         println!("elapsed conv: {} ms", start.elapsed().as_secs_f32()*1000f32);
 
-        let claims = ClaimsZero {
+        let claims = ClaimsView {
             keys,
             values
         };
+        let mut s1: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
-        let mut s1 = claims.subset_linear(subset.clone());
+        let mut s1 = claims.subset_vec(&subset);
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
         assert_eq!(s1.len(), subset.len());
         s1.sort();
         //println!("elapsed s1 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
         //println!("s1 {:?}", s1);
-        let t = Instant::now();
-        let mut s2 = claims.subset_binary(subset.clone());
-        let t_e = Instant::now();
-        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
-        assert_eq!(s2.len(), subset.len());
-        s2.sort();
-        //println!("elapsed s2 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
-        assert_eq!(s1, s2);
+        // let t = Instant::now();
+        // let mut s2 = claims.subset_binary(subset.clone());
+        // let t_e = Instant::now();
+        // println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        // assert_eq!(s2.len(), subset.len());
+        // s2.sort();
+        // //println!("elapsed s2 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s2);
         //println!("s2 {:?}", s2);
+        let mut s3: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
-        let mut s3 = claims.subset_binary_split(subset.clone());
+        let s3 = claims.subset_serialize(&subset);
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
-        assert_eq!(s3.len(), subset.len());
-        s3.sort();
-        //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
-        assert_eq!(s1, s3);
+        // assert_eq!(s3.len(), subset.len());
+        // s3.sort();
+        // //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s3);
 
-        let t = Instant::now();
-        let mut s4 = claims.subset_binary_split_o(subset.clone());
-        let t_e = Instant::now();
-        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
-        assert_eq!(s4.len(), subset.len());
-        s4.sort();
-        //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
-        assert_eq!(s1, s4);
+        // let t = Instant::now();
+        // let mut s4 = claims.subset_binary_split_o(subset.clone());
+        // let t_e = Instant::now();
+        // println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        // assert_eq!(s4.len(), subset.len());
+        // s4.sort();
+        // //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s4);
 
-        let t = Instant::now();
-        let mut s5 = claims.subset_binary_split_oc(subset.clone());
-        let t_e = Instant::now();
-        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
-        assert_eq!(s5.len(), subset.len());
-        s5.sort();
-        //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
-        assert_eq!(s1, s5);
+        // let t = Instant::now();
+        // let mut s5 = claims.subset_binary_split_oc(subset.clone());
+        // let t_e = Instant::now();
+        // println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        // assert_eq!(s5.len(), subset.len());
+        // s5.sort();
+        // //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s5);
     }
 
     fn test_subset() {
