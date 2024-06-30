@@ -154,3 +154,190 @@ Note that this can lead to significantly more storage requirements.
 ### Why no rkyv
 
 redb cannot store bytes in an aligned way. This is required for rkyv's zero-copy deserialization. 
+
+
+### Subset algo results
+
+```
+k=3, n=30
+elapsed conv: 0.028073 ms
+linear: 27 ops.
+took 0.001052 ms.
+binary est: 9.813781 ops.
+took 0.009508001 ms.
+binary split par: 11.813781 ops.
+took 0.64613295 ms.
+binary split: 11.813781 ops.
+took 0.001112 ms.
+binary split par extend: 11.813781 ops.
+took 0.053662 ms.
+---
+k=87, n=200
+elapsed conv: 0.078539 ms
+linear: 200 ops.
+took 0.014266999 ms.
+binary est: 554.38715 ops.
+took 0.026089 ms.
+binary split par: 238.25047 ops.
+took 0.692902 ms.
+binary split: 238.25046 ops.
+took 0.020919 ms.
+binary split par extend: 238.25047 ops.
+took 0.055905998 ms.
+---
+k=90, n=2000
+elapsed conv: 0.463888 ms
+linear: 1997 ops.
+took 0.029817 ms.
+binary est: 876.86035 ops.
+took 0.031059 ms.
+binary split par: 554.9355 ops.
+took 0.7075 ms.
+binary split: 554.9355 ops.
+took 0.023815 ms.
+binary split par extend: 554.9355 ops.
+took 0.117593 ms.
+---
+k=1420, n=2000
+elapsed conv: 0.55556196 ms
+linear: 2000 ops.
+took 0.242469 ms.
+binary est: 13537.123 ops.
+took 0.347388 ms.
+binary split par: 2897.8623 ops.
+took 1.230409 ms.
+binary split: 2897.8657 ops.
+took 0.238672 ms.
+binary split par extend: 2897.8623 ops.
+took 0.186042 ms.
+---
+k=1982, n=2000
+elapsed conv: 0.563808 ms
+linear: 2000 ops.
+took 0.34431198 ms.
+binary est: 18878.848 ops.
+took 0.473166 ms.
+binary split par: 2749.3606 ops.
+took 1.139899 ms.
+binary split: 2749.3633 ops.
+took 0.246897 ms.
+binary split par extend: 2749.3606 ops.
+took 0.212713 ms.
+---
+k=197916, n=200000
+elapsed conv: 69.85484 ms
+linear: 200000 ops.
+took 28.181545 ms.
+binary est: 3199808.8 ops.
+took 55.45554 ms.
+binary split par: 294194.8 ops.
+took 40.80323 ms.
+binary split: 294202.28 ops.
+took 30.206268 ms.
+binary split par extend: 294194.8 ops.
+took 25.410408 ms.
+---
+k=1979915, n=2000000
+elapsed conv: 947.8669 ms
+linear: 2000000 ops.
+took 267.114 ms.
+binary est: 38443096 ops.
+took 601.4376 ms.
+binary split par: 2779608.5 ops.
+took 409.5743 ms.
+binary split: 2767521.3 ops.
+took 321.19016 ms.
+binary split par extend: 2779608.5 ops.
+took 320.85025 ms.
+---
+k=99874, n=2000000
+elapsed conv: 678.6542 ms
+linear: 1999979 ops.
+took 20.629108 ms.
+binary est: 1946838.3 ops.
+took 60.031284 ms.
+binary split par: 610941.8 ops.
+took 34.32081 ms.
+binary split: 610947.4 ops.
+took 46.59607 ms.
+binary split par extend: 610941.8 ops.
+took 14.933323 ms.
+---
+k=9819, n=2000000
+elapsed conv: 669.37445 ms
+linear: 1999711 ops.
+took 9.914402 ms.
+binary est: 191234.33 ops.
+took 21.430904 ms.
+binary split par: 92930.65 ops.
+took 4.178592 ms.
+binary split: 92930.98 ops.
+took 5.8565392 ms.
+binary split par extend: 92930.65 ops.
+took 1.160888 ms.
+---
+k=1002, n=2000000
+elapsed conv: 657.4642 ms
+linear: 1996903 ops.
+took 6.882079 ms.
+binary est: 19557.818 ops.
+took 3.288105 ms.
+binary split par: 12730.44 ops.
+took 1.160878 ms.
+binary split: 12730.447 ops.
+took 0.804763 ms.
+binary split par extend: 12730.44 ops.
+took 0.16901 ms.
+---
+k=113, n=2000000
+elapsed conv: 668.1629 ms
+linear: 1998014 ops.
+took 6.672843 ms.
+binary est: 2193.7527 ops.
+took 0.231318 ms.
+binary split par: 1794.3739 ops.
+took 0.756051 ms.
+binary split: 1794.374 ops.
+took 0.090151 ms.
+binary split par extend: 1794.3739 ops.
+took 0.064922996 ms.
+---
+k=13, n=2000000
+elapsed conv: 803.1828 ms
+linear: 1830818 ops.
+took 12.435755 ms.
+binary est: 262.94495 ops.
+took 0.071504995 ms.
+binary split par: 244.64317 ops.
+took 0.88305104 ms.
+binary split: 244.64319 ops.
+took 0.01608 ms.
+binary split par extend: 244.64317 ops.
+took 0.034764998 ms.
+--- (big values)
+k=213, n=20000
+elapsed conv: 336.96924 ms
+linear: 19862 ops.
+took 3.0210168 ms.
+binary est: 2739.6924 ops.
+took 2.296786 ms.
+binary split par: 1779.1162 ops.
+took 2.5930479 ms.
+binary split: 1779.1161 ops.
+took 1.87528 ms.
+binary split par extend: 1779.1162 ops.
+took 0.612589 ms.
+---
+k=218, n=20000
+elapsed conv: 325.30405 ms
+linear: 19979 ops.
+took 2.972367 ms.
+binary est: 2781.5813 ops.
+took 2.087973 ms.
+binary split par: 1818.6095 ops.
+took 2.618117 ms.
+binary split: 1818.6089 ops.
+took 1.911458 ms.
+binary split par extend: 1818.6095 ops.
+took 0.55707395 ms.
+```

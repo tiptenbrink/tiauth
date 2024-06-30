@@ -2255,6 +2255,7 @@ dependencies = [
  "lazy-borink",
  "opaque-borink",
  "rand",
+ "rayon",
  "redb",
  "rmp",
  "rmp-serde",

@@ -200,7 +200,7 @@ fn create_set_claims_proof_lazy(
 ) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_set_claims_proof(proof_base, user_id, claims.0))
+    Ok(app::create_set_claims_proof(proof_base, user_id, claims.as_bytes()))
 }
 
 #[pyfunction]
