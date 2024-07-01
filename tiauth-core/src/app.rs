@@ -38,7 +38,7 @@ impl<'a> ProofBaseView<'a> {
 pub fn create_set_claims_proof(
     proof_base: ProofBaseView,
     user_id: &str,
-    claims: BytePacked<Claims>,
+    claims: &BytePacked<Claims>,
 ) -> String {
     let action = ActionType::Set;
     let target = Target::Select;
@@ -90,7 +90,7 @@ pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
         action,
         target,
         target_data,
-        BytePacked::new(&[]),
+        BytePacked::empty(),
         proof_base.key
     );
 

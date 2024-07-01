@@ -8,7 +8,7 @@ use terrors::OneOf;
 use thiserror::Error;
 use zerovec::{make_varule, maps::ZeroMapKV, ule::VarULE, vecs::Index32, VarZeroSlice, VarZeroVec};
 
-use crate::{data::{ByteOwned, BytePacked, Login, LoginPassword}, error::WrapErrorOneOf, state::State, Claims};
+use crate::{data::{ByteOwned, BytePacked, Login, LoginPassword, ByteSerial}, error::WrapErrorOneOf, state::State, Claims};
 
 pub type TableStore = (String, String, String);
 
@@ -298,7 +298,7 @@ pub fn set_login_field_write(
     application: &str,
     user_id: &str,
     password_file: Option<String>,
-    claims: Option<BytePacked<Claims>>,
+    claims: Option<&BytePacked<Claims>>,
     options: SetLoginOptions,
 ) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
     // One of the two must be set
@@ -373,11 +373,11 @@ pub fn get_login(
     }
 }
 
-pub fn get_login_claims_subset_bytes<S: AsRef<str>>(
+pub fn get_login_claims_bytes<S: AsRef<str>>(
     state: &impl State,
     application: &str,
     user_id: &str,
-    requested_claims: Vec<S>,
+    requested_claims: Option<Vec<S>>,
 ) -> Result<Option<ByteOwned<Claims>>, DbError> {
     let read_txn = state.db().begin_read()?;
     let tables = state.tables().app(application);
@@ -390,10 +390,15 @@ pub fn get_login_claims_subset_bytes<S: AsRef<str>>(
         let login_bytes = access.value();
 
         let login = Login::deserialize(login_bytes);
-        let claim_view = login.claims.deserialize();
-        let subset_bytes = claim_view.subset_serialize(&requested_claims);
+        
+        let claim_bytes = if let Some(subset) = requested_claims {
+            let claim_view = login.claims.deserialize();
+            claim_view.subset_serialize(&subset)
+        } else {
+            login.claims.to_owned()
+        };
 
-        Ok(Some(subset_bytes))
+        Ok(Some(claim_bytes))
     } else {
         Ok(None)
     }
@@ -540,55 +545,10 @@ mod tests {
 
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);
-        //assert_eq!(value.claims.take(), read_login.claims.take());
-    }
-    use serde::{Deserialize, Serialize};
-    use zerovec::ZeroMap;
 
-    
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
-    struct Data<'a> {
-        #[serde(borrow)]
-        map: ZeroMap<'a, u32, str>,
+        let read_login = get_login_claims_bytes(&state, app, &value.user_id, None::<Vec<String>>).unwrap().unwrap();
+        //let claims_view = Claims::deserialize(read_login.as_packed().as_bytes());
+        assert_eq!(claims_bytes, read_login);
     }
 
-
-    #[test]
-    fn test_zero_vec() {
-        let claims_bytes = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]).serialize();
-        let pre_login = Login {
-            user_id: "hi".to_owned(),
-            password_file: "pw".to_owned(),
-            claims: claims_bytes.as_packed(),
-        };
-
-        let app = "abc";
-
-        let state = TestState::setup_test(vec![app]);
-
-        let bytes = rmp_serde::to_vec_named(&data).unwrap();
-            
-        let tables = state.tables().app(app);
-        let write_txn = state.db().begin_write().unwrap();
-        {
-            let mut table = write_txn.open_table(tables.users()).unwrap();
-            table.insert(user_id, bytes.as_slice()).unwrap();
-        }
-        write_txn.commit().unwrap();
-
-        set_login(&state, &pre_login, app).unwrap();
-
-        let read_txn = state.db().begin_read().unwrap();
-
-        let table = read_txn.open_table(tables.users()).unwrap();
-
-        let access = table.get(user_id).unwrap();
-
-        let access = access.unwrap();
-        let access_bytes = access.value();
-    
-        let deserialized: Data = rmp_serde::from_slice(access_bytes).unwrap();
-
-        println!("{:?}", deserialized);
-    }
 }

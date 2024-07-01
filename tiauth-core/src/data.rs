@@ -91,6 +91,19 @@ impl<'a> Login<'a> {
     }
 }
 
+impl<T> ToOwned for BytePacked<T> 
+    where T: ByteSerial
+{
+    type Owned = ByteOwned<T>;
+
+    fn to_owned(&self) -> Self::Owned {
+        ByteOwned {
+            phantom: PhantomData,
+            bytes: self.bytes.to_vec()
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 #[repr(transparent)]
 pub struct BytePacked<T>
@@ -116,6 +129,10 @@ impl<T> ByteOwned<T>
             bytes,
             phantom: PhantomData
         }
+    }
+
+    pub fn as_packed(&self) -> &BytePacked<T> {
+        <Self as Borrow<_>>::borrow(&self)
     }
 }
 

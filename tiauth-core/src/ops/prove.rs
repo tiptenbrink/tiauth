@@ -109,7 +109,7 @@ pub fn create_proof<T: ByteSerial>(application: &str,
     action: ActionType,
     target: Target,
     target_data: TargetList,
-    data: BytePacked<T>,
+    data: &BytePacked<T>,
     key: &Key) -> Proof<T> {
     let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -231,7 +231,7 @@ impl Session {
 pub fn create_session(application: &str,
     user_id: &str,
     expires_in: u64,
-    session_claims: BytePacked<Claims>,
+    session_claims: &BytePacked<Claims>,
     key: &SessionKey) -> Session {
     let issued = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -284,7 +284,7 @@ pub mod test_util {
         application: &str,
         user_id: &str,
         expires_in: Option<u64>,
-        claims: BytePacked<Claims>,
+        claims: &BytePacked<Claims>,
     ) -> Proof<Claims> {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);

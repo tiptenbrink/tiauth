@@ -6,12 +6,13 @@ use crate::data::{LEEWAY};
 use crate::error::WrapErrorOneOf;
 use crate::prove::{create_session, Session};
 use crate::state::State;
-use crate::store::{get_login, get_login_claims_subset_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
+use crate::store::{get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
 use crate::util::nonce_384;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
 use rmp_serde::encode;
+use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -76,7 +77,7 @@ fn login_session<S: AsRef<str>>(
     request: &str,
     nonce: &str,
     secret: &str,
-    requested_claims: Vec<S>,
+    requested_claims: Option<Vec<S>>,
 ) -> Result<Session, OneOf<(Error, OpaqueError)>> {
     let (server_secret, user_id) = login_finish(state, application, request, nonce)?;
 
@@ -84,12 +85,12 @@ fn login_session<S: AsRef<str>>(
         panic!("Secrets do not match, invalid login!")
     }
 
-    let claims = get_login_claims_subset_bytes(state, application, &user_id, requested_claims)
+    let claims = get_login_claims_bytes(state, application, &user_id, requested_claims)
         .to_one_of_two()?.unwrap();
 
     let key = &state.private().session;
 
-    let session = create_session(application, &user_id, EXPIRE_TIME, claims.as_packed(), key);
+    let session = create_session(application, &user_id, EXPIRE_TIME, claims.borrow(), key);
 
     Ok(session)
 }
@@ -109,6 +110,7 @@ pub mod test_util {
         application: &str,
         password: &str,
         claims: Option<&Proof<Claims>>,
+        // empty vec is no claims, none is all claims (default)
         session_claims: Option<Vec<&str>>,
     ) -> Session {
         register_flow(state, user_id, application, password, None, claims);
@@ -125,7 +127,7 @@ pub mod test_util {
             &request,
             &nonce,
             &secret,
-            session_claims.unwrap_or_default(),
+            session_claims,
         )
         .unwrap()
     }
@@ -184,7 +186,7 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let session = login_session(&state, app, &request, &nonce, &secret, vec!["email"]).unwrap();
+        let session = login_session(&state, app, &request, &nonce, &secret, Some(vec!["email"])).unwrap();
 
         todo!();
         //assert!(!session.);
