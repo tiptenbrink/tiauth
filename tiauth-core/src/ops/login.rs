@@ -89,7 +89,7 @@ fn login_session<S: AsRef<str>>(
 
     let key = &state.private().session;
 
-    let session = create_session(application, &user_id, EXPIRE_TIME, BytePacked::new(&claims), key);
+    let session = create_session(application, &user_id, EXPIRE_TIME, claims.as_packed(), key);
 
     Ok(session)
 }

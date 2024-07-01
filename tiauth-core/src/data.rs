@@ -91,10 +91,37 @@ impl<'a> Login<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct BytePacked<'a, T> 
+pub struct BytePacked<'a, T>
+    where T: ByteSerial
 {
     bytes: &'a [u8],
     phantom: PhantomData<T>
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ByteOwned<T>
+    where T: ByteSerial
+{
+    bytes: Vec<u8>,
+    phantom: PhantomData<T>
+}
+
+impl<T> ByteOwned<T> 
+    where T: ByteSerial
+{
+    
+    pub fn as_packed(&self) -> BytePacked<T> {
+        BytePacked { bytes: &self.bytes, phantom: PhantomData }
+    }
+}
+
+impl<T: ByteSerial> From<Vec<u8>> for ByteOwned<T> {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            phantom: PhantomData
+        }
+    }
 }
 
 // pub trait BytePackable {
@@ -106,6 +133,7 @@ pub struct BytePacked<'a, T>
 // }
 
 impl<'a, T> BytePacked<'a, T>
+    where T: ByteSerial
 {
     pub fn new(bytes: &'a [u8]) -> Self {
         Self {
@@ -124,16 +152,35 @@ impl<'a, T> BytePacked<'a, T>
             phantom: PhantomData
         }
     }
+
+    pub fn deserialize(&'a self) -> T::Deserialized<'a> {
+        T::deserialize(&self.bytes)
+    }
 }
 
 pub trait ByteSerial {
-    fn serialize(&self) -> Vec<u8>;
+    type Deserialized<'a> where Self: 'a;
+    //fn serialize(&self) -> Vec<u8>;
 
-    fn deserialize(bytes: &[u8]) -> &Self;
+    fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a>;
 
     // fn deserialize_owned(bytes: &[u8]) -> Self;
 }
 
+impl ByteSerial for () {
+    type Deserialized<'a> = ();
+
+    fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a> {
+        if bytes.is_empty() {
+            ()
+        } else {
+            panic!("Only empty bytes can be deserialized as ()")
+        }
+    }
+}
+
+/// VarZeroVec require a "serialization" step to create and pushing to them is expensive, so it is preferred to treat them as immutable and create them only
+/// when needed from a Claims struct.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClaimsView<'a> {
     #[serde(borrow)]
@@ -148,8 +195,34 @@ pub struct Claims {
     values: Vec<Vec<u8>>
 }
 
+impl ByteSerial for Claims {
+    type Deserialized<'a> = ClaimsView<'a>;
+
+    fn deserialize(bytes: &[u8]) -> ClaimsView {
+        let view: ClaimsView = rmp_serde::from_slice(bytes).unwrap();
+        match &view.keys {
+            VarZeroVec::Owned(_) => panic!("Should be borrowed!"),
+            VarZeroVec::Borrowed(_) => (),
+            _ => todo!(),
+        };
+
+        view
+    }
+}
+
+struct ClaimsRef<'a> {
+    keys: Vec<&'a str>,
+    values: Vec<&'a [u8]>
+}
+
 impl Claims {
-    pub fn to_view(&self) -> ClaimsView {
+    pub fn serialize(&self) -> ByteOwned<Self> {
+        let view = self.to_view();
+
+        rmp_serde::to_vec(&view).unwrap().into()
+    }
+
+    fn to_view(&self) -> ClaimsView {
         let keys: VarZeroVec<str, Index32> = VarZeroVec::from(&self.keys);
         let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&self.values);
 
@@ -177,7 +250,7 @@ impl<'a> ClaimsView<'a> {
     /// Smarter still, you pick the middle element from the subset, allowing you to split the claims in two. Now the left part of the subset can only be in the left part of the claims,
     /// and the right part of the subset only in the right part of the claims. This even allows parallelizing, although in practice the performance improvement is not huge, especially
     /// when there are not a lot of free threads lying around, like for a webserver. 
-    fn subset_vec(&self, subset: &[String]) -> Vec<(String, Vec<u8>)> {
+    fn subset_vec<S: AsRef<str>>(&self, subset: &[S]) -> Vec<(String, Vec<u8>)> {
         let mut vec_out = Vec::with_capacity(subset.len());
         let linear_len = self.keys.len() as f32;
         // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
@@ -197,7 +270,7 @@ impl<'a> ClaimsView<'a> {
         vec_out
     }
 
-    fn subset_serialize(&self, subset: &[String]) -> Vec<u8> {
+    fn subset_serialize_msgpack<S: AsRef<str>>(&self, subset: &[S]) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         rmp::encode::write_map_len(&mut buf, subset.len() as u32).unwrap();
 
@@ -221,8 +294,38 @@ impl<'a> ClaimsView<'a> {
         buf
     }
 
-    pub fn subset_linear<F, O>(&self, subset: &[String], out: &mut O, action: F)
-        where F: Fn(&mut O, (&str, &[u8])) -> ()
+    /// This is 4-5x slower than the above, so in the future maybe write specialized custom "varzerovec" that allows more efficient push.
+    pub fn subset_serialize<S: AsRef<str>>(&self, subset: &[S]) -> ByteOwned<Claims> {
+        let keys: Vec<String> = Vec::with_capacity(self.keys.len());
+        let values: Vec<Vec<u8>> = Vec::with_capacity(self.keys.len());
+
+        let mut out = Claims {
+            keys,
+            values
+        };
+
+        let linear_len = self.keys.len() as f32;
+        // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
+        // We prefer the binary split in most cases
+        let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
+
+        if ops_binary > linear_len {
+            self.subset_linear(&subset, &mut out, |claims, (s, v)| {
+                claims.keys.push(s.to_string());
+                claims.values.push(v.to_vec());
+            });
+        } else {
+            self.subset_binary_split(&subset, &mut out, |claims, (s, v)| {
+                claims.keys.push(s.to_string());
+                claims.values.push(v.to_vec());
+            });
+        }
+
+        out.serialize()
+    }
+
+    fn subset_linear<F, O, S>(&self, subset: &[S], out: &mut O, action: F)
+        where F: Fn(&mut O, (&str, &[u8])) -> (), S: AsRef<str>
     {
         let subset_len = subset.len();
         assert!(subset_len > 0);
@@ -230,7 +333,7 @@ impl<'a> ClaimsView<'a> {
         let mut current = &subset[i];
 
         for (k_i, k) in self.keys.iter().enumerate() {
-            if current == k {
+            if current.as_ref() == k {
                 action(out, (k, &self.values[k_i]));
                 i += 1;
                 if i == subset.len() {
@@ -242,13 +345,13 @@ impl<'a> ClaimsView<'a> {
         }
     }
 
-    pub fn subset_binary_split<F, O>(&self, subset: &[String], out: &mut O, action: F)
-        where F: Fn(&mut O, (&str, &[u8])) -> ()
+    fn subset_binary_split<F, O, S>(&self, subset: &[S], out: &mut O, action: F)
+        where F: Fn(&mut O, (&str, &[u8])) -> (), S: AsRef<str>
     {        
         let start = 0;
         let end = self.keys.len();
 
-        let mut queue: Vec<(Range<usize>, &[String])> = vec![(start..end, &subset)];
+        let mut queue: Vec<(Range<usize>, &[S])> = vec![(start..end, &subset)];
         while queue.len() > 0 {
             let (range, subset_slice) = queue.pop().unwrap();
             if subset_slice.len() == 0 {
@@ -257,9 +360,9 @@ impl<'a> ClaimsView<'a> {
 
             let middle_element_i = subset_slice.len()/2;
             let middle_element = &subset_slice[middle_element_i];
-            if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element, range.clone()).unwrap() {
+            if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element.as_ref(), range.clone()).unwrap() {
                 let k_i = rel_k_i+range.start;
-                action(out, (middle_element.as_str(), &self.values[k_i]));
+                action(out, (middle_element.as_ref(), &self.values[k_i]));
                 
                 let left = range.start..k_i;
                 let right = k_i+1..range.end;
@@ -449,6 +552,7 @@ pub struct ProofAbout {
 
 #[derive(Debug)]
 pub struct ProofContent<'a, T>
+    where T: ByteSerial
 {
     pub about: ProofAbout,
     pub nonce: Vec<u8>,
@@ -456,7 +560,9 @@ pub struct ProofContent<'a, T>
     pub data: BytePacked<'a, T>,
 }
 
-impl<'a, T> ProofContent<'a, T> {
+impl<'a, T> ProofContent<'a, T> 
+    where T: ByteSerial
+{
     pub fn new(
         application: &str,
         expires: u64,
@@ -634,6 +740,8 @@ mod test {
     use rand::{Rng, RngCore};
     use zerovec::{maps::MutableZeroVecLike, vecs::VarZeroVecOwned};
 
+    use crate::test::TestState;
+
     use super::*;
 
     #[test]
@@ -647,7 +755,7 @@ mod test {
         let mut keys_in = Vec::new();
         let mut values_in: Vec<Vec<u8>> = Vec::new();
         let r_end: u32 = 20000;
-        let sub_size = 3;
+        let sub_size = 19900;
         let r: Range<u32> = 0..r_end;
         
         println!("elapsed pre: {} ms", start.elapsed().as_secs_f32()*1000f32);
@@ -720,6 +828,14 @@ mod test {
         let mut s3: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
         let s3 = claims.subset_serialize(&subset);
+        let t_e = Instant::now();
+        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+
+        let state = TestState::setup_test(vec!["app"]);
+
+        let mut s4: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
+        let t = Instant::now();
+        let s4 = claims.subset_serialize_msgpack(&subset);
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
         // assert_eq!(s3.len(), subset.len());

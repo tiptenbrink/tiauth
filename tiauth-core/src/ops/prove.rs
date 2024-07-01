@@ -104,7 +104,7 @@ impl<T> Proof<T> {
     }
 }
 
-pub fn create_proof<T>(application: &str,
+pub fn create_proof<T: ByteSerial>(application: &str,
     expires_in: u64,
     action: ActionType,
     target: Target,
@@ -121,14 +121,14 @@ pub fn create_proof<T>(application: &str,
     write_proof(&content, key)
 }
 
-fn write_proof<T>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
+fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
     let content = proof_content.to_bytes();
     let signature = sign_data(key, &content);
 
     Proof { content, signature, phantom: PhantomData }
 }
 
-pub fn verify_proof_content<'a, 'b, T>(
+pub fn verify_proof_content<'a, 'b, T: ByteSerial>(
     proof_bytes: &'a Proof<T>,
     public_key: &'b PublicKey,
     verify: AboutVerify,
@@ -168,7 +168,7 @@ pub fn verify_proof_content<'a, 'b, T>(
     }
 }
 
-pub fn verify_proof_write<T>(
+pub fn verify_proof_write<T: ByteSerial>(
     state: &impl State,
     write_txn: &WriteTransaction,
     content: &mut ProofContent<T>,
@@ -194,7 +194,7 @@ pub fn verify_proof_write<T>(
     Ok(())
 }
 
-pub fn verify_proof<'a, T>(
+pub fn verify_proof<'a, T: ByteSerial>(
     state: &impl State,
     proof: &'a Proof<T>,
     verify: AboutVerify,

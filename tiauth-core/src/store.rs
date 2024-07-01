@@ -8,7 +8,7 @@ use terrors::OneOf;
 use thiserror::Error;
 use zerovec::{make_varule, maps::ZeroMapKV, ule::VarULE, vecs::Index32, VarZeroSlice, VarZeroVec};
 
-use crate::{data::{BytePacked, Login, LoginPassword}, error::WrapErrorOneOf, state::State, Claims};
+use crate::{data::{ByteOwned, BytePacked, Login, LoginPassword}, error::WrapErrorOneOf, state::State, Claims};
 
 pub type TableStore = (String, String, String);
 
@@ -378,7 +378,7 @@ pub fn get_login_claims_subset_bytes<S: AsRef<str>>(
     application: &str,
     user_id: &str,
     requested_claims: Vec<S>,
-) -> Result<Option<Vec<u8>>, DbError> {
+) -> Result<Option<ByteOwned<Claims>>, DbError> {
     let read_txn = state.db().begin_read()?;
     let tables = state.tables().app(application);
 
@@ -390,8 +390,10 @@ pub fn get_login_claims_subset_bytes<S: AsRef<str>>(
         let login_bytes = access.value();
 
         let login = Login::deserialize(login_bytes);
+        let claim_view = login.claims.deserialize();
+        let subset_bytes = claim_view.subset_serialize(&requested_claims);
 
-        Ok(Some(Vec::new()))
+        Ok(Some(subset_bytes))
     } else {
         Ok(None)
     }
