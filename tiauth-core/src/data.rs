@@ -13,14 +13,15 @@ use rmp_serde::encode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use zerovec::maps::ZeroVecLike;
-use zerovec::vecs::Index32;
+use zerovec::vecs::{Index32, VarZeroVecOwned};
 use zerovec::VarZeroVec;
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::{Cursor, Read};
 use std::marker::PhantomData;
 use std::ops::{self, Range};
-use std::str;
+use std::{mem, str};
 /// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
@@ -36,7 +37,7 @@ struct ClaimsBytes(ByteBuf);
 pub struct Login<'a> {
     pub user_id: String,
     pub password_file: String,
-    pub claims: BytePacked<'a, Claims>,
+    pub claims: &'a BytePacked<Claims>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -91,11 +92,12 @@ impl<'a> Login<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct BytePacked<'a, T>
+#[repr(transparent)]
+pub struct BytePacked<T>
     where T: ByteSerial
 {
-    bytes: &'a [u8],
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
+    bytes: [u8]
 }
 
 #[derive(Debug, PartialEq)]
@@ -109,9 +111,19 @@ pub struct ByteOwned<T>
 impl<T> ByteOwned<T> 
     where T: ByteSerial
 {
-    
-    pub fn as_packed(&self) -> BytePacked<T> {
-        BytePacked { bytes: &self.bytes, phantom: PhantomData }
+    fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            phantom: PhantomData
+        }
+    }
+}
+
+impl<T> Borrow<BytePacked<T>> for ByteOwned<T> 
+    where T: ByteSerial
+{
+    fn borrow(&self) -> &BytePacked<T> {
+        BytePacked::new(&self.bytes)
     }
 }
 
@@ -132,43 +144,43 @@ impl<T: ByteSerial> From<Vec<u8>> for ByteOwned<T> {
 //     }
 // }
 
-impl<'a, T> BytePacked<'a, T>
+
+impl<T> BytePacked<T>
     where T: ByteSerial
 {
-    pub fn new(bytes: &'a [u8]) -> Self {
-        Self {
-            bytes,
-            phantom: PhantomData
-        }
+    pub fn new<'a>(bytes: &'a [u8]) -> &'a Self {
+        //unsafe { mem::transmute(&*bytes) }
+        unsafe { &*(bytes as *const [u8] as *const BytePacked<T>) }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        self.bytes
+        &self.bytes
     }
 
-    pub fn empty() -> Self {
-        Self {
-            bytes: &[],
-            phantom: PhantomData
-        }
+    pub fn empty() -> &'static Self {
+        Self::new(&[])
     }
 
-    pub fn deserialize(&'a self) -> T::Deserialized<'a> {
+    pub fn deserialize<'a>(&'a self) -> T::Deserialized<'a> {
         T::deserialize(&self.bytes)
     }
 }
 
 pub trait ByteSerial {
     type Deserialized<'a> where Self: 'a;
-    //fn serialize(&self) -> Vec<u8>;
+    fn serialize(&self) -> ByteOwned<Self> where Self: Sized;
 
     fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a>;
 
-    // fn deserialize_owned(bytes: &[u8]) -> Self;
+    fn deserialize_owned(bytes: &[u8]) -> Self;
 }
 
 impl ByteSerial for () {
     type Deserialized<'a> = ();
+
+    fn serialize(&self) -> ByteOwned<Self> {
+        ByteOwned::new(Vec::with_capacity(0))
+    }
 
     fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a> {
         if bytes.is_empty() {
@@ -177,6 +189,12 @@ impl ByteSerial for () {
             panic!("Only empty bytes can be deserialized as ()")
         }
     }
+    
+    fn deserialize_owned(bytes: &[u8]) -> Self {
+        <Self as ByteSerial>::deserialize(bytes)
+    }
+    
+    
 }
 
 /// VarZeroVec require a "serialization" step to create and pushing to them is expensive, so it is preferred to treat them as immutable and create them only
@@ -198,6 +216,13 @@ pub struct Claims {
 impl ByteSerial for Claims {
     type Deserialized<'a> = ClaimsView<'a>;
 
+    fn serialize(&self) -> ByteOwned<Self> {
+        let view = self.to_view();
+
+        ByteOwned::new(rmp_serde::to_vec(&view).unwrap().into())
+    }
+    
+
     fn deserialize(bytes: &[u8]) -> ClaimsView {
         let view: ClaimsView = rmp_serde::from_slice(bytes).unwrap();
         match &view.keys {
@@ -208,6 +233,19 @@ impl ByteSerial for Claims {
 
         view
     }
+
+    /// Note that this is quite expensive, as it has to iterate and clone the data. You probably don't want to use this.
+    fn deserialize_owned(bytes: &[u8]) -> Self {
+        let view = <Self as ByteSerial>::deserialize(bytes);
+        let keys = view.keys.iter().map(|t| t.to_owned()).collect();
+        let values = view.values.iter().map(|t| t.to_vec()).collect();
+        Self {
+            keys,
+            values
+        }
+    }
+    
+    
 }
 
 struct ClaimsRef<'a> {
@@ -216,10 +254,19 @@ struct ClaimsRef<'a> {
 }
 
 impl Claims {
-    pub fn serialize(&self) -> ByteOwned<Self> {
-        let view = self.to_view();
+    pub fn new<S, V>(map: Vec<(S, V)>) -> Self
+    where
+        S: Into<String>,
+        V: AsRef<[u8]>,
+    {
+        let (keys, values) = map.into_iter().map(|(s, v)| {
+            (s.into(), v.as_ref().to_vec())
+        }).unzip();
 
-        rmp_serde::to_vec(&view).unwrap().into()
+        Self {
+            keys,
+            values
+        }
     }
 
     fn to_view(&self) -> ClaimsView {
@@ -377,16 +424,7 @@ impl<'a> ClaimsView<'a> {
 }
 
 // impl Claims {
-    // pub fn new<S, V>(map: Vec<(S, V)>) -> Self
-    // where
-    //     S: Into<String>,
-    //     V: AsRef<[u8]>,
-    // {
-    //     Self(HashMap::from_iter(
-    //         map.into_iter()
-    //             .map(|(s, v)| (s.into(), v.as_ref().to_vec())),
-    //     ))
-    // }
+
 
 //     pub fn none() -> Self {
 //         Self(HashMap::new())
@@ -413,7 +451,7 @@ pub struct SessionContent<'a> {
     pub expires: u64,
     /// These are a subset of the "login claims"
     /// They are a msgpack map
-    pub session_claims: BytePacked<'a, Claims>,
+    pub session_claims: &'a BytePacked<Claims>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -430,7 +468,7 @@ impl<'a> SessionContent<'a> {
         user_id: &str,
         issued: u64,
         expires: u64,
-        session_claims: BytePacked<'a, Claims>,
+        session_claims: &'a BytePacked<Claims>,
     ) -> Self {
 
         Self { user_id: user_id.to_owned(), application: application.to_owned(), issued, expires, session_claims }
@@ -557,7 +595,7 @@ pub struct ProofContent<'a, T>
     pub about: ProofAbout,
     pub nonce: Vec<u8>,
     pub target_data: TargetList,
-    pub data: BytePacked<'a, T>,
+    pub data: &'a BytePacked<T>,
 }
 
 impl<'a, T> ProofContent<'a, T> 
@@ -569,7 +607,7 @@ impl<'a, T> ProofContent<'a, T>
         action: ActionType,
         target: Target,
         target_data: TargetList,
-        data: BytePacked<'a, T>,
+        data: &'a BytePacked<T>,
     ) -> Self {
         let nonce = nonce_384_bytes(&mut StdRng::from_entropy());
 

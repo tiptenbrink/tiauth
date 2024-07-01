@@ -523,10 +523,11 @@ mod tests {
 
     #[test]
     fn login_set_read() {
+        let claims_bytes = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]).serialize();
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: todo!(),
+            claims: claims_bytes.as_packed(),
         };
 
         let app = "abc";
@@ -554,21 +555,12 @@ mod tests {
 
     #[test]
     fn test_zero_vec() {
-        //let claims = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]);
-
+        let claims_bytes = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]).serialize();
         let pre_login = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
-            claims: todo!(),
+            claims: claims_bytes.as_packed(),
         };
-
-        let mut map = ZeroMap::new();
-        map.insert(&1, "one");
-        map.insert(&2, "two");
-        map.insert(&4, "four");
-        let user_id = "3";
-
-        let data = Data { map };
 
         let app = "abc";
 
