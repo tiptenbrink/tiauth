@@ -248,15 +248,12 @@ pub struct ClaimsView<'a> {
     keys: VarZeroVec<'a, str, Index32>,
     #[serde(borrow)]
     values: VarZeroVec<'a, [u8], Index32>,
-    #[serde(borrow)]
-    order: ZeroVec<'a, u32>
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Claims {
     keys: Vec<String>,
     values: Vec<Vec<u8>>,
-    order: Vec<u32>
 }
 
 impl ByteSerial for Claims {
@@ -285,11 +282,9 @@ impl ByteSerial for Claims {
         let view = <Self as ByteSerial>::deserialize(bytes);
         let keys = view.keys.iter().map(|t| t.to_owned()).collect();
         let values = view.values.iter().map(|t| t.to_vec()).collect();
-        let order: Vec<u32> = view.order.iter().collect();
         Self {
             keys,
             values,
-            order
         }
     }
 }
@@ -300,18 +295,17 @@ impl Claims {
         S: Into<String>,
         V: AsRef<[u8]>,
     {
-        let (keys, values): (Vec<String>, Vec<Vec<u8>>) = map.into_iter().map(|(s, v)| {
+        let mut map: Vec<(String, Vec<u8>)> = map.into_iter().map(|(s, v)| {
             (s.into(), v.as_ref().to_vec())
-        }).unzip();
+        }).collect();
 
-        let mut order: Vec<u32> = (0u32..(keys.len() as u32)).collect();
+        map.sort_by_cached_key(|(k, _v)| k.clone());
 
-        order.sort_unstable_by_key(|&i| &keys[i as usize]);
+        let (keys, values): (Vec<String>, Vec<Vec<u8>>) = map.into_iter().unzip();
 
         Self {
             keys,
-            values,
-            order
+            values
         }
     }
 
@@ -322,12 +316,10 @@ impl Claims {
     fn to_view(&self) -> ClaimsView {
         let keys: VarZeroVec<str, Index32> = VarZeroVec::from(&self.keys);
         let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&self.values);
-        let order: ZeroVec<u32> = ZeroVec::from_iter(self.order.clone().into_iter());
 
         ClaimsView {
             keys,
             values,
-            order
         }
     }
 
@@ -408,12 +400,10 @@ impl<'a> ClaimsView<'a> {
     pub fn subset_serialize<S: AsRef<str>>(&self, subset: &[S]) -> ByteOwned<Claims> {
         let keys: Vec<String> = Vec::with_capacity(self.keys.len());
         let values: Vec<Vec<u8>> = Vec::with_capacity(self.keys.len());
-        let order: Vec<u32> = (0u32..(subset.len() as u32)).collect();
 
         let mut out = Claims {
             keys,
             values,
-            order
         };
 
         let linear_len = self.keys.len() as f32;
@@ -472,8 +462,8 @@ impl<'a> ClaimsView<'a> {
 
             let middle_element_i = subset_slice.len()/2;
             let middle_element = &subset_slice[middle_element_i];
-            // DOESNT WORK
-            if let Ok(rel_k_i) = self.order.binary_search_in_range(middle_element.as_ref(), range.clone()).unwrap() {
+
+            if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element.as_ref(), range.clone()).unwrap() {
                 let k_i = rel_k_i+range.start;
                 action(out, (middle_element.as_ref(), &self.values[k_i]));
                 
@@ -847,19 +837,18 @@ mod test {
 
     use super::*;
 
-    #[test]
-    fn create_claims_subset() {
+    fn create_claims_subset() -> (Claims, Vec<String>) {
         let start = Instant::now();
         
         let mut rng = StdRng::from_entropy();
         let mut s = [0u8; 20];
 
-        let mut subset = Vec::new();
-        let mut keys_in = Vec::new();
-        let mut values_in: Vec<Vec<u8>> = Vec::new();
-        let r_end: u32 = 20000;
-        let sub_size = 19900;
+        let r_end: u32 = 150000;
+        let sub_size = 400;
         let r: Range<u32> = 0..r_end;
+        let mut subset = Vec::with_capacity(sub_size);
+        let mut keys_in = Vec::with_capacity(r_end as usize);
+        let mut values_in: Vec<Vec<u8>> = Vec::with_capacity(r_end as usize);
         
         println!("elapsed pre: {} ms", start.elapsed().as_secs_f32()*1000f32);
         
@@ -897,19 +886,23 @@ mod test {
 
         println!("k={}, n={}", subset.len(), values_in.len());
 
-        //println!("{:?}", keys);
-
-        // let keys = keys.as_varzerovec();
-        // let values = values.as_varzerovec();
-        let keys: VarZeroVec<str, Index32> = VarZeroVec::from(&keys_in);
-        let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&values_in);
-
         println!("elapsed conv: {} ms", start.elapsed().as_secs_f32()*1000f32);
 
-        let claims = ClaimsView {
-            keys,
-            values
+        let claims = Claims {
+            keys: keys_in,
+            values: values_in
         };
+
+        (claims, subset)
+    }
+
+    #[test]
+    fn test_subset_out() {
+        let (claims, subset) = create_claims_subset();
+        let serial = claims.serialize();
+        println!("size: {} kB.", (serial.bytes.len() as f32)/1000f32);
+        let claims = claims.to_view();
+
         let mut s1: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
         let mut s1 = claims.subset_vec(&subset);
@@ -965,7 +958,56 @@ mod test {
         // assert_eq!(s1, s5);
     }
 
+    #[test]
     fn test_subset() {
+        let (claims, subset) = create_claims_subset();
+        let claims = claims.to_view();
 
+        let mut s1: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
+        let t = Instant::now();
+        claims.subset_linear(&subset, &mut s1, |out, (s, v)| {
+            out.push((s.to_string(), v.to_vec()));
+        });
+        let t_e = Instant::now();
+        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        assert_eq!(s1.len(), subset.len());
+        s1.sort();
+        //println!("elapsed s1 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        //println!("s1 {:?}", s1);
+        // let t = Instant::now();
+        // let mut s2 = claims.subset_binary(subset.clone());
+        // let t_e = Instant::now();
+        // println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        // assert_eq!(s2.len(), subset.len());
+        // s2.sort();
+        // //println!("elapsed s2 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s2);
+        //println!("s2 {:?}", s2);
+
+        // assert_eq!(s3.len(), subset.len());
+        // s3.sort();
+        // //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s3);
+
+        // let t = Instant::now();
+        // let mut s4 = claims.subset_binary_split_o(subset.clone());
+        // let t_e = Instant::now();
+        // println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        // assert_eq!(s4.len(), subset.len());
+        // s4.sort();
+        // //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        // assert_eq!(s1, s4);
+
+        let mut s5: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
+        let t = Instant::now();
+        claims.subset_binary_split(&subset, &mut s5, |out, (s, v)| {
+            out.push((s.to_string(), v.to_vec()));
+        });
+        let t_e = Instant::now();
+        println!("took {} ms.", t_e.duration_since(t).as_secs_f32()*1000f32);
+        assert_eq!(s5.len(), subset.len());
+        s5.sort();
+        //println!("elapsed s3 srt: {} ms", start.elapsed().as_secs_f32()*1000f32);
+        assert_eq!(s1, s5);
     }
 }
