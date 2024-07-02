@@ -137,7 +137,9 @@ pub mod test_util {
 mod tests {
     use super::*;
 
+    use crate::data::ByteSerial;
     use crate::ops::prove::test_util::*;
+    use crate::prove::verify_session;
     use crate::{data::Claims, state::test_util::TestState};
 
     use crate::ops::register::test_util::*;
@@ -167,8 +169,7 @@ mod tests {
 
     #[test]
     fn test_login_session() {
-        let claims = todo!();
-        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
         let user_id = "hi";
         let app = "abc";
@@ -176,7 +177,7 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let claims_proof = create_proof_claims(&state, app, user_id, None, claims);
+        let claims_proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
 
         register_flow(&state, user_id, app, password, None, Some(&claims_proof));
 
@@ -188,7 +189,8 @@ mod tests {
 
         let session = login_session(&state, app, &request, &nonce, &secret, Some(vec!["email"])).unwrap();
 
-        todo!();
-        //assert!(!session.);
+        let verified = verify_session(&state, &session).unwrap();
+
+        
     }
 }

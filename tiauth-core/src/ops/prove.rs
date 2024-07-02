@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::time::SystemTime;
 
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
-use crate::data::{AboutVerify, BytePacked, ByteSerial, InvalidProof, ProofContent, SessionContent};
+use crate::data::{AboutVerify, ByteOwned, BytePacked, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent};
 use crate::data::{LEEWAY};
 use crate::error::WrapErrorOneOf;
 use crate::state::State;
@@ -109,14 +109,14 @@ pub fn create_proof<T: ByteSerial>(application: &str,
     action: ActionType,
     target: Target,
     target_data: TargetList,
-    data: &BytePacked<T>,
+    data: impl SerializedAs<T>,
     key: &Key) -> Proof<T> {
     let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
     let expires = expires_in + now;
-    let content = ProofContent::new(application, expires, action, target, target_data, data);
+    let content = ProofContent::new(application, expires, action, target, target_data, data.serialized());
 
     write_proof(&content, key)
 }
@@ -219,49 +219,59 @@ where
 
 #[derive(Debug, PartialEq)]
 pub struct Session {
-    bytes: Vec<u8>,
+    encrypted_bytes: Vec<u8>,
 }
 
 impl Session {
     pub fn into_encoded(&self) -> String {
-        b64::URL_SAFE_NO_PAD.encode(&self.bytes)
+        b64::URL_SAFE_NO_PAD.encode(&self.encrypted_bytes)
     }
 
     pub fn raw_bytes(&self) -> &[u8] {
-        &self.bytes
+        &self.encrypted_bytes
     }
 }
 
 pub fn create_session(application: &str,
     user_id: &str,
     expires_in: u64,
-    session_claims: &BytePacked<Claims>,
+    session_claims: impl SerializedAs<Claims>,
     key: &SessionKey) -> Session {
     let issued = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
     let expires = expires_in + issued;
-    let content = SessionContent::new(application, user_id, issued, expires, session_claims);
+    let content = SessionContent::new(application, user_id, issued, expires, session_claims.serialized());
 
     Session {
-        bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy())
+        encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy())
     }
-    
+}
+
+pub struct VerifiedSession(Vec<u8>);
+
+impl VerifiedSession {
+    pub fn read(&self) -> Result<SessionContent, InvalidSession> {
+        Ok(SessionContent::from_bytes(&self.0))
+    }
 }
 
 #[derive(Debug)]
 pub struct InvalidSession {}
 
-pub fn verify_session<'a, 'b>(state: &'a impl State, session: &'b [u8]) -> Result<Vec<u8>, InvalidSession> {
-    let session = crypto::session_decrypt(session, &state.private().session)
+pub fn verify_session<'a, 'b>(state: &impl State, session_encrypted: &Session) -> Result<VerifiedSession, InvalidSession> {
+    let session_decrypted = crypto::session_decrypt(&session_encrypted.encrypted_bytes, &state.private().session)
         .map_err(|_e| InvalidSession {})?;
 
-    Ok(session)
+    Ok(VerifiedSession(session_decrypted))
 }
+
+
+
 #[cfg(feature = "test")]
 pub mod test_util {
-    use crate::data::{BytePacked, EXPIRE_TIME};
+    use crate::data::{BytePacked, SerializedAs, EXPIRE_TIME};
     use crate::data::{ActionType, Claims, Target, TargetList};
     use crate::state::test_util::*;
     use std::time::UNIX_EPOCH;
@@ -288,7 +298,7 @@ pub mod test_util {
         application: &str,
         user_id: &str,
         expires_in: Option<u64>,
-        claims: &BytePacked<Claims>,
+        claims: impl SerializedAs<Claims>,
     ) -> Proof<Claims> {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);
@@ -316,32 +326,19 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        //let claims: Claims = todo!();
-        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
-        let session = create_session(user_id, app, EXPIRE_TIME, todo!(), &state.private().session);
+        let session = create_session(user_id, app, EXPIRE_TIME, claims.serialize(), &state.private().session);
 
         let session = verify_session(
             &state,
-            &session.bytes,
+            &session,
         )
         .unwrap();
 
-
-        todo!();
-        // let claims = session.session_claims.0;
-
-        // assert_eq!(
-        //     claims
-        //         .iter()
-        //         .filter(|(k, v)| {
-        //             *k == "email" && std::str::from_utf8(v).unwrap() == "hi@abc.nl"
-        //         })
-        //         .count(),
-        //     1
-        // );
-
-        // assert_eq!(claims.len(), 2);
+        let session_read = session.read().unwrap();
+        let session_claims = session_read.session_claims.deserialize();
+        assert!(claims.eq_view(&session_claims));
     }
 
     #[derive(Debug, Deserialize)]
@@ -363,7 +360,7 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
-        let proof = create_proof_claims(&state, app, user_id, None, claims.serialize().as_packed());
+        let proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
 
         let proof_content = verify_proof(
             &state,
@@ -372,9 +369,9 @@ mod tests {
         )
         .unwrap();
 
-        let deser_claims = proof_content.data.deserialize_owned();
+        let deser_claims = proof_content.data.deserialize();
 
-        assert_eq!(claims, deser_claims);
+        assert!(claims.eq_view(&deser_claims));
         assert_eq!(app, proof_content.about.application);
     }
 }

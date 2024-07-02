@@ -8,7 +8,7 @@ use terrors::OneOf;
 use thiserror::Error;
 use zerovec::{make_varule, maps::ZeroMapKV, ule::VarULE, vecs::Index32, VarZeroSlice, VarZeroVec};
 
-use crate::{data::{ByteOwned, BytePacked, Login, LoginPassword, ByteSerial}, error::WrapErrorOneOf, state::State, Claims};
+use crate::{data::{ByteOwned, BytePacked, ByteSerial, Login, LoginPassword, SerializedAs}, error::WrapErrorOneOf, state::State, Claims};
 
 pub type TableStore = (String, String, String);
 
@@ -298,7 +298,7 @@ pub fn set_login_field_write(
     application: &str,
     user_id: &str,
     password_file: Option<String>,
-    claims: Option<&BytePacked<Claims>>,
+    claims: Option<impl SerializedAs<Claims>>,
     options: SetLoginOptions,
 ) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
     // One of the two must be set
@@ -326,21 +326,32 @@ pub fn set_login_field_write(
                 user.password_file = password_file;
             }
             if let Some(claims) = claims {
-                user.claims = claims;
-            }
-            user.serialize()
+                user.claims = claims.serialized();
+                user.serialize()
+            } else {
+                user.serialize()
+            } 
         } else if options.create_user {
             // Password file must contain value when creating user!
             assert!(password_file.is_some());
-
-            let login = Login {
-                user_id: user_id.to_owned(),
-                password_file: password_file.unwrap(),
-                claims: todo!(),
-                // claims: claims.unwrap_or_else(|| Claims::none().into()),
-            };
-
-            login.serialize()
+            if let Some(claims) = claims {
+                let login = Login {
+                    user_id: user_id.to_owned(),
+                    password_file: password_file.unwrap(),
+                    claims: claims.serialized()
+                };
+    
+                login.serialize()
+            } else {
+                let claims = Claims::empty().serialize();
+                let login = Login {
+                    user_id: user_id.to_owned(),
+                    password_file: password_file.unwrap(),
+                    claims: claims.as_packed()
+                };
+    
+                login.serialize()
+            }
         } else {
             return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
         }

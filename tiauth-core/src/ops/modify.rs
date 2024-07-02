@@ -1,14 +1,14 @@
 use super::prove::{verify_proof_content, verify_session};
-use crate::data::{AboutVerify, ActionType, InvalidProof, ProofContent, SessionContent, CHANGE_AGE, DELETE_AGE, LEEWAY};
+use crate::data::{AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, SessionContent, CHANGE_AGE, DELETE_AGE, LEEWAY};
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
-use crate::prove::Proof;
+use crate::prove::{Proof, Session};
 use crate::state::State;
 use crate::store::{
     set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
 };
 use crate::util::nonce_384;
-use crate::Tables;
+use crate::{Claims, Tables};
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -64,7 +64,7 @@ fn reset_password(
             application,
             &user_id,
             Some("".to_owned()),
-            None,
+            None::<ByteOwned<Claims>>,
             SetLoginOptions::new(false, false),
         )
         .map_err(OneOf::broaden)?;
@@ -87,9 +87,9 @@ fn reset_password(
     Ok(set_nonce)
 }
 
-fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, OneOf<(DbError,)>> {
-    let session_bytes = verify_session(state, raw_session).unwrap();
-    let session = SessionContent::from_bytes(&session_bytes);
+fn change_password(state: &impl State, session_encrypted: &Session) -> Result<String, OneOf<(DbError,)>> {
+    let verified = verify_session(state, session_encrypted).unwrap();
+    let session = verified.read().unwrap();
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -119,7 +119,7 @@ fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, One
     {
         let table = write_txn.open_table(tables.sessions()).into_one_of()?;
 
-        let result = table.get(raw_session).into_one_of()?;
+        let result = table.get(session_encrypted.raw_bytes()).into_one_of()?;
 
         if result.is_some() {
             panic!("Session has been revoked!");
@@ -139,9 +139,9 @@ fn change_password(state: &impl State, raw_session: &[u8]) -> Result<String, One
     Ok(change_nonce)
 }
 
-fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), OneOf<(DbError,)>> {
-    let session_bytes = verify_session(state, raw_session).unwrap();
-    let session = SessionContent::from_bytes(&session_bytes);
+fn session_delete_user(state: &impl State, session_encrypted: &Session) -> Result<(), OneOf<(DbError,)>> {
+    let verified = verify_session(state, session_encrypted).unwrap();
+    let session = verified.read().unwrap();
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -170,7 +170,7 @@ fn session_delete_user(state: &impl State, raw_session: &[u8]) -> Result<(), One
             .map_err(OneOf::broaden)?;
 
         let result = table
-            .get(raw_session)
+            .get(session_encrypted.raw_bytes())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
@@ -285,7 +285,7 @@ mod tests {
 
         let session = login_create_session(&state, user_id, app, password, None, None);
 
-        let nonce = change_password(&state, &session.raw_bytes()).unwrap();
+        let nonce = change_password(&state, &session).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
         let initial_pw_file = login.password_file;
@@ -309,7 +309,7 @@ mod tests {
 
         let session = login_create_session(&state, user_id, app, password, None, None);
 
-        session_delete_user(&state, &session.raw_bytes()).unwrap();
+        session_delete_user(&state, &session).unwrap();
 
         let login = get_login(&state, app, user_id).unwrap();
 

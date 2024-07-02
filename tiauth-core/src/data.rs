@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use zerovec::maps::ZeroVecLike;
 use zerovec::vecs::{Index32, VarZeroVecOwned};
-use zerovec::VarZeroVec;
+use zerovec::{VarZeroVec, ZeroVec};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -196,15 +196,27 @@ pub trait ByteSerial {
     fn deserialize_owned(bytes: &[u8]) -> Self;
 }
 
-// pub trait SerializableAs<T> {
-//     type Deserialized<'a> where Self: 'a;
+pub trait SerializedAs<T>
+    where T: ByteSerial
+{
+    fn serialized(&self) -> &BytePacked<T>;
+}
 
-//     fn serialize(&self) -> ByteOwned<T> where Self: Sized;
+impl<T> SerializedAs<T> for ByteOwned<T>
+    where T: ByteSerial
+{
+    fn serialized(&self) -> &BytePacked<T> {
+        &self.as_packed()
+    }
+}
 
-//     fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a>;
-
-//     fn deserialize_owned(bytes: &[u8]) -> T;
-// }
+impl<T> SerializedAs<T> for &BytePacked<T>
+    where T: ByteSerial
+{
+    fn serialized(&self) -> &BytePacked<T> {
+        &self
+    }
+}
 
 impl ByteSerial for () {
     type Deserialized<'a> = ();
@@ -235,13 +247,16 @@ pub struct ClaimsView<'a> {
     #[serde(borrow)]
     keys: VarZeroVec<'a, str, Index32>,
     #[serde(borrow)]
-    values: VarZeroVec<'a, [u8], Index32>
+    values: VarZeroVec<'a, [u8], Index32>,
+    #[serde(borrow)]
+    order: ZeroVec<'a, u32>
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Claims {
     keys: Vec<String>,
-    values: Vec<Vec<u8>>
+    values: Vec<Vec<u8>>,
+    order: Vec<u32>
 }
 
 impl ByteSerial for Claims {
@@ -270,18 +285,13 @@ impl ByteSerial for Claims {
         let view = <Self as ByteSerial>::deserialize(bytes);
         let keys = view.keys.iter().map(|t| t.to_owned()).collect();
         let values = view.values.iter().map(|t| t.to_vec()).collect();
+        let order: Vec<u32> = view.order.iter().collect();
         Self {
             keys,
-            values
+            values,
+            order
         }
     }
-    
-    
-}
-
-struct ClaimsRef<'a> {
-    keys: Vec<&'a str>,
-    values: Vec<&'a [u8]>
 }
 
 impl Claims {
@@ -290,24 +300,46 @@ impl Claims {
         S: Into<String>,
         V: AsRef<[u8]>,
     {
-        let (keys, values) = map.into_iter().map(|(s, v)| {
+        let (keys, values): (Vec<String>, Vec<Vec<u8>>) = map.into_iter().map(|(s, v)| {
             (s.into(), v.as_ref().to_vec())
         }).unzip();
 
+        let mut order: Vec<u32> = (0u32..(keys.len() as u32)).collect();
+
+        order.sort_unstable_by_key(|&i| &keys[i as usize]);
+
         Self {
             keys,
-            values
+            values,
+            order
         }
+    }
+
+    pub fn empty() -> Self {
+        Self::new::<String, Vec<u8>>(vec![])
     }
 
     fn to_view(&self) -> ClaimsView {
         let keys: VarZeroVec<str, Index32> = VarZeroVec::from(&self.keys);
         let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&self.values);
+        let order: ZeroVec<u32> = ZeroVec::from_iter(self.order.clone().into_iter());
 
         ClaimsView {
             keys,
-            values
+            values,
+            order
         }
+    }
+
+    pub fn eq_view(&self, other: &ClaimsView) -> bool {
+        self.keys.len() == other.keys.len() 
+        && self.keys.iter().enumerate().all(|(i, k)| {
+            k == &other.keys[i]
+        }) 
+        && self.values.len() == other.values.len()
+        && self.values.iter().enumerate().all(|(i, v)| {
+            v == &other.values[i]
+        })
     }
 }
 
@@ -376,10 +408,12 @@ impl<'a> ClaimsView<'a> {
     pub fn subset_serialize<S: AsRef<str>>(&self, subset: &[S]) -> ByteOwned<Claims> {
         let keys: Vec<String> = Vec::with_capacity(self.keys.len());
         let values: Vec<Vec<u8>> = Vec::with_capacity(self.keys.len());
+        let order: Vec<u32> = (0u32..(subset.len() as u32)).collect();
 
         let mut out = Claims {
             keys,
-            values
+            values,
+            order
         };
 
         let linear_len = self.keys.len() as f32;
@@ -438,7 +472,8 @@ impl<'a> ClaimsView<'a> {
 
             let middle_element_i = subset_slice.len()/2;
             let middle_element = &subset_slice[middle_element_i];
-            if let Ok(rel_k_i) = self.keys.binary_search_in_range(middle_element.as_ref(), range.clone()).unwrap() {
+            // DOESNT WORK
+            if let Ok(rel_k_i) = self.order.binary_search_in_range(middle_element.as_ref(), range.clone()).unwrap() {
                 let k_i = rel_k_i+range.start;
                 action(out, (middle_element.as_ref(), &self.values[k_i]));
                 
@@ -481,7 +516,6 @@ pub struct SessionContent<'a> {
     pub issued: u64,
     pub expires: u64,
     /// These are a subset of the "login claims"
-    /// They are a msgpack map
     pub session_claims: &'a BytePacked<Claims>,
 }
 
