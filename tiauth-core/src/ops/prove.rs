@@ -144,10 +144,12 @@ pub fn verify_proof_content<'a, 'b, T: ByteSerial>(
     // let about = lazy_proof.inner().about.clone();
 
     if verify.application != proof_input.about.application {
+        println!("invalid app");
         return Err(OneOf::new(InvalidProof {}));
     }
     if let Some(action) = verify.action {
         if action != proof_input.about.action {
+            println!("bad action");
             return Err(OneOf::new(InvalidProof {}));
         }
     }
@@ -158,12 +160,14 @@ pub fn verify_proof_content<'a, 'b, T: ByteSerial>(
         .as_secs();
 
     if time > proof_input.about.expires + LEEWAY {
+        println!("expired");
         return Err(OneOf::new(InvalidProof {}));
     };
 
     if verify_signature(&proof_bytes.content, &proof_bytes.signature, public_key) {
         Ok(proof_input)
     } else {
+        println!("invalid sig");
         Err(OneOf::new(InvalidProof {}))
     }
 }
@@ -288,19 +292,8 @@ pub mod test_util {
     ) -> Proof<Claims> {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);
-        // let claims = rmp_serde::to_vec(claims).unwrap();
-        // let claims_packed = BytePacked::new(&claims);
 
-        let content = ProofContent::new(
-            application,
-            expires_in,
-            ActionType::Set,
-            Target::Select,
-            TargetList::user(user_id),
-            claims
-        );
-
-        write_proof(&content, &key)
+        create_proof(application, expires_in, ActionType::Set, Target::Select, TargetList::user(user_id), claims, key)
     }
 }
 
@@ -369,19 +362,19 @@ mod tests {
         let app = "abc";
 
         let state = TestState::setup_test(vec![app]);
-        //let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
-        let proof = create_proof_claims(&state, app, user_id, None, todo!());
+        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let proof = create_proof_claims(&state, app, user_id, None, claims.serialize().as_packed());
 
-        let mut proof_content = verify_proof(
+        let proof_content = verify_proof(
             &state,
             &proof,
             AboutVerify::new(app, ActionType::Set),
         )
         .unwrap();
-        todo!();
-        // let unwrapped_claims = proof_content.data.inner();
 
-        // assert_eq!(claims.0, unwrapped_claims.0);
-        // assert_eq!(app, proof_content.about.application);
+        let deser_claims = proof_content.data.deserialize_owned();
+
+        assert_eq!(claims, deser_claims);
+        assert_eq!(app, proof_content.about.application);
     }
 }

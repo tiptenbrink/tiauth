@@ -181,6 +181,10 @@ impl<T> BytePacked<T>
     pub fn deserialize<'a>(&'a self) -> T::Deserialized<'a> {
         T::deserialize(&self.bytes)
     }
+
+    pub fn deserialize_owned(&self) -> T {
+        T::deserialize_owned(&self.bytes)
+    }
 }
 
 pub trait ByteSerial {
@@ -191,6 +195,16 @@ pub trait ByteSerial {
 
     fn deserialize_owned(bytes: &[u8]) -> Self;
 }
+
+// pub trait SerializableAs<T> {
+//     type Deserialized<'a> where Self: 'a;
+
+//     fn serialize(&self) -> ByteOwned<T> where Self: Sized;
+
+//     fn deserialize<'a>(bytes: &'a [u8]) -> Self::Deserialized<'a>;
+
+//     fn deserialize_owned(bytes: &[u8]) -> T;
+// }
 
 impl ByteSerial for () {
     type Deserialized<'a> = ();
