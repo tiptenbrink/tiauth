@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tiauth_core::{register, Claims, Proof, State};
-
-use crate::encoded::{B64UrlEncoded};
+use tiauth_core::Encodable;
+use crate::encoded3::{self, StrEncoded};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -35,21 +35,23 @@ pub async fn start_register(state: &impl State, request: PakeRequest) -> PakeRes
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PakeFinishRequest {
+pub struct PakeFinishRequest<'a> {
     pub application: String,
     pub opaque_request: String,
     pub register_start_nonce: String,
-    pub claims_proof: Option<B64UrlEncoded<Proof<Claims>>>,
+    #[serde(borrow)]
+    pub claims_proof: StrEncoded<'a, Proof<Claims>>,
 }
 
 pub async fn register_finish<'a>(state: &impl State, request: PakeFinishRequest<'a>) {
-    let proof: Option<Proof<Claims>> = request.claims_proof.map(|p| p.take());
+    let proof = request.claims_proof.decode().unwrap();
+    
     match register::register_finish(
         state,
         &request.application,
         &request.opaque_request,
         &request.register_start_nonce,
-        proof,
+        Some(&proof),
     ) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {

@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 /// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
+use base64::DecodeError;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
@@ -10,7 +11,7 @@ use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
 use crate::util::combine_encode;
-use crate::{ActionType, Claims, Target, TargetList};
+use crate::{ActionType, Claims, Encodable, EncodableOwned, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -23,16 +24,31 @@ pub struct Proof<T> {
     signature: Vec<u8>,
 }
 
-/// Efficiently encode multiple slices into a base64url string, allocating O(n) only once, otherwise only allocating for a maximum of 3 bytes at the boundary of the slices.
+impl<'a, T> Encodable<'a> for Proof<T> {
+    type Error = DecodeError;
 
+    fn decode(encoded: &'a str) -> Result<Self, Self::Error> where Self: Sized {
+        let mut bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
+        let total_len = bytes.len();
+        let ln = &bytes[(total_len-4)..total_len];
+        let content_length = u32::from_le_bytes([ln[0], ln[1], ln[2], ln[3]]) as usize;
+        // After this the original contains only the content
+        let mut signature = bytes.split_off(content_length);
+        signature.truncate(signature.len()-4);
 
-impl<T> Proof<T> {
-    pub fn into_encoded(self) -> String {
+        Ok(Self {
+            phantom: PhantomData,
+            content: bytes,
+            signature
+        })
+    }
+
+    fn encode(&self) -> String {
         let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
         let total_len = content_length.len() + self.content.len() + self.signature.len();
 
         combine_encode(
-            &[&content_length, &self.content, &self.signature],
+            &[&self.content, &self.signature, &content_length],
             total_len,
         )
     }

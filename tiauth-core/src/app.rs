@@ -3,7 +3,7 @@
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
 use crate::proof::create_proof;
-use crate::{Claims, Proof};
+use crate::{Claims, Encodable, Proof};
 use crate::{ActionType, Target, TargetList};
 
 pub fn create_private_key_pem() -> String {
@@ -53,7 +53,7 @@ pub fn create_set_claims_proof(
         proof_base.key,
     );
 
-    proof.into_encoded()
+    proof.encode()
 }
 
 pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
@@ -71,7 +71,7 @@ pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
         proof_base.key,
     );
 
-    proof.into_encoded()
+    proof.encode()
 }
 
 pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
@@ -88,5 +88,5 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
         proof_base.key,
     );
 
-    proof.into_encoded()
+    proof.encode()
 }
