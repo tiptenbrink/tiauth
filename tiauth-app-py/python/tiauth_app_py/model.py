@@ -1,13 +1,12 @@
 from typing import Optional
 from msgspec import msgpack, Struct
 
-type Lazy[T] = T | str | bytes
-"""The Lazy type represents a potentially serialized version of the inner type. Provide either the type itself or the serialized variant
-(either as bytes or base64url-encoded string) received from another function."""
-
 type Claims = dict[str, bytes | str]
 """Claims represent a map with string keys and bytes/string values. String values are encoded on the server as UTF-8. With this, arbitrary
 claims about the user, as verified by the application, can be stored and later retrieved."""
+
+type ClaimsBytes = bytes
+"""Serialized Claims object."""
 
 class PakeRequest(Struct):
     application: str

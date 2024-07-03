@@ -15,7 +15,7 @@ struct ProofKey {
 }
 
 #[pyfunction]
-fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
+fn load_key_from_pem(private_key_pem: &str) -> PyResult<ProofKey> {
     let key = load_key(private_key_pem)
         .map_err(|_| PyValueError::new_err("Could not parse PEM file as Ed25519 private key."))?;
 
@@ -23,15 +23,16 @@ fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
 }
 
 #[pymodule]
-fn tiauth_app_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let internal = PyModule::new_bound(m.py(), "_internal")?;
-    internal.add_function(wrap_pyfunction!(create_private_key_pem, &internal)?)?;
-    internal.add_function(wrap_pyfunction!(public_from_private_key_pem, &internal)?)?;
-    internal.add_function(wrap_pyfunction!(create_set_claims_proof, &internal)?)?;
-    internal.add_function(wrap_pyfunction!(create_reset_proof, &internal)?)?;
-    internal.add_function(wrap_pyfunction!(create_read_all_proof, &internal)?)?;
-    internal.add_function(wrap_pyfunction!(create_key, &internal)?)?;
-    m.add_submodule(&internal)?;
+fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // let internal = PyModule::new_bound(m.py(), "_internal")?;
+    m.add_function(wrap_pyfunction!(create_private_key_pem, m)?)?;
+    m.add_function(wrap_pyfunction!(public_from_private_key_pem, m)?)?;
+    m.add_function(wrap_pyfunction!(create_set_claims_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(create_reset_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(create_read_all_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(load_key_from_pem, m)?)?;
+    m.add_class::<ProofKey>()?;
+    // m.add_submodule(&internal)?;
 
     Ok(())
 }

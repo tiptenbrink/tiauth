@@ -20,7 +20,7 @@ use std::time::SystemTime;
 use terrors::OneOf;
 
 // TODO implement fake credential, also if password file is empty
-fn login_start(
+pub fn login_start(
     state: &impl State,
     application: &str,
     user_id: &str,
@@ -49,7 +49,7 @@ fn login_start(
 /// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce, which is the serialized state entry key, which includes an
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
-fn login_finish(
+pub fn login_finish(
     state: &impl State,
     application: &str,
     request: &str,

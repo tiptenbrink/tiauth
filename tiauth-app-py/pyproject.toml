@@ -12,7 +12,7 @@ authors = [
 
 [tool.maturin]
 python-source = "python"
-module-name = "tiauth_app_py"
+module-name = "tiauth_app_py._internal"
 
 [tool.poetry]
 name = "tiauth-app-py"

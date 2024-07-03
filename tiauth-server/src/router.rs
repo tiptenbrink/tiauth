@@ -102,8 +102,7 @@ where
     let mut state = ServerState::setup(db_path).unwrap();
 
     let public_key_pem = "-----BEGIN PUBLIC KEY-----
-MEMwBQYDK2VxAzoAYLYqlDb45JjRtqllCk3MVUWbodjBVY3Lkf+DAZOJIhWPt4ew
-VfAwioXbWygeZ6l1jVRqz5l+/Q8A
+MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
 -----END PUBLIC KEY-----"
         .to_owned();
 

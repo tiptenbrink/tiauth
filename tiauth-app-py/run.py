@@ -5,12 +5,12 @@ from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
 from tiauth_app_py.model import PakeFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
-from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof
+from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof, load_key_from_pem
 import tiauth_app_py
 from time import perf_counter
 import random
 
-class Login(Struct):
+class Login(Struct, array_like=True):
     user_id: str
     password_file: str
     claims: bytes
@@ -32,7 +32,9 @@ json_client = Client(base_url="http://localhost:3000", headers={'content-type': 
 APP_NAME = "some_app"
 
 def get_users():
-    proof = create_read_all_proof(APP_NAME, private)
+    key = load_key_from_pem(private)
+
+    proof = create_read_all_proof(APP_NAME, key)
     req = GetUsers(APP_NAME, proof)
 
     r: Response = json_client.post("/admin/users", content=json.encode(req))
@@ -106,7 +108,11 @@ def proof_time():
     print(f"{total*1000/count} ms.")
     print(f"{proofs[:15]}...")
 
-proof_time()
+# proof_time()
+    
+# print(public_from_private_key_pem(private))
+    
+get_users()
 
 # print(create_private_key_pem())
 

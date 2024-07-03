@@ -52,6 +52,7 @@ fn deserialize_login_password(bytes: &[u8], cursor: &mut Cursor<&[u8]>) -> Login
 impl LoginPassword {
     pub fn deserialize_from_login(bytes: &[u8]) -> Self {
         let mut cursor = Cursor::new(bytes);
+        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
         deserialize_login_password(bytes, &mut cursor)
     }
 }
@@ -59,6 +60,7 @@ impl LoginPassword {
 impl<'a> Login<'a> {
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        rmp::encode::write_array_len(&mut buf, 3).unwrap();
         rmp::encode::write_str(&mut buf, &self.user_id).unwrap();
         rmp::encode::write_str(&mut buf, &self.password_file).unwrap();
         rmp::encode::write_bin(&mut buf, self.claims.as_bytes()).unwrap();
@@ -68,7 +70,7 @@ impl<'a> Login<'a> {
 
     pub fn deserialize(bytes: &'a [u8]) -> Self {
         let mut cursor = Cursor::new(bytes);
-
+        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
         let LoginPassword {
             user_id,
             password_file,
@@ -760,6 +762,23 @@ mod test {
     use base64::{engine::general_purpose as b64, Engine as _};
 
     use super::*;
+
+    #[test]
+    fn serialize_login() {
+        let claims = Claims::empty().serialize();
+
+        let login = Login {
+            user_id: "some_name".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: claims.as_packed()
+        };
+
+        let login_serial = login.serialize();
+
+        let login_deser = Login::deserialize(&login_serial);
+
+        assert_eq!(login, login_deser);
+    }
 
     fn create_claims_subset() -> (Claims, Vec<String>) {
         let start = Instant::now();
