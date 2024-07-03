@@ -1,10 +1,3 @@
-use std::marker::PhantomData;
-/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
-#[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
-use std::time::SystemTime;
-use base64::DecodeError;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-use web_time::SystemTime;
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
 use crate::data::LEEWAY;
 use crate::data::{
@@ -12,10 +5,17 @@ use crate::data::{
 };
 use crate::util::combine_encode;
 use crate::{ActionType, Claims, Encodable, Target, TargetList};
+use base64::DecodeError;
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use std::marker::PhantomData;
+/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
+#[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
+use std::time::SystemTime;
 use terrors::OneOf;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::SystemTime;
 
 #[derive(Debug)]
 pub struct Proof<T> {
@@ -27,19 +27,22 @@ pub struct Proof<T> {
 impl<T> Encodable for Proof<T> {
     type Error = DecodeError;
 
-    fn decode(encoded: &str) -> Result<Self, Self::Error> where Self: Sized {
+    fn decode(encoded: &str) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
         let mut bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
         let total_len = bytes.len();
-        let ln = &bytes[(total_len-4)..total_len];
+        let ln = &bytes[(total_len - 4)..total_len];
         let content_length = u32::from_le_bytes([ln[0], ln[1], ln[2], ln[3]]) as usize;
         // After this the original contains only the content
         let mut signature = bytes.split_off(content_length);
-        signature.truncate(signature.len()-4);
+        signature.truncate(signature.len() - 4);
 
         Ok(Self {
             phantom: PhantomData,
             content: bytes,
-            signature
+            signature,
         })
     }
 
@@ -53,28 +56,6 @@ impl<T> Encodable for Proof<T> {
         )
     }
 }
-
-// impl<T> ByteSerial for Proof<T> 
-//     where T: ByteSerial
-// {
-//     type Deserialized<'a> = Proof<T>
-//     where
-//         Self: 'a;
-
-//     fn serialize(&self) -> crate::ByteOwned<Self>
-//     where
-//         Self: Sized {
-//         todo!()
-//     }
-
-//     fn deserialize(bytes: &[u8]) -> Self::Deserialized<'_> {
-//         todo!()
-//     }
-
-//     fn deserialize_owned(bytes: &[u8]) -> Self {
-//         todo!()
-//     }
-// }
 
 pub fn create_proof<T: ByteSerial>(
     application: &str,
@@ -119,12 +100,6 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
     verify: AboutVerify,
 ) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
     let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content);
-
-    // let (mut lazy_proof, signature) = proof.into_parts();
-
-    // // These are small and cheap to take out and clone
-    // // TODO propagate the decode error?
-    // let about = lazy_proof.inner().about.clone();
 
     if verify.application != proof_input.about.application {
         println!("invalid app");
@@ -208,11 +183,10 @@ pub struct InvalidSession {}
 
 pub fn verify_session_bytes(
     session_encrypted: &Session,
-    key: &SessionKey
+    key: &SessionKey,
 ) -> Result<VerifiedSession, InvalidSession> {
-    let session_decrypted =
-        crypto::session_decrypt(&session_encrypted.encrypted_bytes, key)
-            .map_err(|_e| InvalidSession {})?;
+    let session_decrypted = crypto::session_decrypt(&session_encrypted.encrypted_bytes, key)
+        .map_err(|_e| InvalidSession {})?;
 
     Ok(VerifiedSession(session_decrypted))
 }

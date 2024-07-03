@@ -3,6 +3,7 @@
 use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
 use crate::error::WrapErrorOneOf;
+use crate::proof::create_session;
 use crate::state::State;
 use crate::store::{
     get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry,
@@ -17,7 +18,6 @@ use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
-use crate::proof::create_session;
 
 // TODO implement fake credential, also if password file is empty
 fn login_start(
@@ -100,9 +100,7 @@ fn login_session<S: AsRef<str>>(
 
 #[cfg(feature = "test")]
 pub mod test_util {
-    use crate::{
-        data::Claims, ops::register::test_util::*, state::test_util::TestState, Proof,
-    };
+    use crate::{data::Claims, ops::register::test_util::*, state::test_util::TestState, Proof};
     use opaque_borink::client::{client_login, client_login_finish};
 
     use super::*;

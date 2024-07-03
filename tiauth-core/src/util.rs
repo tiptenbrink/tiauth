@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use base64::{encoded_len, engine::general_purpose as b64, Engine as _};
+use base64::{engine::general_purpose as b64, Engine as _};
 use rand::{rngs::StdRng, Rng};
 
 pub fn nonce_384_bytes(rng: &mut StdRng) -> Vec<u8> {
@@ -28,10 +28,9 @@ pub fn cursor_slice<'a>(bytes: &'a [u8], cursor: &mut Cursor<&[u8]>, len: u32) -
 
 pub fn combine_encode(inputs: &[&[u8]], total_len: usize) -> String {
     let total_triplets = total_len / 3;
-    let max_str_len = (total_triplets + 1) * 4;
 
-    let mut buf: Vec<u8> = vec![0; total_triplets*4];
-    //println!("buf len {}", buf.len());
+    let mut buf: Vec<u8> = vec![0; total_triplets * 4];
+
     buf.reserve_exact(4);
     let mut position: usize = 0;
     let mut remaining: Vec<u8> = Vec::with_capacity(3);
@@ -79,9 +78,7 @@ pub fn combine_encode(inputs: &[&[u8]], total_len: usize) -> String {
         let slice_aligned = &slice[0..slice_triplet_len];
         let buf_added = slice_triplets * 4;
         let buf_slice = &mut buf[position..(position + buf_added)];
-        // println!("out: {}", b64::URL_SAFE.encode(slice_aligned));
-        // println!("enc len: {}", encoded_len(3, true).unwrap());
-        // println!("len slice align {} buf added {} buf slice {}", slice_aligned.len(), buf_added, buf_slice.len());
+
         b64::URL_SAFE
             .encode_slice(slice_aligned, buf_slice)
             .unwrap();

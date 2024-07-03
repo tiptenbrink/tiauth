@@ -1,9 +1,8 @@
 use napi::{
-    bindgen_prelude::{Either3, FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
-    Either, Error, JsObject, ValueType,
+    bindgen_prelude::{FromNapiValue, Object, Uint8Array},
+    Either, Error, JsObject,
 };
-use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::HashMap};
+use std::cmp::Ordering;
 use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
 use tiauth_core::{
     app::ProofBaseView,
@@ -24,16 +23,14 @@ impl FromNapiValue for ClaimsSerialized {
         let mut keys: Vec<String> = Vec::with_capacity(ob_keys.len());
         let mut values: Vec<Vec<u8>> = Vec::with_capacity(ob_keys.len());
 
-        let mut i = 0;
-        for key in ob_keys {
+        for (i, key) in ob_keys.into_iter().enumerate() {
             if i != 0 {
-                let prev = &keys[i-1];
+                let prev = &keys[i - 1];
                 if let Ordering::Greater = prev.cmp(&key) {
-                    return Err(Error::from_reason("Claim keys are not sorted!").into())
+                    return Err(Error::from_reason("Claim keys are not sorted!"));
                 }
             }
-            i += 1;
-            
+
             if let Some(val) = obj.get::<&str, Either<Uint8Array, String>>(&key)? {
                 let bytes = match val {
                     Either::A(bytes) => bytes.to_vec(),
@@ -51,52 +48,22 @@ impl FromNapiValue for ClaimsSerialized {
     }
 }
 
-// impl TypeName for ClaimsArg {
-//     fn type_name() -> &'static str {
-//         "Claims"
-//     }
-
-//     fn value_type() -> ValueType {
-//         ValueType::Object
-//     }
-// }
-
-// impl ValidateNapiValue for ClaimsArg {}
-
 #[napi]
 pub struct ProofKey {
     key: Key,
 }
 
 pub enum ClaimsSerialized {
-    Serialized(ByteOwned<Claims>)
+    Serialized(ByteOwned<Claims>),
 }
 
 impl ClaimsSerialized {
     fn as_bytes(&self) -> &BytePacked<Claims> {
         match &self {
-            Self::Serialized(byte_owned) => byte_owned.as_packed()
+            Self::Serialized(byte_owned) => byte_owned.as_packed(),
         }
     }
 }
-
-// impl<T> FromNapiValue for LazyArg<T>
-// where
-//     T: FromNapiValue + TypeName + ValidateNapiValue + core::fmt::Debug,
-// {
-//     unsafe fn from_napi_value(
-//         env: napi::sys::napi_env,
-//         napi_val: napi::sys::napi_value,
-//     ) -> napi::Result<Self> {
-//         let either: Either3<Uint8Array, String, T> = Either3::from_napi_value(env, napi_val)?;
-
-//         match either {
-//             Either3::A(b) => Ok(LazyArg(Lazy::from_bytes(b.to_vec()))),
-//             Either3::B(s) => Ok(LazyArg(Lazy::from_bytes(s.into_bytes()))),
-//             Either3::C(map) => Ok(LazyArg(map.into())),
-//         }
-//     }
-// }
 
 #[napi(js_name = createProofKey)]
 pub fn create_proof_key(private_key_pem: String) -> Result<ProofKey, Error> {

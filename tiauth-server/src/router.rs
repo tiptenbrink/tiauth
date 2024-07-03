@@ -78,7 +78,6 @@ async fn start_register(
     Json(functions::start_register(&state, request).await)
 }
 
-
 async fn register_finish(
     ExtractState(state): ExtractState<ServerState>,
     Json(payload): Json<PakeFinishRequest>,

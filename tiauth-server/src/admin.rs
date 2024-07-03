@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use tiauth_core::{admin, Proof, State};
 
-use crate::encoded3::Encoded;
+use crate::encoded::Encoded;
 
 #[derive(Serialize)]
 pub struct StructList {

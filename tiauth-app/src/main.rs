@@ -36,11 +36,10 @@
 //     // println!("{:?}", res);
 // }
 
-
-const key_pem: &'static str = "-----BEGIN PRIVATE KEY-----
-MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
-DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
------END PRIVATE KEY-----";
+// const KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
+// MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
+// DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
+// -----END PRIVATE KEY-----";
 
 fn main() {
     // let key = load_key(key_pem).unwrap();

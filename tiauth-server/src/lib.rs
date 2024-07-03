@@ -10,4 +10,3 @@ pub mod router;
 pub mod admin;
 
 mod encoded;
-mod encoded3;

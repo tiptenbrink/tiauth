@@ -417,112 +417,6 @@ pub fn get_login_claims_bytes<S: AsRef<str>>(
     }
 }
 
-#[cfg(feature = "test")]
-pub mod test_util {
-
-    use zerovec::ZeroMap;
-
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
-    struct Data<'a> {
-        #[serde(borrow)]
-        map: ZeroMap<'a, str, [u8]>,
-    }
-
-    // pub fn big_claims() -> (Vec<u8>, Lazy<Claims>) {
-    //     let mut rng = StdRng::from_entropy();
-    //     let len = 4500;
-    //     let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(len);
-    //     let mut zmap: ZeroMap<'_, str, [u8]> = ZeroMap::with_capacity(len);
-
-    //     for i in 0..len {
-    //         let mut value_vec = Vec::with_capacity(10);
-    //         for _ in 0..12 {
-    //             let v = rng.next_u32();
-    //             let vu = (v % 8) as u8;
-    //             value_vec.push(vu)
-    //         }
-    //         let k = format!("{}", rng.next_u64());
-    //         let k_small = k[0..8].to_string();
-    //         //println!("{} yes here!", i);
-    //         zmap.insert(&k_small, &value_vec);
-    //         map.insert(k_small, value_vec);
-    //     }
-    //     //println!("got here!");
-    //     let claims = Claims(map);
-    //     let zmap_bytes = rmp_serde::to_vec_named(&Data { map: zmap }).unwrap();
-
-    //     let lazy_claims = Lazy::from_inner(claims);
-    //     let bytes = lazy_claims.take_bytes();
-    //     (zmap_bytes, Lazy::from_bytes(bytes))
-    // }
-
-    // pub fn test_lazy_claims(state: &impl State, app: &str, mut lazy_claims: Lazy<Claims>) -> Claims {
-    //     let mut rng = StdRng::from_entropy();
-    //     let user_id = rng.next_u32().to_string();
-    //     // let pre_login = Login {
-    //     //     user_id: "hi".to_owned(),
-    //     //     password_file: "pw".to_owned(),
-    //     //     claims: Claims::none().into(),
-    //     // };
-
-    //     let tables = state.tables().app(app);
-    //     let write_txn = state.db().begin_write().unwrap();
-    //     {
-    //         let mut table = write_txn.open_table(tables.users()).unwrap();
-    //         table.insert(user_id.as_str(), lazy_claims.bytes()).unwrap();
-    //     }
-    //     write_txn.commit().unwrap();
-
-    //     //set_login(state, &pre_login, app).unwrap();
-
-    //     let read_txn = state.db().begin_read().unwrap();
-
-    //     let table = read_txn.open_table(tables.users()).unwrap();
-
-    //     let access = table.get(user_id.as_str()).unwrap();
-
-    //     let access = access.unwrap();
-
-    //     let _deserialized: Lazy<Claims> = Lazy::from_bytes(access.value().to_vec());
-    //     let _deserialized = _deserialized.take();
-
-    //     _deserialized
-    // }
-
-    // pub fn test_zero_vec(state: &impl State, app: &str, data_serial: Vec<u8>) -> Vec<u8> {
-    //     let mut rng = StdRng::from_entropy();
-    //     let user_id = rng.next_u32().to_string();
-    //     // let pre_login = Login {
-    //     //     user_id: "hi".to_owned(),
-    //     //     password_file: "pw".to_owned(),
-    //     //     claims: Claims::none().into(),
-    //     // };
-
-    //     let tables = state.tables().app(app);
-    //     let write_txn = state.db().begin_write().unwrap();
-    //     {
-    //         let mut table = write_txn.open_table(tables.users()).unwrap();
-    //         table.insert(user_id.as_str(), data_serial.as_slice()).unwrap();
-    //     }
-    //     write_txn.commit().unwrap();
-
-    //     //set_login(state, &pre_login, app).unwrap();
-
-    //     let read_txn = state.db().begin_read().unwrap();
-
-    //     let table = read_txn.open_table(tables.users()).unwrap();
-
-    //     let access = table.get(user_id.as_str()).unwrap();
-
-    //     let access = access.unwrap();
-    //     let access_bytes = access.value();
-
-    //     let _deserialized: Data = rmp_serde::from_slice(access_bytes).unwrap();
-
-    //     access_bytes.to_vec()
-    // }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +451,7 @@ mod tests {
         let read_login = get_login_claims_bytes(&state, app, &value.user_id, None::<Vec<String>>)
             .unwrap()
             .unwrap();
-        //let claims_view = Claims::deserialize(read_login.as_packed().as_bytes());
+
         assert_eq!(claims_bytes, read_login);
     }
 }

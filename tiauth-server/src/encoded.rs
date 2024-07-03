@@ -1,150 +1,103 @@
 use core::fmt;
-use std::{fmt::Display, marker::PhantomData};
-use base64::{engine::general_purpose as b64, DecodeError, Engine as _};
-use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize, Serializer};
-use tiauth_core::{ByteOwned, ByteSerial};
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
+use std::marker::PhantomData;
+use tiauth_core::Encodable;
 
-trait Encoding {
-    type Error: Display;
-
-    fn decode(encoded: &str) -> Result<Vec<u8>, Self::Error>;
-
-    fn encode(bytes: &[u8]) -> String;
-}
-
+/// Simple newtype that implements Serialize and Deserialize for Encodable types. This means those types don't have to
+/// implement Serialize and Deserialize themselves, giving more control by allowing (de)serialization to happen only
+/// through their custom Encodable implementation.
 #[derive(Debug)]
-pub struct Base64UrlEncoding;
+pub struct Encoded<T: Encodable>(T);
 
-impl Encoding for Base64UrlEncoding {
-    type Error = DecodeError;
-
-    fn decode(encoded: &str) -> Result<Vec<u8>, Self::Error> {
-        b64::URL_SAFE_NO_PAD.decode(encoded)
-    }
-    
-    fn encode(bytes: &[u8]) -> String {
-        b64::URL_SAFE_NO_PAD.encode(bytes)
+impl<T> Encoded<T>
+where
+    T: Encodable,
+{
+    pub fn get(self) -> T {
+        self.0
     }
 }
 
-#[derive(Debug)]
-pub struct ByteEncoded<E, T> 
-    where T: ByteSerial, E: Encoding
+impl<T> Encodable for Encoded<T>
+where
+    T: Encodable,
 {
-    phantom: PhantomData<E>,
-    bytes: ByteOwned<T>
+    type Error = T::Error;
+
+    fn decode(encoded: &str) -> Result<Self, Self::Error> {
+        Ok(Encoded(T::decode(encoded)?))
+    }
+
+    fn encode(&self) -> String {
+        self.0.encode()
+    }
 }
 
-impl<E, T> ByteEncoded<E, T>
-    where T: ByteSerial, E: Encoding
+struct EncodedVisitor<T>
+where
+    T: Encodable,
 {
-    fn new(bytes: Vec<u8>) -> Self {
+    phantom: PhantomData<T>,
+}
+
+impl<T> EncodedVisitor<T>
+where
+    T: Encodable,
+{
+    fn new() -> Self {
         Self {
             phantom: PhantomData,
-            bytes: ByteOwned::new(bytes)
         }
     }
-
-    pub fn as_byte_owned(&self) -> &ByteOwned<T> {
-        &self.bytes
-    }
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(bound(serialize = "T: ByteSerial", deserialize = "T: ByteSerial"))]
-pub struct B64UrlEncoded<T: ByteSerial>(ByteEncoded<Base64UrlEncoding, T>);
-
-impl<T> B64UrlEncoded<T>
-    where T: ByteSerial
-{
-    pub fn as_byte_owned(&self) -> &ByteOwned<T> {
-        &self.0.bytes
-    }
-}
-
-impl<'de, E, T> Deserialize<'de> for ByteEncoded<E, T>
+impl<'a, T> Visitor<'a> for EncodedVisitor<T>
 where
-    T: ByteSerial, E: Encoding
+    T: Encodable,
+{
+    type Value = Encoded<T>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a byte array or str")
+    }
+
+    fn visit_str<Error>(self, v: &str) -> Result<Self::Value, Error>
+    where
+        Error: de::Error,
+    {
+        match T::decode(v) {
+            Ok(inner) => Ok(Encoded(inner)),
+            Err(e) => Err(Error::custom(format!(
+                "unable to decode due to error in decoder: {}",
+                e
+            ))),
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Encoded<T>
+where
+    T: Encodable,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct EncodedVisitor<E, T>
-        where
-            T: ByteSerial, E: Encoding
-        {
-            phantom_decoder: PhantomData<E>,
-            phantom_type: PhantomData<T>,
-        }
-
-        impl<E, T> EncodedVisitor<E, T>
-        where
-            T: ByteSerial, E: Encoding
-        {
-            fn new() -> Self {
-                Self {
-                    phantom_decoder: PhantomData, phantom_type: PhantomData
-                }
-            }
-        }
-
-        impl<'de, E, T> Visitor<'de> for EncodedVisitor<E, T>
-        where
-            T: ByteSerial, E: Encoding
-        {
-            type Value = ByteEncoded<E, T>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a byte array or str")
-            }
-
-            fn visit_str<Error>(self, v: &str) -> Result<Self::Value, Error>
-            where
-                Error: de::Error,
-            {
-                match E::decode(v) {
-                    Ok(data) => Ok(Self::Value::new(data)),
-                    Err(e) => Err(Error::custom(format!("unable to decode due to error in decoder: {}", e))),
-                }
-            }
-
-            fn visit_byte_buf<Error>(self, v: Vec<u8>) -> Result<Self::Value, Error>
-            where
-                Error: de::Error,
-            {
-                Ok(Self::Value::new(v))
-            }
-
-            fn visit_bytes<Error>(self, v: &[u8]) -> Result<Self::Value, Error>
-            where
-                Error: de::Error,
-            {
-                Ok(Self::Value::new(v.to_vec()))
-            }
-        }
-
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_str(EncodedVisitor::new())
-        } else {
-            deserializer.deserialize_byte_buf(EncodedVisitor::new())
-        }
+        deserializer.deserialize_str(EncodedVisitor::new())
     }
 }
 
-impl<E, T> Serialize for ByteEncoded<E, T>
+impl<T> Serialize for Encoded<T>
 where
-    T: ByteSerial, E: Encoding,
+    T: Encodable,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        if serializer.is_human_readable() {
-            let s = E::encode(&self.bytes.as_packed().as_bytes());
-            serializer.serialize_str(&s)
-        } else {
-            serializer.serialize_bytes(&self.bytes.as_packed().as_bytes())
-        }
+        serializer.serialize_str(&self.0.encode())
     }
 }

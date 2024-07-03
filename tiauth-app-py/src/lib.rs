@@ -1,24 +1,18 @@
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-
-use base64::{engine::general_purpose as b64, Engine as _};
-// use lazy_borink::lib2::LazyPack;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyBytes, PyDict, PyString};
-use pyo3::{prelude::*, PyTypeInfo};
-use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
+use std::cmp::Ordering;
+use std::ops::Deref;
 use tiauth_core::app::ProofBaseView;
 use tiauth_core::crypto::{load_key, Key};
 use tiauth_core::Claims;
+use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
 
 #[pyclass(frozen)]
 struct ProofKey {
     key: Key,
 }
-
-
 
 #[pyfunction]
 fn create_key(private_key_pem: &str) -> PyResult<ProofKey> {
@@ -53,89 +47,6 @@ fn public_from_private_key_pem(private_key_pem: &str) -> PyResult<String> {
         .map_err(|_| PyValueError::new_err("Could not parse PEM file as Ed25519 private key."))
 }
 
-// struct LazyArg<T>(Lazy<T>);
-
-// trait FromPython {
-//     type PyType: PyTypeInfo;
-
-//     fn is_instance(ob: &Bound<'_, PyAny>) -> bool {
-//         ob.is_instance_of::<Self::PyType>()
-//     }
-
-//     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self>
-//     where
-//         Self: Sized;
-
-//     fn name() -> &'static str;
-// }
-
-// impl<'py, T> FromPyObject<'py> for LazyArg<T>
-// where
-//     T: FromPython,
-// {
-//     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
-//         // Extracting from T is the slow part
-//         if ob.is_instance_of::<PyBytes>() {
-//             let claim_bytes: Vec<u8> = ob.extract()?;
-//             Ok(LazyArg(Lazy::from_bytes(claim_bytes)))
-//         } else if ob.is_instance_of::<PyString>() {
-//             let str: &str = ob.extract()?;
-//             let bytes = b64::URL_SAFE_NO_PAD
-//                 .decode(str)
-//                 .map_err(|_e| PyValueError::new_err("Failed to decode Python string as base64."))?;
-//             return Ok(LazyArg(Lazy::from_bytes(bytes)));
-//         } else if T::is_instance(ob) {
-//             let inner = T::extract_bound(ob)?;
-//             Ok(LazyArg(Lazy::from_inner(inner)))
-//         } else {
-//             let msg = format!(
-//                 "Unable to interpret {} type as {}!",
-//                 ob.get_type().name()?,
-//                 T::name()
-//             );
-//             Err(PyValueError::new_err(msg))
-//         }
-//     }
-// }
-
-// impl FromPython for Claims {
-//     type PyType = PyDict;
-
-//     fn name() -> &'static str {
-//         "Claims"
-//     }
-
-//     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self>
-//     where
-//         Self: Sized,
-//     {
-//         let dict = ob.downcast::<PyDict>()?;
-//         let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(dict.len());
-//         // Iterating over the dict is the slow part
-//         dict.iter().try_for_each(|(k, v)| {
-//             let k: String = k.extract().map_err(|e| {
-//                 let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
-//                 PyValueError::new_err(msg)
-//             })?;
-//             let v: Vec<u8> = if v.is_instance_of::<PyString>() {
-//                 let str_v: PyResult<String> = v.extract();
-//                 str_v.map(|v| v.into_bytes())
-//             } else {
-//                 v.extract()
-//             }.map_err(|e| {
-//                 let msg = format!("Failed to convert dictionary to claims map. Value '{}' is not a string and could not be extracted as bytes: {}", v, e);
-//                 PyValueError::new_err(msg)
-//             })?;
-
-//             map.insert(k, v);
-
-//             Ok::<(), PyErr>(())
-//         })?;
-
-//         Ok(Claims(map))
-//     }
-// }
-
 impl<'py> FromPyObject<'py> for ClaimsSerialized {
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         if ob.is_instance_of::<PyBytes>() {
@@ -146,20 +57,23 @@ impl<'py> FromPyObject<'py> for ClaimsSerialized {
             let mut keys: Vec<String> = Vec::with_capacity(claim_dict.len());
             let mut values: Vec<Vec<u8>> = Vec::with_capacity(claim_dict.len());
 
-            let mut i = 0;
-            for (k, v) in claim_dict.into_iter() {
+            for (i, (k, v)) in claim_dict.into_iter().enumerate() {
                 let key: String = k.extract().map_err(|e| {
-                    let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
+                    let msg = format!(
+                        "Failed to convert dictionary to claims map. Key '{}' is not a string: {}",
+                        k, e
+                    );
                     PyValueError::new_err(msg)
                 })?;
 
                 if i != 0 {
-                    let k_prev = &keys[i-1];
+                    let k_prev = &keys[i - 1];
                     if let Ordering::Greater = k_prev.cmp(&key) {
-                        return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
+                        return Err(PyValueError::new_err(
+                            "Claim keys are not sorted in ascending order!",
+                        ));
                     }
                 }
-                i += 1;
 
                 let value: Vec<u8> = if v.is_instance_of::<PyString>() {
                     let str_v: PyResult<String> = v.extract();
@@ -170,7 +84,7 @@ impl<'py> FromPyObject<'py> for ClaimsSerialized {
                     let msg = format!("Failed to convert dictionary to claims map. Value '{}' is not a string and could not be extracted as bytes: {}", v, e);
                     PyValueError::new_err(msg)
                 })?;
-                
+
                 keys.push(key);
                 values.push(value);
             }
@@ -190,28 +104,28 @@ impl<'py> FromPyObject<'py> for ClaimsSerialized {
 
 enum ClaimsSerialized {
     Serialized(ByteOwned<Claims>),
-    PyBytes(PyBackedBytes)
+    PyBytes(PyBackedBytes),
 }
 
 impl ClaimsSerialized {
     fn as_bytes(&self) -> &BytePacked<Claims> {
         match &self {
             Self::PyBytes(bytes) => BytePacked::new(bytes.deref()),
-            Self::Serialized(byte_owned) => byte_owned.as_packed()
+            Self::Serialized(byte_owned) => byte_owned.as_packed(),
         }
     }
 }
 
 #[pyfunction]
-fn create_set_claims_proof<'py>(
-    py: Python<'py>,
+fn create_set_claims_proof(
+    py: Python<'_>,
     application: &str,
     key: &Bound<'_, ProofKey>,
     user_id: &str,
     claims: ClaimsSerialized,
 ) -> PyResult<String> {
     let key = &key.get().key;
-    // The claim bytes are immutable, so we can use them even from outside the GIL, 
+    // The claim bytes are immutable, so we can use them even from outside the GIL,
     let proof = py.allow_threads(|| {
         let proof_base = ProofBaseView::new(application, key);
         app::create_set_claims_proof(proof_base, user_id, claims.as_bytes())
@@ -237,12 +151,3 @@ fn create_read_all_proof(application: &str, key: &Bound<'_, ProofKey>) -> PyResu
 
     Ok(app::create_read_all_proof(proof_base))
 }
-
-// #[pyfunction]
-// fn create_proof<'a>(
-//     proof_use: &[u8], application: &str, private_key_pem: &str, expires_in: Option<u64>
-// ) -> PyResult<Cow<'a, [u8]>> {
-//     let proof_bytes = app::create_proof(proof_use, application, private_key_pem, expires_in);
-//     //let bytes = PyBytes::new_bound(py, &proof_bytes);
-//     Ok(Cow::from(proof_bytes))
-// }

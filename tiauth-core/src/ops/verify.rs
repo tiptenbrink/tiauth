@@ -1,34 +1,11 @@
-//! reset:1:<user>
-//! delete:1:<user>
-//! set:<user>:
-//! read:all
-//! read:
-//!
-//! <application>:<expires>:<action_type>:<target>:<nonce>
-//!
-//! <target blob>
-//! <permission blob>
-
-use std::marker::PhantomData;
-use std::time::SystemTime;
-
-use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
-use crate::data::LEEWAY;
-use crate::data::{
-    AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
-};
+use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent};
 use crate::error::WrapErrorOneOf;
 use crate::proof::{verify_proof_content, verify_session_bytes, InvalidSession, VerifiedSession};
 use crate::state::State;
-use crate::util::combine_encode;
-use crate::{ActionType, Claims, Proof, Session, Tables, Target, TargetList};
+use crate::{Proof, Session, Tables};
 use base64::{engine::general_purpose as b64, Engine as _};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use terrors::OneOf;
-
-
 
 pub fn verify_proof_write<T: ByteSerial>(
     state: &impl State,
@@ -75,7 +52,6 @@ where
     Ok(proof_content)
 }
 
-
 pub fn verify_session(
     state: &impl State,
     session_encrypted: &Session,
@@ -85,7 +61,6 @@ pub fn verify_session(
     verify_session_bytes(session_encrypted, key)
 }
 
-
 #[cfg(feature = "test")]
 pub mod test_util {
     use crate::data::SerializedAs;
@@ -94,21 +69,6 @@ pub mod test_util {
     use crate::state::test_util::*;
 
     use super::*;
-
-    // pub fn create_session(user_id: &str, application: &str, session_claims: Claims) -> Session {
-    //     let time = SystemTime::now()
-    //         .duration_since(UNIX_EPOCH)
-    //         .unwrap()
-    //         .as_secs();
-
-    //     Session {
-    //         user_id: user_id.to_owned(),
-    //         application: application.to_owned(),
-    //         issued: time,
-    //         expires: time + EXPIRE_TIME,
-    //         session_claims,
-    //     }
-    // }
 
     pub fn create_proof_claims(
         state: &TestState,
@@ -135,10 +95,11 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{ActionType, Claims, ProofAbout, EXPIRE_TIME}, proof::create_session, state::test_util::*
+        data::{ActionType, Claims, EXPIRE_TIME},
+        proof::create_session,
+        state::test_util::*,
     };
 
-    use serde::Deserialize;
     use test_util::*;
 
     use super::*;
@@ -166,18 +127,6 @@ mod tests {
         let session_claims = session_read.session_claims.deserialize();
         assert!(claims.eq_view(&session_claims));
     }
-
-    #[derive(Debug, Deserialize)]
-    struct ProofContentAttempt {
-        #[serde(flatten)]
-        pub about: ProofAbout,
-    }
-
-    // #[derive(Debug, Deserialize)]
-    // struct ProofContentAttempt {
-    //     #[serde(flatten)]
-    //     pub about: ProofAbout,
-    // }
 
     #[test]
     fn test_proof_verify() {

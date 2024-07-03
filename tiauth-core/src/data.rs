@@ -152,14 +152,6 @@ impl<T: ByteSerial> From<Vec<u8>> for ByteOwned<T> {
     }
 }
 
-// pub trait BytePackable {
-//     fn to_bytes(&self) -> &[u8];
-
-//     fn to_packed<'a>(&'a self) -> BytePacked<'a, Self> where Self: Sized {
-//         BytePacked::new(&self.to_bytes())
-//     }
-// }
-
 impl<T> BytePacked<T>
 where
     T: ByteSerial,
@@ -246,7 +238,9 @@ impl ByteSerial for () {
 pub trait Encodable {
     type Error: Display;
 
-    fn decode(encoded: &str) -> Result<Self, Self::Error> where Self: Sized;
+    fn decode(encoded: &str) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
 
     fn encode(&self) -> String;
 }
@@ -311,9 +305,7 @@ impl Claims {
     }
 
     pub fn from_keys_values(keys: Vec<String>, values: Vec<Vec<u8>>) -> Self {
-        Self {
-            keys, values
-        }
+        Self { keys, values }
     }
 
     pub fn empty() -> Self {
@@ -344,14 +336,6 @@ impl Claims {
 }
 
 impl<'a> ClaimsView<'a> {
-    // pub fn new<S, V>(map: Vec<(S, V)>) -> Self
-    // where
-    //     S: Into<String>,
-    //     V: AsRef<[u8]>,
-    // {
-    //     let keys: Vec< = map.into_iter().unzip();
-    // }
-
     /// If k is generally a fraction of n, doing linear search is almost always better. However, when k is a power of n (k = k^C) where C < 1, at some point doing binary search is faster.
     /// For C < 0.6, even for small n binary search is almost just as fast as linear. For larger n though binary search is faster even at far greater k than just k^C.
     /// If using binary search for each item on the original vec, for a subset of size k out of n claims, we would have O(k ln2(n)).
@@ -380,31 +364,7 @@ impl<'a> ClaimsView<'a> {
         vec_out
     }
 
-    fn subset_serialize_msgpack<S: AsRef<str>>(&self, subset: &[S]) -> Vec<u8> {
-        let mut buf: Vec<u8> = Vec::new();
-        rmp::encode::write_map_len(&mut buf, subset.len() as u32).unwrap();
-
-        let linear_len = self.keys.len() as f32;
-        // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
-        // We prefer the binary split in most cases
-        let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
-
-        if ops_binary > linear_len {
-            self.subset_linear(subset, &mut buf, |out, (s, v)| {
-                rmp::encode::write_str(out, s).unwrap();
-                rmp::encode::write_bin(out, v).unwrap();
-            });
-        } else {
-            self.subset_binary_split(subset, &mut buf, |out, (s, v)| {
-                rmp::encode::write_str(out, s).unwrap();
-                rmp::encode::write_bin(out, v).unwrap();
-            });
-        }
-
-        buf
-    }
-
-    /// This is 4-5x slower than the above, so in the future maybe write specialized custom "varzerovec" that allows more efficient push.
+    /// In the future a more efficient way of creating varzerovec should be investigated
     pub fn subset_serialize<S: AsRef<str>>(&self, subset: &[S]) -> ByteOwned<Claims> {
         let keys: Vec<String> = Vec::with_capacity(self.keys.len());
         let values: Vec<Vec<u8>> = Vec::with_capacity(self.keys.len());
@@ -498,25 +458,6 @@ impl<'a> ClaimsView<'a> {
         &self.values[claim_i]
     }
 }
-
-// impl Claims {
-
-//     pub fn none() -> Self {
-//         Self(HashMap::new())
-//     }
-
-//     /// Returns only claims with keys in the provided subset. Consumes the previous claims object.
-//     pub fn into_subset<S>(mut self, subset: Vec<S>) -> Self
-//     where
-//         S: AsRef<str>,
-//     {
-//         Self(HashMap::from_iter(
-//             subset
-//                 .iter()
-//                 .filter_map(|s| self.0.remove_entry(s.as_ref())),
-//         ))
-//     }
-// }
 
 #[derive(Debug, PartialEq)]
 pub struct SessionContent<'a> {
@@ -796,54 +737,6 @@ impl TargetList {
     }
 }
 
-// impl From<Lazy<Vec<String>>> for TargetList {
-//     fn from(value: Lazy<Vec<String>>) -> Self {
-//         Self(value)
-//     }
-// }
-
-// impl<T> Proof<T>
-// where
-//     T: Serialize + core::fmt::Debug,
-// {
-//     pub fn new(
-//         application: &str,
-//         expires_in: u64,
-//         action: ActionType,
-//         target: Target,
-//         target_data: TargetList,
-//         data: Lazy<T>,
-//         key: &Key,
-//     ) -> Self {
-//         let now = SystemTime::now()
-//             .duration_since(SystemTime::UNIX_EPOCH)
-//             .unwrap()
-//             .as_secs();
-//         let expires = expires_in + now;
-//         let proof_content =
-//             ProofContent::new(application, expires, action, target, target_data.0, data);
-
-//         Self {
-//             inner: ProofInner::new(proof_content, key),
-//         }
-//     }
-
-//     pub fn into_encoded(self) -> String {
-//         b64::URL_SAFE_NO_PAD.encode(Lazy::from_inner(self.inner).take_bytes())
-//     }
-
-//     // pub fn create_encoded(application: &str, expires: u64, action: ActionType, target: Target, target_data: Lazy<Vec<String>>, data: Lazy<T>, key: &Key) -> String {
-//     //     let proof_content = ProofContent::new(application, expires, action, target, target_data, data);
-//     //     let inner = ProofInner::new(proof_content, key);
-
-//     //     b64::URL_SAFE_NO_PAD.encode(&Lazy::from_inner(inner).take_bytes())
-//     // }
-
-//     pub fn into_parts(self) -> (Lazy<ProofContent<T>>, Vec<u8>) {
-//         (self.inner.proof, self.inner.signature)
-//     }
-// }
-
 pub struct AboutVerify {
     pub application: String,
     pub action: Option<ActionType>,
@@ -957,11 +850,6 @@ mod test {
 
         let t = Instant::now();
         let _ = claims.subset_serialize(&subset);
-        let t_e = Instant::now();
-        println!("took {} ms.", t_e.duration_since(t).as_secs_f32() * 1000f32);
-
-        let t = Instant::now();
-        let _ = claims.subset_serialize_msgpack(&subset);
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32() * 1000f32);
     }

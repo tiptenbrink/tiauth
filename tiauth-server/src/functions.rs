@@ -1,7 +1,6 @@
+use crate::encoded::Encoded;
 use serde::{Deserialize, Serialize};
 use tiauth_core::{register, Claims, Proof, State};
-use tiauth_core::Encodable;
-use crate::encoded3::{Encoded};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -44,7 +43,7 @@ pub struct PakeFinishRequest {
 
 pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
     let proof = request.claims_proof.get();
-    
+
     match register::register_finish(
         state,
         &request.application,
