@@ -120,56 +120,12 @@ pub fn create_set_claims_proof_map(
         let bytes: Uint8Array = claims.unchecked_into();
         ByteOwned::new(bytes.to_vec())
     } else if claims.is_object() {
+        // TODO also support Map
+
         let entries = Object::entries(claims.unchecked_ref());
         let mut keys: Vec<String> = Vec::with_capacity(entries.length() as usize);
         let mut values: Vec<Vec<u8>> = Vec::with_capacity(entries.length() as usize);
 
-            // let mut iter = claim_dict.into_iter().peekable();
-            // while let Some((k, v)) = iter.next() {
-            //     if let Some((k_next, _)) = iter.peek() {
-            //         if let Ok(Ordering::Less) = k_next.compare(&k) {
-            //             return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
-            //         }
-            //     }
-                
-            //     let key: String = k.extract().map_err(|e| {
-            //         let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
-            //         PyValueError::new_err(msg)
-            //     })?;
-
-            //     let value: Vec<u8> = if v.is_instance_of::<PyString>() {
-            //         let str_v: PyResult<String> = v.extract();
-            //         str_v.map(|v| v.into_bytes())
-            //     } else {
-            //         v.extract()
-            //     }.map_err(|e| {
-            //         let msg = format!("Failed to convert dictionary to claims map. Value '{}' is not a string and could not be extracted as bytes: {}", v, e);
-            //         PyValueError::new_err(msg)
-            //     })?;
-                
-            //     keys.push(key);
-            //     values.push(value);
-            // }
-
-            // let serialized = Claims::from_keys_values(keys, values).serialize();
-
-            // Ok(ClaimsSerialized::Serialized(serialized))
-        
-        // let mut iter = entries.into_iter();
-        // let mut i = 0;
-        // let mut prev: String;
-        // while let Some(e) = iter.next() {
-        //     if i != 1 {
-
-        //     }
-        //     i += 1;
-        //     if let Some(e_next) = iter.peek() {
-        //         if let Ok(Ordering::Less) = k_next.compare(&k) {
-        //             return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
-        //         }
-        //     }
-
-        // }
         let mut i = 0;
         let mut prev: String = "".to_owned();
         for e in entries {
@@ -203,7 +159,6 @@ pub fn create_set_claims_proof_map(
         }
         
         Claims::from_keys_values(keys, values).serialize()
-        //Lazy::from_inner(Claims(map))
     } else {
         return Err(Error::new("Cannot interpret claims argument as Claims type!").into())
     };

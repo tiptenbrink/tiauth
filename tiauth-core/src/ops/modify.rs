@@ -1,10 +1,10 @@
-use super::prove::{verify_proof_content, verify_session};
+use super::verify::{verify_proof_content, verify_session};
 use crate::data::{
     AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
 };
 use crate::error::OneOfTo;
-use crate::ops::prove::verify_proof_write;
-use crate::prove::{Proof, Session};
+use crate::ops::verify::verify_proof_write;
+use crate::verify::{Proof, Session};
 use crate::state::State;
 use crate::store::{
     set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
@@ -254,7 +254,7 @@ mod tests {
     use crate::data::{BytePacked, Target, TargetList};
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
-    use crate::prove::create_proof;
+    use crate::verify::create_proof;
     use crate::state::test_util::TestState;
     use crate::store::get_login;
 

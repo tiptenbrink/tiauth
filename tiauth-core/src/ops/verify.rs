@@ -27,105 +27,7 @@ use rand::SeedableRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use terrors::OneOf;
 
-pub struct Proof<T> {
-    phantom: PhantomData<T>,
-    content: Vec<u8>,
-    signature: Vec<u8>,
-}
 
-/// Efficiently encode multiple slices into a base64url string, allocating O(n) only once, otherwise only allocating for a maximum of 3 bytes at the boundary of the slices.
-
-
-impl<T> Proof<T> {
-    pub fn into_encoded(self) -> String {
-        let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
-        let total_len = content_length.len() + self.content.len() + self.signature.len();
-
-        combine_encode(
-            &[&content_length, &self.content, &self.signature],
-            total_len,
-        )
-    }
-}
-
-pub fn create_proof<T: ByteSerial>(
-    application: &str,
-    expires_in: u64,
-    action: ActionType,
-    target: Target,
-    target_data: TargetList,
-    data: impl SerializedAs<T>,
-    key: &Key,
-) -> Proof<T> {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let expires = expires_in + now;
-    let content = ProofContent::new(
-        application,
-        expires,
-        action,
-        target,
-        target_data,
-        data.serialized(),
-    );
-
-    write_proof(&content, key)
-}
-
-fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
-    let content = proof_content.to_bytes();
-    let signature = sign_data(key, &content);
-
-    Proof {
-        content,
-        signature,
-        phantom: PhantomData,
-    }
-}
-
-pub fn verify_proof_content<'a, T: ByteSerial>(
-    proof_bytes: &'a Proof<T>,
-    public_key: &PublicKey,
-    verify: AboutVerify,
-) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
-    let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content);
-
-    // let (mut lazy_proof, signature) = proof.into_parts();
-
-    // // These are small and cheap to take out and clone
-    // // TODO propagate the decode error?
-    // let about = lazy_proof.inner().about.clone();
-
-    if verify.application != proof_input.about.application {
-        println!("invalid app");
-        return Err(OneOf::new(InvalidProof {}));
-    }
-    if let Some(action) = verify.action {
-        if action != proof_input.about.action {
-            println!("bad action");
-            return Err(OneOf::new(InvalidProof {}));
-        }
-    }
-
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    if time > proof_input.about.expires + LEEWAY {
-        println!("expired");
-        return Err(OneOf::new(InvalidProof {}));
-    };
-
-    if verify_signature(&proof_bytes.content, &proof_bytes.signature, public_key) {
-        Ok(proof_input)
-    } else {
-        println!("invalid sig");
-        Err(OneOf::new(InvalidProof {}))
-    }
-}
 
 pub fn verify_proof_write<T: ByteSerial>(
     state: &impl State,
@@ -172,45 +74,7 @@ where
     Ok(proof_content)
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Session {
-    encrypted_bytes: Vec<u8>,
-}
 
-impl Session {
-    pub fn into_encoded(&self) -> String {
-        b64::URL_SAFE_NO_PAD.encode(&self.encrypted_bytes)
-    }
-
-    pub fn raw_bytes(&self) -> &[u8] {
-        &self.encrypted_bytes
-    }
-}
-
-pub fn create_session(
-    application: &str,
-    user_id: &str,
-    expires_in: u64,
-    session_claims: impl SerializedAs<Claims>,
-    key: &SessionKey,
-) -> Session {
-    let issued = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let expires = expires_in + issued;
-    let content = SessionContent::new(
-        application,
-        user_id,
-        issued,
-        expires,
-        session_claims.serialized(),
-    );
-
-    Session {
-        encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy()),
-    }
-}
 
 pub struct VerifiedSession(Vec<u8>);
 

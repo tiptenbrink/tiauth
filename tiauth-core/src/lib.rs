@@ -4,6 +4,7 @@ pub mod crypto;
 mod data;
 mod error;
 mod util;
+mod proof;
 
 #[cfg(feature = "action")]
 mod ops;
@@ -32,7 +33,7 @@ pub mod state_impl {
 #[cfg(feature = "action")]
 mod action {
     pub use crate::ops::admin;
-    pub use crate::ops::prove;
+    pub use crate::ops::verify;
     pub use crate::ops::register;
     pub use crate::state::State;
 
@@ -47,7 +48,7 @@ pub mod app;
 #[cfg(feature = "test")]
 pub mod test {
     pub use super::ops::login::test_util::*;
-    pub use super::ops::prove::test_util::*;
+    pub use super::ops::verify::test_util::*;
     pub use super::ops::register::test_util::*;
     pub use super::state::test_util::*;
 }

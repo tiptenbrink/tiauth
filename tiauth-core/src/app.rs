@@ -2,7 +2,6 @@
 
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
-use crate::prove::{create_proof, Proof};
 use crate::Claims;
 use crate::{ActionType, Target, TargetList};
 
