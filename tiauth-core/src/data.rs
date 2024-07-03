@@ -243,16 +243,13 @@ impl ByteSerial for () {
     }
 }
 
-pub trait Encodable<'a> {
+pub trait Encodable {
     type Error: Display;
 
-    fn decode(encoded: &'a str) -> Result<Self, Self::Error> where Self: Sized;
+    fn decode(encoded: &str) -> Result<Self, Self::Error> where Self: Sized;
 
     fn encode(&self) -> String;
 }
-
-pub trait EncodableOwned: for<'a> Encodable<'a> {}
-impl<T> EncodableOwned for T where T: for<'a> Encodable<'a> {}
 
 /// VarZeroVec require a "serialization" step to create and pushing to them is expensive, so it is preferred to treat them as immutable and create them only
 /// when needed from a Claims struct.

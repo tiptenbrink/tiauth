@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use tiauth_core::{admin, Proof, State};
 
-use crate::encoded3::StrEncoded;
+use crate::encoded3::Encoded;
 
 #[derive(Serialize)]
 pub struct StructList {
@@ -19,14 +19,13 @@ impl StructList {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GetUsers<'a> {
+pub struct GetUsers {
     pub application: String,
-    #[serde(borrow)]
-    pub read_all_proof: StrEncoded<'a, Proof<()>>,
+    pub read_all_proof: Encoded<Proof<()>>,
 }
 
-pub async fn get_users_encoded<'a>(state: &impl State, request: GetUsers<'a>) -> Vec<u8> {
-    let proof = request.read_all_proof.decode().unwrap();
+pub async fn get_users_encoded(state: &impl State, request: GetUsers) -> Vec<u8> {
+    let proof = request.read_all_proof.get();
     //println!("{:?}", proof);
     match admin::get_users_encoded(state, &request.application, &proof) {
         Ok(users) => encode::to_vec_named(&StructList::from_vec_vec(users)).unwrap(),

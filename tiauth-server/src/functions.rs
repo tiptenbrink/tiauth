@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tiauth_core::{register, Claims, Proof, State};
 use tiauth_core::Encodable;
-use crate::encoded3::{self, StrEncoded};
+use crate::encoded3::{Encoded};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -35,16 +35,15 @@ pub async fn start_register(state: &impl State, request: PakeRequest) -> PakeRes
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PakeFinishRequest<'a> {
+pub struct PakeFinishRequest {
     pub application: String,
     pub opaque_request: String,
     pub register_start_nonce: String,
-    #[serde(borrow)]
-    pub claims_proof: StrEncoded<'a, Proof<Claims>>,
+    pub claims_proof: Encoded<Proof<Claims>>,
 }
 
-pub async fn register_finish<'a>(state: &impl State, request: PakeFinishRequest<'a>) {
-    let proof = request.claims_proof.decode().unwrap();
+pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
+    let proof = request.claims_proof.get();
     
     match register::register_finish(
         state,

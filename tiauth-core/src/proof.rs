@@ -11,7 +11,7 @@ use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
 use crate::util::combine_encode;
-use crate::{ActionType, Claims, Encodable, EncodableOwned, Target, TargetList};
+use crate::{ActionType, Claims, Encodable, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -24,10 +24,10 @@ pub struct Proof<T> {
     signature: Vec<u8>,
 }
 
-impl<'a, T> Encodable<'a> for Proof<T> {
+impl<T> Encodable for Proof<T> {
     type Error = DecodeError;
 
-    fn decode(encoded: &'a str) -> Result<Self, Self::Error> where Self: Sized {
+    fn decode(encoded: &str) -> Result<Self, Self::Error> where Self: Sized {
         let mut bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
         let total_len = bytes.len();
         let ln = &bytes[(total_len-4)..total_len];

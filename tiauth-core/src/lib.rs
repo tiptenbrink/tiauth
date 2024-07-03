@@ -16,7 +16,7 @@ mod store;
 pub use crate::data::ActionType;
 pub use crate::data::Application;
 pub use crate::data::Claims;
-pub use crate::data::{BytePacked, ByteOwned, ByteSerial, Encodable, EncodableOwned};
+pub use crate::data::{BytePacked, ByteOwned, ByteSerial, Encodable};
 pub use crate::data::Target;
 pub use crate::data::TargetList;
 pub use crate::proof::{Proof, Session};

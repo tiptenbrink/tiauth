@@ -5,7 +5,6 @@ use crate::{
     admin::GetUsers,
     functions::{PakeFinishRequest, PakeRequest, PakeResponse},
 };
-use axum::debug_handler;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -80,18 +79,18 @@ async fn start_register(
 }
 
 
-async fn register_finish<'a>(
+async fn register_finish(
     ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<PakeFinishRequest<'a>>,
+    Json(payload): Json<PakeFinishRequest>,
 ) -> Result<(), ErrorResponse> {
     functions::register_finish(&state, payload).await;
 
     Ok(())
 }
 
-async fn admin_get_users_encoded<'a>(
+async fn admin_get_users_encoded(
     ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<GetUsers<'a>>,
+    Json(payload): Json<GetUsers>,
 ) -> Vec<u8> {
     admin::get_users_encoded(&state, payload).await
 }
