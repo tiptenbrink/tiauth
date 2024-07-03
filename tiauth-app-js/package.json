@@ -23,6 +23,7 @@
     },
     "devDependencies": {
         "@types/node": "^20.14.8",
-        "typescript": "^5.2.2"
+        "typescript": "^5.2.2",
+        "msgpackr": "^1.10.2"
     }
 }

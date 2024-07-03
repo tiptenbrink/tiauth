@@ -3,13 +3,13 @@
 use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
 use crate::error::WrapErrorOneOf;
-use crate::prove::{create_session, Session};
 use crate::state::State;
 use crate::store::{
     get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry,
     EphemeralType,
 };
 use crate::util::nonce_384;
+use crate::Session;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
@@ -17,6 +17,7 @@ use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
+use crate::proof::create_session;
 
 // TODO implement fake credential, also if password file is empty
 fn login_start(
@@ -100,7 +101,7 @@ fn login_session<S: AsRef<str>>(
 #[cfg(feature = "test")]
 pub mod test_util {
     use crate::{
-        data::Claims, ops::register::test_util::*, prove::Proof, state::test_util::TestState,
+        data::Claims, ops::register::test_util::*, state::test_util::TestState, Proof,
     };
     use opaque_borink::client::{client_login, client_login_finish};
 
@@ -140,8 +141,8 @@ mod tests {
     use super::*;
 
     use crate::data::ByteSerial;
-    use crate::ops::prove::test_util::*;
-    use crate::prove::verify_session;
+    use crate::ops::verify::test_util::*;
+    use crate::verify::verify_session;
     use crate::{data::Claims, state::test_util::TestState};
 
     use crate::ops::register::test_util::*;

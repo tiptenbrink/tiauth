@@ -16,10 +16,10 @@ mod store;
 pub use crate::data::ActionType;
 pub use crate::data::Application;
 pub use crate::data::Claims;
-//pub use crate::data::Proof;
 pub use crate::data::{BytePacked, ByteOwned, ByteSerial};
 pub use crate::data::Target;
 pub use crate::data::TargetList;
+pub use crate::proof::{Proof, Session};
 
 #[cfg(feature = "action")]
 pub mod state_impl {

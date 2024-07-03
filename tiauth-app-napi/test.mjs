@@ -1,4 +1,5 @@
 import { createResetProof, createSetClaimsProof, createProofKey } from './index.js'
+import { pack } from 'msgpackr'
  
 // const private_pem = `
 // -----BEGIN PRIVATE KEY-----
@@ -13,14 +14,14 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 `.trim()
 
 
-const count = 10000
+const count = 10
 let total = 0
 let proofs = []
 
-let size = 18;
+let size = 800000;
 let ob_len = size/18;
 
-let ob = {}
+let ob_entries = []
 
 for (let j = 0; j < ob_len; j++) {
     let arr = []
@@ -32,8 +33,24 @@ for (let j = 0; j < ob_len; j++) {
     let n_arr = new Uint8Array(arr)
     let n = Math.random()
     let n_str = `${n}`.slice(0,12)
-    ob[n_str] = n_arr
+    ob_entries.push([n_str, n_arr])
 }
+
+let encoder = new TextEncoder()
+
+ob_entries.sort((a, b) => {
+    // @ts-ignore
+    let a_enc = encoder.encode(a[0])
+    // @ts-ignore
+    let b_enc = encoder.encode(b[0])
+
+    return a_enc > b_enc ? 1 : -1
+})
+
+let ob = Object.fromEntries(ob_entries)
+
+let bin = pack(ob)
+console.log(`size ${bin.byteLength/1000} kB`)
 
 // let utf8Encode = new TextEncoder();
 // let cursor = 0

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { pack } from 'msgpackr';
 
 import { initSync, createSetClaimsProof, createProofKey } from './out/tiauth_app_js.js'
 const data = fs.readFileSync('./out/tiauth_app_js_bg.wasm');
@@ -25,7 +26,7 @@ let proofs = []
 let size = 800000;
 let ob_len = size/18;
 
-let ob = {}
+let ob_entries = []
 
 for (let j = 0; j < ob_len; j++) {
     let arr = []
@@ -37,8 +38,24 @@ for (let j = 0; j < ob_len; j++) {
     let n_arr = new Uint8Array(arr)
     let n = Math.random()
     let n_str = `${n}`.slice(0,12)
-    ob[n_str] = n_arr
+    ob_entries.push([n_str, n_arr])
 }
+
+let encoder = new TextEncoder()
+
+ob_entries.sort((a, b) => {
+    // @ts-ignore
+    let a_enc = encoder.encode(a[0])
+    // @ts-ignore
+    let b_enc = encoder.encode(b[0])
+
+    return a_enc > b_enc ? 1 : -1
+})
+
+let ob = Object.fromEntries(ob_entries)
+
+let bin = pack(ob)
+console.log(`size ${bin.byteLength/1000} kB`)
 
 // let utf8Encode = new TextEncoder();
 // let cursor = 0

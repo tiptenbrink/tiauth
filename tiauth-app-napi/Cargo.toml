@@ -7,10 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-tiauth-core = { path = "../tiauth-core", features = ["app"] }
-tiauth-server = { path = "../tiauth-server", features = ["functions"] }
-
-lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2"}
+tiauth-core = { path = "../tiauth-core", default-features = false, features = ["app"] }
+# tiauth-server = { path = "../tiauth-server", features = ["functions"] }
 
 getrandom = { version = "0.2" }
 # rand = { version = "0.8.5" }

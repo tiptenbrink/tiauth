@@ -146,18 +146,20 @@ impl<'py> FromPyObject<'py> for ClaimsSerialized {
             let mut keys: Vec<String> = Vec::with_capacity(claim_dict.len());
             let mut values: Vec<Vec<u8>> = Vec::with_capacity(claim_dict.len());
 
-            let mut iter = claim_dict.into_iter().peekable();
-            while let Some((k, v)) = iter.next() {
-                if let Some((k_next, _)) = iter.peek() {
-                    if let Ok(Ordering::Less) = k_next.compare(&k) {
-                        return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
-                    }
-                }
-                
+            let mut i = 0;
+            for (k, v) in claim_dict.into_iter() {
                 let key: String = k.extract().map_err(|e| {
                     let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
                     PyValueError::new_err(msg)
                 })?;
+
+                if i != 0 {
+                    let k_prev = &keys[i-1];
+                    if let Ordering::Greater = k_prev.cmp(&key) {
+                        return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
+                    }
+                }
+                i += 1;
 
                 let value: Vec<u8> = if v.is_instance_of::<PyString>() {
                     let str_v: PyResult<String> = v.extract();

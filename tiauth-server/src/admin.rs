@@ -1,4 +1,3 @@
-use lazy_borink::Lazy;
 use rmp_serde::encode;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;

@@ -1,16 +1,16 @@
-use super::verify::{verify_proof_content, verify_session};
 use crate::data::{
     AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
 };
 use crate::error::OneOfTo;
 use crate::ops::verify::verify_proof_write;
-use crate::verify::{Proof, Session};
+use crate::proof::verify_proof_content;
 use crate::state::State;
 use crate::store::{
     set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
 };
 use crate::util::nonce_384;
-use crate::{Claims, Tables};
+use crate::verify::verify_session;
+use crate::{Claims, Proof, Session, Tables};
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -254,7 +254,7 @@ mod tests {
     use crate::data::{BytePacked, Target, TargetList};
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
-    use crate::verify::create_proof;
+    use crate::proof::create_proof;
     use crate::state::test_util::TestState;
     use crate::store::get_login;
 

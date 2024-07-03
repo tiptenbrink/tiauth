@@ -3,20 +3,19 @@ use opaque_borink::{server::register_server, Error as OpaqueError};
 use crate::data::Claims;
 use crate::data::{AboutVerify, ActionType, InvalidProof};
 use crate::error::{OneOfTo, WrapErrorOneOf};
-use crate::ops::prove::verify_proof_write;
-use crate::prove::Proof;
+use crate::proof::verify_proof_content;
 use crate::state::State;
 use crate::store::{
     pop_ephemeral, set_login_field_write, write_ephemeral, EphemeralEntry, EphemeralType,
     LoginFieldError, SetLoginOptions,
 };
 use crate::util::nonce_384;
+use crate::verify::verify_proof_write;
+use crate::Proof;
 use opaque_borink::server::register_server_finish;
 use redb::Error as DbError;
 use std::str;
 use terrors::OneOf;
-
-use super::prove::verify_proof_content;
 
 /// This function can be called by anyone, the server simply uses its private key to provide the material for the client to move to the next step.
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.

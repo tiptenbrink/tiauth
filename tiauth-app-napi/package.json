@@ -5,22 +5,24 @@
     "main": "index.js",
     "license": "Apache2 OR MIT",
     "files": [
-      "index.d.ts",
-      "index.js"
+        "index.d.ts",
+        "index.js"
     ],
     "napi": {
-      "name": "tiauth-app-napi",
-      "triples": {
-        "defaults": false,
-        "additional": [
-            "x86_64-unknown-linux-gnu"
-        ]
-      }
+        "name": "tiauth-app-napi",
+        "triples": {
+            "defaults": false,
+            "additional": [
+                "x86_64-unknown-linux-gnu"
+            ]
+        }
     },
     "scripts": {
-      "build": "napi build --platform --release"
+        "build": "napi build --platform --release"
     },
     "devDependencies": {
-      "typescript": "^5.2.2"
+        "@types/node": "^20.14.8",
+        "typescript": "^5.2.2",
+        "msgpackr": "^1.10.2"
     }
-  }
+}

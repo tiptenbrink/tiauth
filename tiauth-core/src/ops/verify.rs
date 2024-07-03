@@ -18,9 +18,10 @@ use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
 use crate::error::WrapErrorOneOf;
+use crate::proof::{verify_proof_content, verify_session_bytes, InvalidSession, VerifiedSession};
 use crate::state::State;
 use crate::util::combine_encode;
-use crate::{ActionType, Claims, Tables, Target, TargetList};
+use crate::{ActionType, Claims, Proof, Session, Tables, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -75,33 +76,21 @@ where
 }
 
 
-
-pub struct VerifiedSession(Vec<u8>);
-
-impl VerifiedSession {
-    pub fn read(&self) -> Result<SessionContent, InvalidSession> {
-        Ok(SessionContent::from_bytes(&self.0))
-    }
-}
-
-#[derive(Debug)]
-pub struct InvalidSession {}
-
 pub fn verify_session(
     state: &impl State,
     session_encrypted: &Session,
 ) -> Result<VerifiedSession, InvalidSession> {
-    let session_decrypted =
-        crypto::session_decrypt(&session_encrypted.encrypted_bytes, &state.private().session)
-            .map_err(|_e| InvalidSession {})?;
+    let key = &state.private().session;
 
-    Ok(VerifiedSession(session_decrypted))
+    verify_session_bytes(session_encrypted, key)
 }
+
 
 #[cfg(feature = "test")]
 pub mod test_util {
     use crate::data::SerializedAs;
     use crate::data::{ActionType, Claims, Target, TargetList};
+    use crate::proof::create_proof;
     use crate::state::test_util::*;
 
     use super::*;
@@ -146,8 +135,7 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{ActionType, Claims, ProofAbout, EXPIRE_TIME},
-        state::test_util::*,
+        data::{ActionType, Claims, ProofAbout, EXPIRE_TIME}, proof::create_session, state::test_util::*
     };
 
     use serde::Deserialize;

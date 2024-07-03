@@ -42,37 +42,22 @@ MEcCAQAwBQYDK2VxBDsEOS36kRwunFManth6OjtbK7ywRMfPcPZ8JMKtiV97eluq
 DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
 -----END PRIVATE KEY-----";
 
-use std::collections::HashMap;
-
-use zerovec::{VarZeroVec, ZeroVec};
-
-// This example requires the "serde" feature
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct DataStruct<'data> {
-    #[serde(borrow)]
-    nums: ZeroVec<'data, u32>,
-    #[serde(borrow)]
-    chars: ZeroVec<'data, char>,
-    #[serde(borrow)]
-    strs: VarZeroVec<'data, str>,
-}
-
 fn main() {
-    let key = load_key(key_pem).unwrap();
+    // let key = load_key(key_pem).unwrap();
 
-    let value = Test {
-        int: 42,
-        string: "hello world".to_string(),
-        claims: HashMap::from_iter(vec![("some".to_owned(), "other".as_bytes().to_vec())]),
-    };
+    // let value = Test {
+    //     int: 42,
+    //     string: "hello world".to_string(),
+    //     claims: HashMap::from_iter(vec![("some".to_owned(), "other".as_bytes().to_vec())]),
+    // };
 
-    let bytes = rkyv::to_bytes::<_, 256>(&value).unwrap();
+    // let bytes = rkyv::to_bytes::<_, 256>(&value).unwrap();
 
-    sign_data(&key, &bytes);
+    // sign_data(&key, &bytes);
 
-    let archived = unsafe { rkyv::archived_root::<Test>(&bytes[..]) };
+    // let archived = unsafe { rkyv::archived_root::<Test>(&bytes[..]) };
 
-    // archived.claims.
+    // // archived.claims.
 
-    let deserialized: Test = archived.deserialize(&mut rkyv::Infallible).unwrap();
+    // let deserialized: Test = archived.deserialize(&mut rkyv::Infallible).unwrap();
 }

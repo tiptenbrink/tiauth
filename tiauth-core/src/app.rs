@@ -2,7 +2,8 @@
 
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
-use crate::Claims;
+use crate::proof::create_proof;
+use crate::{Claims, Proof};
 use crate::{ActionType, Target, TargetList};
 
 pub fn create_private_key_pem() -> String {

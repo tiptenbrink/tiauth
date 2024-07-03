@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 tiauth-core = { path="../tiauth-core", features = ["action"]}
-lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2" }
 redb = "2.1.1"
 axum = "0.7.5"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }

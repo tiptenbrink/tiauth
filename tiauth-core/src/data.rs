@@ -14,9 +14,7 @@ use std::ops::Range;
 use std::str;
 use terrors::OneOf;
 use thiserror::Error;
-/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-use web_time::SystemTime;
+
 use zerovec::vecs::Index32;
 use zerovec::VarZeroVec;
 

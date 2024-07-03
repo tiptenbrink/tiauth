@@ -127,7 +127,6 @@ pub fn create_set_claims_proof_map(
         let mut values: Vec<Vec<u8>> = Vec::with_capacity(entries.length() as usize);
 
         let mut i = 0;
-        let mut prev: String = "".to_owned();
         for e in entries {
             let e: &Array = e.unchecked_ref();
             let key = e.get(0);
@@ -137,13 +136,13 @@ pub fn create_set_claims_proof_map(
             } else {
                 return Err(Error::new("Key is not string!").into())
             };
-            if i != 1 {
+            if i != 0 {
+                let prev = &keys[i-1];
                 if let Ordering::Greater = prev.cmp(&k) {
                     return Err(Error::new("Claim keys are not sorted!").into())
                 }
             }
             i += 1;
-            prev = k.clone();
 
             let v = if value.is_instance_of::<Uint8Array>() {
                 let bytes: Uint8Array = value.unchecked_into();

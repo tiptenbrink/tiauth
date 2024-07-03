@@ -1,6 +1,7 @@
-use lazy_borink::Lazy;
 use serde::{Deserialize, Serialize};
 use tiauth_core::{register, Claims, Proof, State};
+
+use crate::encoded::{B64UrlEncoded};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -38,10 +39,10 @@ pub struct PakeFinishRequest {
     pub application: String,
     pub opaque_request: String,
     pub register_start_nonce: String,
-    pub claims_proof: Option<Lazy<Proof<Claims>>>,
+    pub claims_proof: Option<B64UrlEncoded<Proof<Claims>>>,
 }
 
-pub async fn register_finish(state: &impl State, request: PakeFinishRequest) {
+pub async fn register_finish<'a>(state: &impl State, request: PakeFinishRequest<'a>) {
     let proof: Option<Proof<Claims>> = request.claims_proof.map(|p| p.take());
     match register::register_finish(
         state,

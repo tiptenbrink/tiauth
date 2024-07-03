@@ -1,21 +1,22 @@
 use std::marker::PhantomData;
+/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
+#[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
-
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::SystemTime;
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
 use crate::data::LEEWAY;
 use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
-use crate::error::WrapErrorOneOf;
-use crate::state::State;
 use crate::util::combine_encode;
-use crate::{ActionType, Claims, Tables, Target, TargetList};
+use crate::{ActionType, Claims, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use terrors::OneOf;
 
+#[derive(Debug)]
 pub struct Proof<T> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
@@ -36,6 +37,28 @@ impl<T> Proof<T> {
         )
     }
 }
+
+// impl<T> ByteSerial for Proof<T> 
+//     where T: ByteSerial
+// {
+//     type Deserialized<'a> = Proof<T>
+//     where
+//         Self: 'a;
+
+//     fn serialize(&self) -> crate::ByteOwned<Self>
+//     where
+//         Self: Sized {
+//         todo!()
+//     }
+
+//     fn deserialize(bytes: &[u8]) -> Self::Deserialized<'_> {
+//         todo!()
+//     }
+
+//     fn deserialize_owned(bytes: &[u8]) -> Self {
+//         todo!()
+//     }
+// }
 
 pub fn create_proof<T: ByteSerial>(
     application: &str,
@@ -154,4 +177,26 @@ pub fn create_session(
     Session {
         encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy()),
     }
+}
+
+pub struct VerifiedSession(Vec<u8>);
+
+impl VerifiedSession {
+    pub fn read(&self) -> Result<SessionContent, InvalidSession> {
+        Ok(SessionContent::from_bytes(&self.0))
+    }
+}
+
+#[derive(Debug)]
+pub struct InvalidSession {}
+
+pub fn verify_session_bytes(
+    session_encrypted: &Session,
+    key: &SessionKey
+) -> Result<VerifiedSession, InvalidSession> {
+    let session_decrypted =
+        crypto::session_decrypt(&session_encrypted.encrypted_bytes, key)
+            .map_err(|_e| InvalidSession {})?;
+
+    Ok(VerifiedSession(session_decrypted))
 }
