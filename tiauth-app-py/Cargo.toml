@@ -8,11 +8,11 @@ name = "tiauth_app_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-tiauth-core = { path = "../tiauth-core" }
-tiauth-app = { path = "../tiauth-app" }
-tiauth-server = { path = "../tiauth-server", features = ["functions"] }
+tiauth-core = { path = "../tiauth-core", default-features = false, features = ["app"]}
+# tiauth-app = { path = "../tiauth-app" }
+# tiauth-server = { path = "../tiauth-server", features = ["functions"] }
 
-lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2", features = ["python"] }
+# lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2", features = ["python"] }
 
 base64 = "0.22"
 rmp = "0.8"

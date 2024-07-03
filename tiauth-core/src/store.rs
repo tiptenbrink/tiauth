@@ -1,14 +1,15 @@
 use std::{collections::HashMap, path::Path, time::SystemTime};
 
-use lazy_borink::Lazy;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
-use rmp_serde::{decode, encode};
-use serde::{Deserialize, Serialize};
 use terrors::OneOf;
 use thiserror::Error;
-use zerovec::{make_varule, maps::ZeroMapKV, ule::VarULE, vecs::Index32, VarZeroSlice, VarZeroVec};
 
-use crate::{data::{ByteOwned, BytePacked, ByteSerial, Login, LoginPassword, SerializedAs}, error::WrapErrorOneOf, state::State, Claims};
+use crate::{
+    data::{ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs},
+    error::WrapErrorOneOf,
+    state::State,
+    Claims,
+};
 
 pub type TableStore = (String, String, String);
 
@@ -312,7 +313,7 @@ pub fn set_login_field_write(
 
         if let Some(access) = access {
             let user_bytes = access.value();
-            let mut user: Login =  Login::deserialize(user_bytes);
+            let mut user: Login = Login::deserialize(user_bytes);
             if options.create_user {
                 return Err(OneOf::new(LoginFieldError::AlreadyExists(
                     user_id.to_owned(),
@@ -330,7 +331,7 @@ pub fn set_login_field_write(
                 user.serialize()
             } else {
                 user.serialize()
-            } 
+            }
         } else if options.create_user {
             // Password file must contain value when creating user!
             assert!(password_file.is_some());
@@ -338,27 +339,28 @@ pub fn set_login_field_write(
                 let login = Login {
                     user_id: user_id.to_owned(),
                     password_file: password_file.unwrap(),
-                    claims: claims.serialized()
+                    claims: claims.serialized(),
                 };
-    
+
                 login.serialize()
             } else {
                 let claims = Claims::empty().serialize();
                 let login = Login {
                     user_id: user_id.to_owned(),
                     password_file: password_file.unwrap(),
-                    claims: claims.as_packed()
+                    claims: claims.as_packed(),
                 };
-    
+
                 login.serialize()
             }
         } else {
             return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
         }
     };
-    
-    table.insert(user_id, user_bytes.as_slice()).to_one_of_two()?;
-    
+
+    table
+        .insert(user_id, user_bytes.as_slice())
+        .to_one_of_two()?;
 
     Ok(())
 }
@@ -401,7 +403,7 @@ pub fn get_login_claims_bytes<S: AsRef<str>>(
         let login_bytes = access.value();
 
         let login = Login::deserialize(login_bytes);
-        
+
         let claim_bytes = if let Some(subset) = requested_claims {
             let claim_view = login.claims.deserialize();
             claim_view.subset_serialize(&subset)
@@ -415,19 +417,11 @@ pub fn get_login_claims_bytes<S: AsRef<str>>(
     }
 }
 
-
 #[cfg(feature = "test")]
 pub mod test_util {
-    use std::sync::Arc;
 
-    use crate::test::TestState;
-
-    use super::*;
-    use rand::{rngs::StdRng, RngCore, SeedableRng};
-    use serde::{Deserialize, Serialize};
     use zerovec::ZeroMap;
 
-    
     #[derive(serde::Serialize, serde::Deserialize, Debug)]
     struct Data<'a> {
         #[serde(borrow)]
@@ -439,7 +433,7 @@ pub mod test_util {
     //     let len = 4500;
     //     let mut map: HashMap<String, Vec<u8>> = HashMap::with_capacity(len);
     //     let mut zmap: ZeroMap<'_, str, [u8]> = ZeroMap::with_capacity(len);
-        
+
     //     for i in 0..len {
     //         let mut value_vec = Vec::with_capacity(10);
     //         for _ in 0..12 {
@@ -470,7 +464,7 @@ pub mod test_util {
     //     //     password_file: "pw".to_owned(),
     //     //     claims: Claims::none().into(),
     //     // };
-            
+
     //     let tables = state.tables().app(app);
     //     let write_txn = state.db().begin_write().unwrap();
     //     {
@@ -488,10 +482,10 @@ pub mod test_util {
     //     let access = table.get(user_id.as_str()).unwrap();
 
     //     let access = access.unwrap();
-    
+
     //     let _deserialized: Lazy<Claims> = Lazy::from_bytes(access.value().to_vec());
     //     let _deserialized = _deserialized.take();
-        
+
     //     _deserialized
     // }
 
@@ -503,7 +497,7 @@ pub mod test_util {
     //     //     password_file: "pw".to_owned(),
     //     //     claims: Claims::none().into(),
     //     // };
-            
+
     //     let tables = state.tables().app(app);
     //     let write_txn = state.db().begin_write().unwrap();
     //     {
@@ -522,11 +516,9 @@ pub mod test_util {
 
     //     let access = access.unwrap();
     //     let access_bytes = access.value();
-    
+
     //     let _deserialized: Data = rmp_serde::from_slice(access_bytes).unwrap();
 
-        
-        
     //     access_bytes.to_vec()
     // }
 }
@@ -539,7 +531,12 @@ mod tests {
 
     #[test]
     fn login_set_read() {
-        let claims_bytes = Claims::new(vec![("claim1", "is_this"), ("claim2", "is_that"), ("claim3", "is_thatd")]).serialize();
+        let claims_bytes = Claims::new(vec![
+            ("claim1", "is_this"),
+            ("claim2", "is_that"),
+            ("claim3", "is_thatd"),
+        ])
+        .serialize();
         let value = Login {
             user_id: "hi".to_owned(),
             password_file: "pw".to_owned(),
@@ -557,9 +554,10 @@ mod tests {
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);
 
-        let read_login = get_login_claims_bytes(&state, app, &value.user_id, None::<Vec<String>>).unwrap().unwrap();
+        let read_login = get_login_claims_bytes(&state, app, &value.user_id, None::<Vec<String>>)
+            .unwrap()
+            .unwrap();
         //let claims_view = Claims::deserialize(read_login.as_packed().as_bytes());
         assert_eq!(claims_bytes, read_login);
     }
-
 }

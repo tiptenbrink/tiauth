@@ -72,7 +72,7 @@ pub fn register_finish(
     if let Some(entry) = entry {
         let proof = if let Some(proof) = claims_proof {
             let key: crate::crypto::PublicKey = state.app_key(application);
-            let mut proof_content =
+            let proof_content =
                 verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
                     .map_err(OneOf::broaden)?;
 
@@ -172,7 +172,7 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{Claims, Login},
+        data::{ByteSerial, Claims, Login},
         state::test_util::TestState,
         store::get_login,
     };
@@ -182,11 +182,13 @@ mod tests {
     #[test]
     fn register() {
         let user_id = "hi";
+        let claims = Claims::empty().serialize();
+        let claims = claims.as_packed();
 
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: todo!(),
+            claims,
         };
         let app = "abc";
         let password = "pass";
@@ -203,11 +205,13 @@ mod tests {
     #[test]
     fn register_twice_noop() {
         let user_id = "hi";
+        let claims = Claims::empty().serialize();
+        let claims = claims.as_packed();
 
         let value = Login {
             user_id: user_id.to_owned(),
             password_file: "".to_owned(),
-            claims: todo!(),
+            claims,
         };
         let app = "abc";
         let password = "pass";

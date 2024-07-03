@@ -1,12 +1,12 @@
 use js_sys::{Array, Error, JsString, Object, Uint8Array};
-use lazy_borink::Lazy;
 // use napi::{
 //     bindgen_prelude::{Either3, FromNapiValue, Object, TypeName, Uint8Array, ValidateNapiValue},
 //     Either, Error, JsObject, ValueType,
 // };
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
-use tiauth_core::app;
+use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
 use tiauth_core::{
     app::ProofBaseView,
     crypto::{load_key, Key},
@@ -17,8 +17,6 @@ use base64::{engine::general_purpose as b64, Engine as _};
 // #[macro_use]
 // extern crate napi_derive;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ClaimsArg(Claims);
 
 // impl FromNapiValue for ClaimsArg {
 //     unsafe fn from_napi_value(
@@ -60,7 +58,7 @@ pub struct ProofKey {
     key: Key,
 }
 
-pub struct LazyArg<T>(Lazy<T>);
+// pub struct LazyArg<T>(Lazy<T>);
 
 // impl<T> FromNapiValue for LazyArg<T>
 // where
@@ -120,14 +118,60 @@ pub fn create_set_claims_proof_map(
 
     let claims = if claims.is_instance_of::<Uint8Array>() {
         let bytes: Uint8Array = claims.unchecked_into();
-        Lazy::from_bytes(bytes.to_vec())
-    } else if claims.is_string() {
-        let encoded: JsString = claims.unchecked_into();
-        let bytes = b64::URL_SAFE_NO_PAD.decode(encoded.as_string().unwrap()).unwrap();
-        Lazy::from_bytes(bytes)
+        ByteOwned::new(bytes.to_vec())
     } else if claims.is_object() {
         let entries = Object::entries(claims.unchecked_ref());
-        let mut map = HashMap::with_capacity(entries.length() as usize);
+        let mut keys: Vec<String> = Vec::with_capacity(entries.length() as usize);
+        let mut values: Vec<Vec<u8>> = Vec::with_capacity(entries.length() as usize);
+
+            // let mut iter = claim_dict.into_iter().peekable();
+            // while let Some((k, v)) = iter.next() {
+            //     if let Some((k_next, _)) = iter.peek() {
+            //         if let Ok(Ordering::Less) = k_next.compare(&k) {
+            //             return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
+            //         }
+            //     }
+                
+            //     let key: String = k.extract().map_err(|e| {
+            //         let msg = format!("Failed to convert dictionary to claims map. Key '{}' is not a string: {}", k, e);
+            //         PyValueError::new_err(msg)
+            //     })?;
+
+            //     let value: Vec<u8> = if v.is_instance_of::<PyString>() {
+            //         let str_v: PyResult<String> = v.extract();
+            //         str_v.map(|v| v.into_bytes())
+            //     } else {
+            //         v.extract()
+            //     }.map_err(|e| {
+            //         let msg = format!("Failed to convert dictionary to claims map. Value '{}' is not a string and could not be extracted as bytes: {}", v, e);
+            //         PyValueError::new_err(msg)
+            //     })?;
+                
+            //     keys.push(key);
+            //     values.push(value);
+            // }
+
+            // let serialized = Claims::from_keys_values(keys, values).serialize();
+
+            // Ok(ClaimsSerialized::Serialized(serialized))
+        
+        // let mut iter = entries.into_iter();
+        // let mut i = 0;
+        // let mut prev: String;
+        // while let Some(e) = iter.next() {
+        //     if i != 1 {
+
+        //     }
+        //     i += 1;
+        //     if let Some(e_next) = iter.peek() {
+        //         if let Ok(Ordering::Less) = k_next.compare(&k) {
+        //             return Err(PyValueError::new_err("Claim keys are not sorted in ascending order!"))
+        //         }
+        //     }
+
+        // }
+        let mut i = 0;
+        let mut prev: String = "".to_owned();
         for e in entries {
             let e: &Array = e.unchecked_ref();
             let key = e.get(0);
@@ -137,6 +181,13 @@ pub fn create_set_claims_proof_map(
             } else {
                 return Err(Error::new("Key is not string!").into())
             };
+            if i != 1 {
+                if let Ordering::Greater = prev.cmp(&k) {
+                    return Err(Error::new("Claim keys are not sorted!").into())
+                }
+            }
+            i += 1;
+            prev = k.clone();
 
             let v = if value.is_instance_of::<Uint8Array>() {
                 let bytes: Uint8Array = value.unchecked_into();
@@ -147,10 +198,12 @@ pub fn create_set_claims_proof_map(
                 return Err(Error::new("Value is not string or bytes!").into())
             };
 
-            map.insert(k, v);
+            keys.push(k);
+            values.push(v);
         }
-
-        Lazy::from_inner(Claims(map))
+        
+        Claims::from_keys_values(keys, values).serialize()
+        //Lazy::from_inner(Claims(map))
     } else {
         return Err(Error::new("Cannot interpret claims argument as Claims type!").into())
     };
@@ -158,7 +211,7 @@ pub fn create_set_claims_proof_map(
     Ok(app::create_set_claims_proof(
         proof_base,
         &user_id,
-        claims,
+        claims.as_packed(),
     ))
 }
 

@@ -1,7 +1,7 @@
-use crate::{error::WrapErrorOneOf, prove::Proof};
 use crate::ops::prove::verify_proof_write;
 use crate::state::State;
 use crate::Tables;
+use crate::{error::WrapErrorOneOf, prove::Proof};
 use redb::{Error as DbError, ReadableTable};
 use terrors::OneOf;
 

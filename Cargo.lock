@@ -1062,7 +1062,6 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "lazy-borink-derive",
- "pyo3",
  "rkyv",
  "rmp-serde",
  "serde",
@@ -2197,7 +2196,6 @@ dependencies = [
  "base64",
  "getrandom",
  "js-sys",
- "lazy-borink",
  "napi-build",
  "serde",
  "serde-wasm-bindgen",
@@ -2233,14 +2231,11 @@ name = "tiauth-app-py"
 version = "0.1.0"
 dependencies = [
  "base64",
- "lazy-borink",
  "pyo3",
  "rmp",
  "rmp-serde",
  "terrors",
- "tiauth-app",
  "tiauth-core",
- "tiauth-server",
 ]
 
 [[package]]
@@ -2252,7 +2247,6 @@ dependencies = [
  "criterion",
  "ed25519-compact",
  "hex",
- "lazy-borink",
  "opaque-borink",
  "rand",
  "rayon",

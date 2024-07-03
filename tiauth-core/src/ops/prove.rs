@@ -9,114 +9,67 @@
 //! <target blob>
 //! <permission blob>
 
-use std::io::Read;
 use std::marker::PhantomData;
 use std::time::SystemTime;
 
 use crate::crypto::{self, sign_data, verify_signature, Key, PublicKey, SessionKey};
-use crate::data::{AboutVerify, ByteOwned, BytePacked, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent};
-use crate::data::{LEEWAY};
+use crate::data::LEEWAY;
+use crate::data::{
+    AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
+};
 use crate::error::WrapErrorOneOf;
 use crate::state::State;
+use crate::util::combine_encode;
 use crate::{ActionType, Claims, Tables, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
-use serde::{de::DeserializeOwned, Serialize};
 use terrors::OneOf;
 
 pub struct Proof<T> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
-    signature: Vec<u8>
+    signature: Vec<u8>,
 }
 
 /// Efficiently encode multiple slices into a base64url string, allocating O(n) only once, otherwise only allocating for a maximum of 3 bytes at the boundary of the slices.
-fn combine_encode(inputs: &[&[u8]], total_len: usize) -> String {
-    let total_triplets = total_len / 3;
-    let max_str_len = (total_triplets+1) * 4;
 
-    let mut buf: Vec<u8> = Vec::with_capacity(max_str_len);
-    let mut position: usize = 0;
-    let mut remaining: Vec<u8> = Vec::with_capacity(3);
-    for slice in inputs {
-        let mut slice = *slice;
-        let slice_len = slice.len();
-        if slice_len == 0 {
-            continue;
-        }
-
-        if remaining.len() > 0 {
-            let necessary = 3 - remaining.len();
-            if slice_len >= necessary {
-                let slice_taken = &slice[0..necessary];
-                // Remove used bytes from slice
-                slice = &slice[necessary..slice_len];
-                // Remaining is now always 3 bytes
-                remaining.extend_from_slice(slice_taken);
-                assert_eq!(remaining.len(), 3);
-                let mut buf_slice = &mut buf[position..(position+3)];
-                b64::URL_SAFE.encode_slice(&remaining, &mut buf_slice).unwrap();
-                // 4 characters per 3 bytes
-                position += 4;
-                remaining = Vec::with_capacity(3);
-            } else {
-                // slice_len and remaining_len must be 1, otherwise it would always have enough
-                assert_eq!(slice_len, 1);
-                assert_eq!(remaining.len(), 1);
-
-                remaining[1] = slice[0];
-                // We can continue since we dealt with the slice
-                continue;
-            }
-        }
-        // Now remaining is always empty
-        assert_eq!(remaining.len(), 0);
-
-        let slice_len = slice.len();
-        let slice_triplets = slice_len / 3;
-        let slice_triplet_len = slice_triplets * 3;
-        let remainder = slice_len - slice_triplet_len;
-        remaining.extend_from_slice(&slice[slice_triplet_len..slice_len]);
-        assert_eq!(remainder, remaining.len());
-
-        let slice_aligned = &slice[0..slice_triplet_len];
-        let buf_added = slice_triplets * 4;
-        let mut buf_slice = &mut buf[position..(position+buf_added)];
-        b64::URL_SAFE.encode_slice(&slice_aligned, &mut buf_slice).unwrap();
-        position += buf_added;
-    }
-
-
-    let last_part = b64::URL_SAFE_NO_PAD.encode(&remaining);
-    buf.extend_from_slice(last_part.as_bytes());
-
-    String::from_utf8(buf).unwrap()
-}
 
 impl<T> Proof<T> {
     pub fn into_encoded(self) -> String {
         let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
         let total_len = content_length.len() + self.content.len() + self.signature.len();
-        
-        combine_encode(&[&content_length, &self.content, &self.signature], total_len)
+
+        combine_encode(
+            &[&content_length, &self.content, &self.signature],
+            total_len,
+        )
     }
 }
 
-pub fn create_proof<T: ByteSerial>(application: &str,
+pub fn create_proof<T: ByteSerial>(
+    application: &str,
     expires_in: u64,
     action: ActionType,
     target: Target,
     target_data: TargetList,
     data: impl SerializedAs<T>,
-    key: &Key) -> Proof<T> {
+    key: &Key,
+) -> Proof<T> {
     let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let expires = expires_in + now;
-    let content = ProofContent::new(application, expires, action, target, target_data, data.serialized());
+    let content = ProofContent::new(
+        application,
+        expires,
+        action,
+        target,
+        target_data,
+        data.serialized(),
+    );
 
     write_proof(&content, key)
 }
@@ -125,16 +78,18 @@ fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Pro
     let content = proof_content.to_bytes();
     let signature = sign_data(key, &content);
 
-    Proof { content, signature, phantom: PhantomData }
+    Proof {
+        content,
+        signature,
+        phantom: PhantomData,
+    }
 }
 
-pub fn verify_proof_content<'a, 'b, T: ByteSerial>(
+pub fn verify_proof_content<'a, T: ByteSerial>(
     proof_bytes: &'a Proof<T>,
-    public_key: &'b PublicKey,
+    public_key: &PublicKey,
     verify: AboutVerify,
-) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>>
-
-{
+) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
     let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content);
 
     // let (mut lazy_proof, signature) = proof.into_parts();
@@ -232,20 +187,28 @@ impl Session {
     }
 }
 
-pub fn create_session(application: &str,
+pub fn create_session(
+    application: &str,
     user_id: &str,
     expires_in: u64,
     session_claims: impl SerializedAs<Claims>,
-    key: &SessionKey) -> Session {
+    key: &SessionKey,
+) -> Session {
     let issued = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let expires = expires_in + issued;
-    let content = SessionContent::new(application, user_id, issued, expires, session_claims.serialized());
+    let content = SessionContent::new(
+        application,
+        user_id,
+        issued,
+        expires,
+        session_claims.serialized(),
+    );
 
     Session {
-        encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy())
+        encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy()),
     }
 }
 
@@ -260,21 +223,22 @@ impl VerifiedSession {
 #[derive(Debug)]
 pub struct InvalidSession {}
 
-pub fn verify_session<'a, 'b>(state: &impl State, session_encrypted: &Session) -> Result<VerifiedSession, InvalidSession> {
-    let session_decrypted = crypto::session_decrypt(&session_encrypted.encrypted_bytes, &state.private().session)
-        .map_err(|_e| InvalidSession {})?;
+pub fn verify_session(
+    state: &impl State,
+    session_encrypted: &Session,
+) -> Result<VerifiedSession, InvalidSession> {
+    let session_decrypted =
+        crypto::session_decrypt(&session_encrypted.encrypted_bytes, &state.private().session)
+            .map_err(|_e| InvalidSession {})?;
 
     Ok(VerifiedSession(session_decrypted))
 }
 
-
-
 #[cfg(feature = "test")]
 pub mod test_util {
-    use crate::data::{BytePacked, SerializedAs, EXPIRE_TIME};
+    use crate::data::SerializedAs;
     use crate::data::{ActionType, Claims, Target, TargetList};
     use crate::state::test_util::*;
-    use std::time::UNIX_EPOCH;
 
     use super::*;
 
@@ -303,7 +267,15 @@ pub mod test_util {
         let expires_in = expires_in.unwrap_or(1800);
         let key = state.proof_key(application);
 
-        create_proof(application, expires_in, ActionType::Set, Target::Select, TargetList::user(user_id), claims, key)
+        create_proof(
+            application,
+            expires_in,
+            ActionType::Set,
+            Target::Select,
+            TargetList::user(user_id),
+            claims,
+            key,
+        )
     }
 }
 
@@ -328,13 +300,15 @@ mod tests {
 
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
-        let session = create_session(user_id, app, EXPIRE_TIME, claims.serialize(), &state.private().session);
+        let session = create_session(
+            user_id,
+            app,
+            EXPIRE_TIME,
+            claims.serialize(),
+            &state.private().session,
+        );
 
-        let session = verify_session(
-            &state,
-            &session,
-        )
-        .unwrap();
+        let session = verify_session(&state, &session).unwrap();
 
         let session_read = session.read().unwrap();
         let session_claims = session_read.session_claims.deserialize();
@@ -362,12 +336,8 @@ mod tests {
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
         let proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
 
-        let proof_content = verify_proof(
-            &state,
-            &proof,
-            AboutVerify::new(app, ActionType::Set),
-        )
-        .unwrap();
+        let proof_content =
+            verify_proof(&state, &proof, AboutVerify::new(app, ActionType::Set)).unwrap();
 
         let deser_claims = proof_content.data.deserialize();
 

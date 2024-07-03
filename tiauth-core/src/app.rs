@@ -3,9 +3,8 @@
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
 use crate::prove::{create_proof, Proof};
+use crate::Claims;
 use crate::{ActionType, Target, TargetList};
-use crate::{Claims};
-use lazy_borink::Lazy;
 
 pub fn create_private_key_pem() -> String {
     let key = create_key();
@@ -51,33 +50,11 @@ pub fn create_set_claims_proof(
         target,
         TargetList::from_vec(target_data),
         claims,
-        proof_base.key
+        proof_base.key,
     );
 
     proof.into_encoded()
 }
-
-// pub fn create_set_claims_proof(
-//     proof_base: ProofBaseView,
-//     user_id: &str,
-//     claims: Lazy<Claims>,
-// ) -> String {
-//     let action = ActionType::Set;
-//     let target = Target::Select;
-//     let target_data = Lazy::from_inner(vec![user_id.to_owned()]);
-
-//     let proof = Proof::new(
-//         proof_base.application,
-//         proof_base.expires_in,
-//         action,
-//         target,
-//         target_data.into(),
-//         claims,
-//         proof_base.key,
-//     );
-
-//     proof.into_encoded()
-// }
 
 pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
     let action = ActionType::Reset;
@@ -91,7 +68,7 @@ pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
         target,
         target_data,
         BytePacked::empty(),
-        proof_base.key
+        proof_base.key,
     );
 
     proof.into_encoded()
@@ -108,7 +85,7 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
         target,
         TargetList::empty(),
         BytePacked::new(&[]),
-        proof_base.key
+        proof_base.key,
     );
 
     proof.into_encoded()

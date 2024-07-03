@@ -16,6 +16,7 @@ pub use crate::data::ActionType;
 pub use crate::data::Application;
 pub use crate::data::Claims;
 //pub use crate::data::Proof;
+pub use crate::data::{BytePacked, ByteOwned, ByteSerial};
 pub use crate::data::Target;
 pub use crate::data::TargetList;
 
@@ -45,9 +46,8 @@ pub mod app;
 
 #[cfg(feature = "test")]
 pub mod test {
-    pub use super::store::test_util::*;
-    pub use super::state::test_util::*;
     pub use super::ops::login::test_util::*;
     pub use super::ops::prove::test_util::*;
     pub use super::ops::register::test_util::*;
+    pub use super::state::test_util::*;
 }

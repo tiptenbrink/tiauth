@@ -1,5 +1,7 @@
 use super::prove::{verify_proof_content, verify_session};
-use crate::data::{AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, SessionContent, CHANGE_AGE, DELETE_AGE, LEEWAY};
+use crate::data::{
+    AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
+};
 use crate::error::OneOfTo;
 use crate::ops::prove::verify_proof_write;
 use crate::prove::{Proof, Session};
@@ -87,7 +89,10 @@ fn reset_password(
     Ok(set_nonce)
 }
 
-fn change_password(state: &impl State, session_encrypted: &Session) -> Result<String, OneOf<(DbError,)>> {
+fn change_password(
+    state: &impl State,
+    session_encrypted: &Session,
+) -> Result<String, OneOf<(DbError,)>> {
     let verified = verify_session(state, session_encrypted).unwrap();
     let session = verified.read().unwrap();
 
@@ -139,7 +144,10 @@ fn change_password(state: &impl State, session_encrypted: &Session) -> Result<St
     Ok(change_nonce)
 }
 
-fn session_delete_user(state: &impl State, session_encrypted: &Session) -> Result<(), OneOf<(DbError,)>> {
+fn session_delete_user(
+    state: &impl State,
+    session_encrypted: &Session,
+) -> Result<(), OneOf<(DbError,)>> {
     let verified = verify_session(state, session_encrypted).unwrap();
     let session = verified.read().unwrap();
 
@@ -260,7 +268,15 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
         let key = state.proof_key(app);
-        let proof = create_proof(app, 1800, ActionType::Reset, Target::Select, TargetList::user(user_id), BytePacked::empty(), key);
+        let proof = create_proof(
+            app,
+            1800,
+            ActionType::Reset,
+            Target::Select,
+            TargetList::user(user_id),
+            BytePacked::empty(),
+            key,
+        );
 
         let nonce = reset_password(&state, app, &proof).unwrap();
 
@@ -327,7 +343,15 @@ mod tests {
         register_flow(&state, user_id, app, password, None, None);
 
         let key = state.proof_key(app);
-        let proof = create_proof(app, 1800, ActionType::Delete, Target::Select, TargetList::user(user_id), BytePacked::empty(), key);
+        let proof = create_proof(
+            app,
+            1800,
+            ActionType::Delete,
+            Target::Select,
+            TargetList::user(user_id),
+            BytePacked::empty(),
+            key,
+        );
 
         app_delete_user(&state, app, &proof).unwrap();
 

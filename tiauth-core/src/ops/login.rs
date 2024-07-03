@@ -1,17 +1,18 @@
 #![allow(dead_code)]
 
-use crate::crypto::{self};
-use crate::data::{BytePacked, EXPIRE_TIME};
-use crate::data::{LEEWAY};
+use crate::data::EXPIRE_TIME;
+use crate::data::LEEWAY;
 use crate::error::WrapErrorOneOf;
 use crate::prove::{create_session, Session};
 use crate::state::State;
-use crate::store::{get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry, EphemeralType};
+use crate::store::{
+    get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry,
+    EphemeralType,
+};
 use crate::util::nonce_384;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error;
-use rmp_serde::encode;
 use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
@@ -86,7 +87,8 @@ fn login_session<S: AsRef<str>>(
     }
 
     let claims = get_login_claims_bytes(state, application, &user_id, requested_claims)
-        .to_one_of_two()?.unwrap();
+        .to_one_of_two()?
+        .unwrap();
 
     let key = &state.private().session;
 
@@ -98,7 +100,7 @@ fn login_session<S: AsRef<str>>(
 #[cfg(feature = "test")]
 pub mod test_util {
     use crate::{
-        data::Claims, ops::register::test_util::*, prove::Proof, state::test_util::TestState
+        data::Claims, ops::register::test_util::*, prove::Proof, state::test_util::TestState,
     };
     use opaque_borink::client::{client_login, client_login_finish};
 
@@ -169,7 +171,8 @@ mod tests {
 
     #[test]
     fn test_login_session() {
-        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+        let email_value = "hi@abc.nl";
+        let claims = Claims::new(vec![("email", email_value), ("other_claim", "other_value")]);
 
         let user_id = "hi";
         let app = "abc";
@@ -187,10 +190,16 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let session = login_session(&state, app, &request, &nonce, &secret, Some(vec!["email"])).unwrap();
+        let session =
+            login_session(&state, app, &request, &nonce, &secret, Some(vec!["email"])).unwrap();
 
         let verified = verify_session(&state, &session).unwrap();
 
-        
+        let verified_read = verified.read().unwrap();
+
+        let claims = verified_read.session_claims.deserialize();
+
+        let claims_email = claims.get_claim("email");
+        assert_eq!(email_value.as_bytes(), claims_email)
     }
 }

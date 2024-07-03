@@ -68,13 +68,18 @@ def register_flow():
         raise ValueError(r.text)
 
 def proof_time():
-    ob = {}
+    ob_keys: list[str] = []
+    ob_values: list[bytes] = []
     d_size = 1000000
     for i in range(int(d_size/20)):
         val = random.random()
         a = bytes([random.randint(0, 255) for j in range(8)])
         k_str = f"{val}"[0:12]
-        ob[k_str] = a
+        ob_keys.append(k_str)
+        ob_values.append(a)
+
+    ob_keys = sorted(ob_keys)
+    ob = {k: ob_values[i] for i, k in enumerate(ob_keys)}
 
     ob_encode = msgpack.encode(ob)
     print(f"size: {len(ob_encode)/1000} kB")
