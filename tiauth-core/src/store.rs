@@ -5,7 +5,7 @@ use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    data::{ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs},
+    data::{ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs, SessionClaims},
     error::WrapErrorOneOf,
     state::State,
     Claims,
@@ -386,11 +386,11 @@ pub fn get_login(
     }
 }
 
-pub fn get_login_claims_bytes<S: AsRef<str>>(
+pub fn get_login_claims_bytes(
     state: &impl State,
     application: &str,
     user_id: &str,
-    requested_claims: Option<Vec<S>>,
+    requested_claims: SessionClaims,
 ) -> Result<Option<ByteOwned<Claims>>, DbError> {
     let read_txn = state.db().begin_read()?;
     let tables = state.tables().app(application);
@@ -404,10 +404,12 @@ pub fn get_login_claims_bytes<S: AsRef<str>>(
 
         let login = Login::deserialize(login_bytes);
 
-        let claim_bytes = if let Some(subset) = requested_claims {
+        let claim_bytes = if let SessionClaims::Some(subset) = requested_claims {
+            // This is very cheap since it's a zero-copy deserialization
             let claim_view = login.claims.deserialize();
             claim_view.subset_serialize(&subset)
         } else {
+            // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function
             login.claims.to_owned()
         };
 
@@ -448,7 +450,7 @@ mod tests {
         assert_eq!(value.user_id, read_login.user_id);
         assert_eq!(value.password_file, read_login.password_file);
 
-        let read_login = get_login_claims_bytes(&state, app, &value.user_id, None::<Vec<String>>)
+        let read_login = get_login_claims_bytes(&state, app, &value.user_id, SessionClaims::All)
             .unwrap()
             .unwrap();
 

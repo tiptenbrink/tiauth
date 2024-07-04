@@ -155,6 +155,10 @@ Note that this can lead to significantly more storage requirements.
 
 redb cannot store bytes in an aligned way. This is required for rkyv's zero-copy deserialization. 
 
+### Use unix domain sockets in Docker
+
+https://blog.myhro.info/2017/01/benchmarking-ip-and-unix-domain-sockets-for-real
+
 
 ### Subset algo results
 

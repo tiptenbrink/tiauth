@@ -1,10 +1,8 @@
 use crate::admin;
 use crate::functions;
+use crate::functions::{LoginFinishRequest, SessionResponse, RegisterFinishRequest, PakeRequest, PakeResponse};
 use crate::state::ServerState;
-use crate::{
-    admin::GetUsers,
-    functions::{PakeFinishRequest, PakeRequest, PakeResponse},
-};
+use crate::admin::GetUsers;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -75,16 +73,30 @@ async fn start_register(
     ExtractState(state): ExtractState<ServerState>,
     Json(request): Json<PakeRequest>,
 ) -> Json<PakeResponse> {
-    Json(functions::start_register(&state, request).await)
+    Json(functions::start_register(&state, request))
 }
 
 async fn register_finish(
     ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<PakeFinishRequest>,
+    Json(payload): Json<RegisterFinishRequest>,
 ) -> Result<(), ErrorResponse> {
-    functions::register_finish(&state, payload).await;
+    functions::register_finish(&state, payload);
 
     Ok(())
+}
+
+async fn start_login(
+    ExtractState(state): ExtractState<ServerState>,
+    Json(request): Json<PakeRequest>,
+) -> Json<PakeResponse> {
+    Json(functions::start_login(&state, request))
+}
+
+async fn login_session(
+    ExtractState(state): ExtractState<ServerState>,
+    Json(payload): Json<LoginFinishRequest>,
+) -> Json<SessionResponse> {
+    Json(functions::login_session(&state, payload))
 }
 
 async fn admin_get_users_encoded(
@@ -117,6 +129,8 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
         .route("/", get(|| async { "Hello, World!" }))
         .route("/register/start", post(start_register))
         .route("/register/finish", post(register_finish))
+        .route("/login/start", post(start_login))
+        .route("/login/session", post(login_session))
         .route("/admin/users", post(admin_get_users_encoded))
         .with_state(state)
 }

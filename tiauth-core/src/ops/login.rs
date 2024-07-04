@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::data::SessionClaims;
 use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
 use crate::error::WrapErrorOneOf;
@@ -13,7 +14,7 @@ use crate::util::nonce_384;
 use crate::Session;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
-use redb::Error;
+use redb::Error as DbError;
 use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
@@ -23,9 +24,9 @@ use terrors::OneOf;
 pub fn login_start(
     state: &impl State,
     application: &str,
-    user_id: &str,
     request: &str,
-) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
+    user_id: &str,
+) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
     let read_login = get_login(state, application, user_id).unwrap().unwrap();
 
     let (response, state_data) = login_server(
@@ -49,12 +50,12 @@ pub fn login_start(
 /// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce, which is the serialized state entry key, which includes an
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
-pub fn login_finish(
+fn login_finish(
     state: &impl State,
     application: &str,
     request: &str,
     nonce: &str,
-) -> Result<(String, String), OneOf<(Error, OpaqueError)>> {
+) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
     let entry = pop_ephemeral(state, application, nonce, vec![EphemeralType::Opaque])
         .to_one_of_two()?
         .unwrap();
@@ -73,14 +74,14 @@ pub fn login_finish(
     Ok((secret, entry.user_id))
 }
 
-fn login_session<S: AsRef<str>>(
+pub fn login_session(
     state: &impl State,
     application: &str,
     request: &str,
     nonce: &str,
     secret: &str,
-    requested_claims: Option<Vec<S>>,
-) -> Result<Session, OneOf<(Error, OpaqueError)>> {
+    requested_claims: SessionClaims,
+) -> Result<Session, OneOf<(DbError, OpaqueError)>> {
     let (server_secret, user_id) = login_finish(state, application, request, nonce)?;
 
     if secret != server_secret {
@@ -112,7 +113,7 @@ pub mod test_util {
         password: &str,
         claims: Option<&Proof<Claims>>,
         // empty vec is no claims, none is all claims (default)
-        session_claims: Option<Vec<&str>>,
+        session_claims: SessionClaims,
     ) -> Session {
         register_flow(state, user_id, application, password, None, claims);
 
@@ -190,7 +191,7 @@ mod tests {
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
         let session =
-            login_session(&state, app, &request, &nonce, &secret, Some(vec!["email"])).unwrap();
+            login_session(&state, app, &request, &nonce, &secret, SessionClaims::from_subset_str(vec!["email"])).unwrap();
 
         let verified = verify_session(&state, &session).unwrap();
 

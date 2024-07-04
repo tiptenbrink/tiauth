@@ -18,6 +18,7 @@ pub use crate::data::Application;
 pub use crate::data::Claims;
 pub use crate::data::Target;
 pub use crate::data::TargetList;
+pub use crate::data::SessionClaims;
 pub use crate::data::{ByteOwned, BytePacked, ByteSerial, Encodable};
 pub use crate::proof::{Proof, Session};
 

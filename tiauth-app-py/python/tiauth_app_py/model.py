@@ -15,15 +15,15 @@ class PakeRequest(Struct):
 
 class PakeResponse(Struct):
     opaque_response: str
-    register_start_nonce: str
+    start_nonce: str
 
 type ClaimsProof = str
 """Proof obtained using `create_set_claims_proof`."""
 
-class PakeFinishRequest(Struct):
+class RegisterFinishRequest(Struct):
     application: str
     opaque_request: str
-    register_start_nonce: str
+    start_nonce: str
     claims_proof: Optional[ClaimsProof] = None
 
 type ReadAllProof = str
@@ -35,3 +35,14 @@ class GetUsers(Struct):
 
 class StructList(Struct):
     list: list[bytes]
+
+class LoginFinishRequest(Struct):
+    application: str
+    opaque_request: str
+    start_nonce: str
+    pake_secret: str
+    all_claims: Optional[bool]
+    requested_claims: Optional[list[str]]
+
+class SessionResponse(Struct):
+    session: str

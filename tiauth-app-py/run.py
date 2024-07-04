@@ -4,7 +4,7 @@ from base64 import urlsafe_b64encode
 from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
-from tiauth_app_py.model import PakeFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
+from tiauth_app_py.model import RegisterFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
 from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof, load_key_from_pem
 import tiauth_app_py
 from time import perf_counter

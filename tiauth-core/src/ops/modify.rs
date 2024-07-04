@@ -251,7 +251,7 @@ fn app_delete_user(
 mod tests {
 
     use super::*;
-    use crate::data::{BytePacked, Target, TargetList};
+    use crate::data::{BytePacked, SessionClaims, Target, TargetList};
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
     use crate::proof::create_proof;
@@ -299,7 +299,7 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let session = login_create_session(&state, user_id, app, password, None, None);
+        let session = login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
         let nonce = change_password(&state, &session).unwrap();
 
@@ -323,7 +323,7 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let session = login_create_session(&state, user_id, app, password, None, None);
+        let session = login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
         session_delete_user(&state, &session).unwrap();
 

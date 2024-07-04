@@ -247,6 +247,38 @@ pub trait Encodable {
     fn encode(&self) -> String;
 }
 
+#[derive(Debug)]
+pub enum SessionClaims {
+    All,
+    Some(Vec<String>)
+}
+
+impl SessionClaims {
+    pub fn from_options(all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> Result<SessionClaims, &'static str> {
+        if let Some(requested_claims) = requested_claims {
+            if all_claims.is_some() && all_claims.unwrap() {
+                return Err("Invalid requested claims! Cannot request all_claims: true and provide claims!")
+            }
+
+            return Ok(SessionClaims::Some(requested_claims))
+        } else if let Some(all_claims) = all_claims{
+            if all_claims {
+                return Ok(SessionClaims::All)
+            }
+        }
+
+        Ok(SessionClaims::Some(Vec::new()))
+    }
+
+    pub fn from_subset_str(subset: Vec<&str>) -> Self {
+        Self::Some(subset.into_iter().map(|s| s.to_owned()).collect())
+    }
+
+    pub fn from_subset(subset: Vec<String>) -> Self {
+        Self::Some(subset)
+    }
+}
+
 /// VarZeroVec require a "serialization" step to create and pushing to them is expensive, so it is preferred to treat them as immutable and create them only
 /// when needed from a Claims struct.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
