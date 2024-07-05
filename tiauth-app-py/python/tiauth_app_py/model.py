@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from msgspec import msgpack, Struct
 
 type Claims = dict[str, bytes | str]
@@ -27,14 +27,28 @@ class RegisterFinishRequest(Struct):
     claims_proof: Optional[ClaimsProof] = None
 
 type ReadAllProof = str
-"""Proof obtained using `create_read_all_proof`."""
+"""Proof obtained using `create_read_all_proof`"""
+
+type ReadSomeProof = str
+"""Proof obtained using `create_read_some_proof`"""
+
+type ReadRangeProof = str
+"""Proof obtained using `create_read_range_proof`"""
 
 class GetUsers(Struct):
     application: str
-    read_all_proof: ReadAllProof
+    read_proof: ReadAllProof | ReadSomeProof
+    include_claims: Literal[True] | None
 
-class StructList(Struct):
-    list: list[bytes]
+class UserList(Struct):
+    users: list[bytes]
+
+class User(Struct, array_like=True):
+    user_id: str
+
+class UserClaims(Struct, array_like=True):
+    user_id: str
+    claims: bytes
 
 class LoginFinishRequest(Struct):
     application: str

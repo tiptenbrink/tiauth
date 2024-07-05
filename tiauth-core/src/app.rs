@@ -90,3 +90,42 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
 
     proof.encode()
 }
+
+/// Ensure that the selection is sorted.
+pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>) -> String {
+    let action = ActionType::Read;
+    let target = Target::Select;
+
+    let proof: Proof<()> = create_proof(
+        proof_base.application,
+        proof_base.expires_in,
+        action,
+        target,
+        TargetList::from_vec(selection),
+        BytePacked::new(&[]),
+        proof_base.key,
+    );
+
+    proof.encode()
+}
+
+pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>) -> String {
+    if selection.len() != 2 {
+        panic!("Range should include exactly two elements!")
+    }
+    
+    let action = ActionType::Read;
+    let target = Target::Range;
+
+    let proof: Proof<()> = create_proof(
+        proof_base.application,
+        proof_base.expires_in,
+        action,
+        target,
+        TargetList::from_vec(selection),
+        BytePacked::new(&[]),
+        proof_base.key,
+    );
+
+    proof.encode()
+}

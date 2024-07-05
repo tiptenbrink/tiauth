@@ -110,23 +110,49 @@ Every request or call is a simple map type, with primitive or simple sequence va
 
 ## HTTP
 
-`register_start`:
-model {
+`register/start`:
+```
+model json {
     application: str
-    opaque_request: str
+    opaque_request: str  # output from opaque_register_client
     user_id: st
-} -> {
-    register_start_nonce: str
+} -> json {
+    start_nonce: str
     opaque_response: str
 }
-
-`register_finish`:
 ```
-model {
+
+`register/finish`:
+```
+model json {
     application: str
     opaque_request: str  # output from opaque_register_client_finish
-    register_start_nonce: str  # output from register_start
-    claims_proof: str | None  #
+    start_nonce: str  # output from register_start
+    claims_proof?: str | null  # output from create_set_claims_proof
+} -> ok
+```
+
+`login/start`:
+```
+model json {
+    application: str
+    opaque_request: str  # output from opaque_login_client
+    user_id: st
+} -> json {
+    start_nonce: str
+    opaque_response: str
+}
+```
+
+`login/session`:
+```
+model json {
+    application: str
+    opaque_request: str  # output from opaque_login_client_finish
+    start_nonce: str  # output from login_start
+    pake_secret: str  # output from opaque_login_client_finish
+        all_claims: true ;
+        requested_claims: list[str]
 } -> ok
 ```
 

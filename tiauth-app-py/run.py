@@ -4,8 +4,9 @@ from base64 import urlsafe_b64encode
 from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
-from tiauth_app_py.model import RegisterFinishRequest, PakeRequest, PakeResponse, GetUsers, StructList
+from tiauth_app_py.model import RegisterFinishRequest, PakeRequest, PakeResponse, GetUsers, User, UserList, UserClaims
 from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof, load_key_from_pem
+from tiauth_app_py.app import create_read_range_proof, create_read_some_proof
 import tiauth_app_py
 from time import perf_counter
 import random
@@ -31,18 +32,45 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 json_client = Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
 APP_NAME = "some_app"
 
-def get_users():
+def get_all_users():
     key = load_key_from_pem(private)
 
     proof = create_read_all_proof(APP_NAME, key)
-    req = GetUsers(APP_NAME, proof)
+    req = GetUsers(APP_NAME, proof, None)
 
     r: Response = json_client.post("/admin/users", content=json.encode(req))
     # print(r.content.decode('utf-8'))
-    structs = msgpack.decode(r.content, type=StructList)
+    structs = msgpack.decode(r.content, type=UserList)
 
-    for u_encoded in structs.list:
-        print(msgpack.decode(u_encoded, type=Login))
+    for u_encoded in structs.users:
+        print(msgpack.decode(u_encoded, type=User))
+
+
+def get_some_users(users: list[str]):
+    key = load_key_from_pem(private)
+
+    proof = create_read_some_proof(APP_NAME, key, users)
+    req = GetUsers(APP_NAME, proof, True)
+
+    r: Response = json_client.post("/admin/users", content=json.encode(req))
+    # print(r.content.decode('utf-8'))
+    structs = msgpack.decode(r.content, type=UserList)
+
+    for u_encoded in structs.users:
+        print(msgpack.decode(u_encoded, type=UserClaims))
+
+def get_range_users(user_range: tuple[str, str]):
+    key = load_key_from_pem(private)
+
+    proof = create_read_range_proof(APP_NAME, key, user_range)
+    req = GetUsers(APP_NAME, proof, True)
+
+    r: Response = json_client.post("/admin/users", content=json.encode(req))
+    # print(r.content.decode('utf-8'))
+    structs = msgpack.decode(r.content, type=UserList)
+
+    for u_encoded in structs.users:
+        print(msgpack.decode(u_encoded, type=UserClaims))
 
 
 def register_flow():
@@ -112,7 +140,11 @@ def proof_time():
     
 # print(public_from_private_key_pem(private))
     
-get_users()
+#get_all_users()
+
+# get_some_users(['f228bfbe-30a7-4ab0-813a-b39c4a57dcb1'])
+
+get_range_users(('3', 'b'))
 
 # print(create_private_key_pem())
 

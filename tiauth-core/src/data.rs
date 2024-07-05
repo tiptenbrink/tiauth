@@ -613,6 +613,8 @@ pub enum ActionType {
 pub enum Target {
     #[serde(rename = "select")]
     Select,
+    #[serde(rename = "range")]
+    Range,
     #[serde(rename = "all")]
     All,
 }
@@ -621,6 +623,7 @@ impl Target {
     fn name(&self) -> &'static str {
         match &self {
             Self::Select => "select",
+            Self::Range => "range",
             Self::All => "all",
         }
     }
@@ -745,7 +748,7 @@ where
                     Err(OneOf::new(InvalidProof {}))
                 }
             }
-            Target::All => Err(OneOf::new(InvalidProof {})),
+            _ => Err(OneOf::new(InvalidProof {})),
         }
     }
 }
@@ -768,6 +771,10 @@ impl TargetList {
 
     pub fn empty() -> Self {
         Self(Vec::new())
+    }
+
+    pub fn as_vec(self) -> Vec<String> {
+        self.0
     }
 }
 

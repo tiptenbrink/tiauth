@@ -1,5 +1,5 @@
 import tiauth_app_py._internal as _internal
-from tiauth_app_py.model import ClaimsBytes, Claims, ReadAllProof, ClaimsProof
+from tiauth_app_py.model import ClaimsBytes, Claims, ReadAllProof, ReadSomeProof, ReadRangeProof, ClaimsProof
 
 ProofKey = _internal.ProofKey
 
@@ -20,3 +20,11 @@ def create_reset_proof(application: str, key: ProofKey, user_id: str) -> ClaimsP
 
 def create_read_all_proof(application: str, key: ProofKey) -> ReadAllProof:
    return  _internal.create_read_all_proof(application, key)
+
+def create_read_some_proof(application: str, key: ProofKey, selection: list[str]) -> ReadSomeProof:
+   """`selection` is a sorted list of targets."""
+   return  _internal.create_read_some_proof(application, key, selection)
+
+def create_read_range_proof(application: str, key: ProofKey, selection: tuple[str, str]) -> ReadRangeProof:
+   """`selection` is a sorted list of targets."""
+   return  _internal.create_read_range_proof(application, key, list(selection))

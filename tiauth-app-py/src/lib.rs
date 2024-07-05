@@ -31,6 +31,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_reset_proof, m)?)?;
     m.add_function(wrap_pyfunction!(create_read_all_proof, m)?)?;
     m.add_function(wrap_pyfunction!(load_key_from_pem, m)?)?;
+    m.add_function(wrap_pyfunction!(create_read_some_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(create_read_range_proof, m)?)?;
     m.add_class::<ProofKey>()?;
     // m.add_submodule(&internal)?;
 
@@ -151,4 +153,18 @@ fn create_read_all_proof(application: &str, key: &Bound<'_, ProofKey>) -> PyResu
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
     Ok(app::create_read_all_proof(proof_base))
+}
+
+#[pyfunction]
+fn create_read_some_proof(application: &str, key: &Bound<'_, ProofKey>, selection: Vec<String>) -> PyResult<String> {
+    let proof_base = ProofBaseView::new(application, &key.get().key);
+
+    Ok(app::create_read_some_proof(proof_base, selection))
+}
+
+#[pyfunction]
+fn create_read_range_proof(application: &str, key: &Bound<'_, ProofKey>, selection: Vec<String>) -> PyResult<String> {
+    let proof_base = ProofBaseView::new(application, &key.get().key);
+
+    Ok(app::create_read_range_proof(proof_base, selection))
 }
