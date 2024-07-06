@@ -17,7 +17,7 @@ pub struct UserList {
     users: Vec<ByteBuf>
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct User<'a> {
     user_id: &'a str,
 }
@@ -39,8 +39,6 @@ pub fn get_users_bytes(
     let mut proof_content =
         verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read))
             .map_err(OneOf::broaden)?;
-
-    
 
     let tables = state.tables().app(application);
 
@@ -83,15 +81,19 @@ pub fn get_users_bytes(
         let first = user_selection.first().unwrap();
         let last = user_selection.last().unwrap();
 
+        if first > last {
+            panic!("Selection or range is not sorted!")
+        }
+
         user_table.range(first.as_str()..=last.as_str()).to_one_of_two()?
 
     } else {
         user_table.iter().to_one_of_two()?
     };
-    // let iter_second = iter.clone().map(|v| {
-    //     v.unwrap().0.value().to_owned()
-    // });
-    // println!("iter: {:?}", iter_second.collect::<Vec<String>>());
+    let iter_second = iter.clone().map(|v| {
+        v.unwrap().0.value().to_owned()
+    });
+    println!("iter: {:?}", iter_second.collect::<Vec<String>>());
 
     let filter_selection = user_selection.is_some() && !is_range;
     let user_selection = if filter_selection { user_selection.unwrap() } else { Vec::new() };
@@ -142,4 +144,161 @@ pub fn get_users_bytes(
     }
 
     Ok(UserList { users })
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{data::Login, proof::create_proof, store::set_login, test::TestState, BytePacked, ByteSerial, Claims, TargetList};
+    use super::*;
+
+    fn parse_user_list(user_list: UserList) -> Vec<String> {
+        user_list.users.into_iter().map(|u| {
+            rmp_serde::from_slice::<User>(u.as_slice()).unwrap().user_id.to_owned()
+        }).collect()
+    }
+
+    fn setup_users(state: &impl State, application: &str) {
+        let claims = Claims::empty().serialize();
+
+        let user_1 = Login {
+            user_id: "1".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: claims.as_packed(),
+        };
+        let user_2 = Login {
+            user_id: "a".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: claims.as_packed(),
+        };
+        let user_3 = Login {
+            user_id: "de".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: claims.as_packed(),
+        };
+        let user_4 = Login {
+            user_id: "df".to_owned(),
+            password_file: "pw".to_owned(),
+            claims: claims.as_packed(),
+        };
+
+        set_login(state, &user_1, application).unwrap();
+        set_login(state, &user_2, application).unwrap();
+        set_login(state, &user_3, application).unwrap();
+        set_login(state, &user_4, application).unwrap();
+    }
+
+    #[test]
+    fn test_filter() {
+        let state = TestState::setup_test(vec!["app"]);
+
+        setup_users(&state, "app");
+
+        let action = ActionType::Read;
+
+        let key = state.proof_key("app");
+        let empty_data = BytePacked::new(&[]);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action.clone(),
+            Target::Select,
+            TargetList::new(vec!["a"]),
+            empty_data,
+            key,
+        );
+        let one_user = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let user_ids = parse_user_list(one_user);
+        assert_eq!(vec!["a"], user_ids);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action.clone(),
+            Target::Select,
+            TargetList::new(vec!["1", "a", "z"]),
+            empty_data,
+            key,
+        );
+        let user_more = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let user_ids = parse_user_list(user_more);
+        assert_eq!(vec!["1", "a"], user_ids);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action.clone(),
+            Target::Select,
+            TargetList::new(vec!["xyz"]),
+            empty_data,
+            key,
+        );
+        let user_not_exists = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let user_ids = parse_user_list(user_not_exists);
+        assert_eq!(Vec::<String>::new(), user_ids);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action,
+            Target::Range,
+            TargetList::new(vec!["a", "df"]),
+            empty_data,
+            key,
+        );
+        let user_range = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let user_ids = parse_user_list(user_range);
+        assert_eq!(vec!["a", "de", "df"], user_ids);
+
+    }
+
+    #[test]
+    #[should_panic(expected = "Selection is not sorted!")]
+    fn test_not_sorted() {
+        let state = TestState::setup_test(vec!["app"]);
+
+        setup_users(&state, "app");
+
+        let action = ActionType::Read;
+
+        let key = state.proof_key("app");
+        let empty_data = BytePacked::new(&[]);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action,
+            Target::Select,
+            TargetList::new(vec!["a", "1", "z"]),
+            empty_data,
+            key,
+        );
+        let one_user = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let user_ids = parse_user_list(one_user);
+    }
+
+    #[test]
+    #[should_panic(expected = "Selection or range is not sorted!")]
+    fn test_not_sorted_range() {
+        let state = TestState::setup_test(vec!["app"]);
+
+        setup_users(&state, "app");
+
+        let action = ActionType::Read;
+
+        let key = state.proof_key("app");
+        let empty_data = BytePacked::new(&[]);
+
+        let proof: Proof<()> = create_proof(
+            "app",
+            1800,
+            action,
+            Target::Select,
+            TargetList::new(vec!["d", "a"]),
+            empty_data,
+            key,
+        );
+        let one_user = get_users_bytes(&state, "app", false, &proof).unwrap();
+        let _ = parse_user_list(one_user);
+    }
 }
