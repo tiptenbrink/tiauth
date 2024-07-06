@@ -90,10 +90,6 @@ pub fn get_users_bytes(
     } else {
         user_table.iter().to_one_of_two()?
     };
-    let iter_second = iter.clone().map(|v| {
-        v.unwrap().0.value().to_owned()
-    });
-    println!("iter: {:?}", iter_second.collect::<Vec<String>>());
 
     let filter_selection = user_selection.is_some() && !is_range;
     let user_selection = if filter_selection { user_selection.unwrap() } else { Vec::new() };

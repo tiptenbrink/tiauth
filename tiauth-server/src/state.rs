@@ -55,7 +55,7 @@ impl Tables for ServerTables {
 
 impl State for ServerState {
     fn register_application_internal(&mut self, application: &Application) {
-        self.table_map.register_application(&application.name);
+        //self.table_map.register_application(&application.name);
         self.app_keys
             .lock()
             .unwrap()

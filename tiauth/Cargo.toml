@@ -10,3 +10,4 @@ redb = "2.1.1"
 axum = "0.7.5"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "net"] }
 rand = "0.8"
+tiny_http = "0.12.0"

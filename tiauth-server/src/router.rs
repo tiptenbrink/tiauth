@@ -106,25 +106,39 @@ async fn admin_get_users_encoded(
     admin::get_users_encoded(&state, payload).await
 }
 
-pub fn create_router<S, P>(db_path: P) -> Router<S>
+// pub fn create_router<S, P>(db_path: P) -> Router<S>
+// where
+//     S: Clone + Send + Sync + 'static,
+//     P: AsRef<Path>,
+// {
+//     let mut state = ServerState::setup(db_path).unwrap();
+
+//     let public_key_pem = "-----BEGIN PUBLIC KEY-----
+// MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
+// -----END PUBLIC KEY-----"
+//         .to_owned();
+
+//     let app = Application::new(
+//         SavedPublicKey::validate_pem(&public_key_pem).unwrap(),
+//         "some_app",
+//     );
+
+//     state.register_application(&app, true).unwrap();
+
+//     Router::new()
+//         .route("/", get(|| async { "Hello, World!" }))
+//         .route("/register/start", post(start_register))
+//         .route("/register/finish", post(register_finish))
+//         .route("/login/start", post(start_login))
+//         .route("/login/session", post(login_session))
+//         .route("/admin/users", post(admin_get_users_encoded))
+//         .with_state(state)
+// }
+
+pub fn create_router<S>(state: &ServerState) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
-    P: AsRef<Path>,
 {
-    let mut state = ServerState::setup(db_path).unwrap();
-
-    let public_key_pem = "-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
------END PUBLIC KEY-----"
-        .to_owned();
-
-    let app = Application::new(
-        SavedPublicKey::validate_pem(&public_key_pem).unwrap(),
-        "some_app",
-    );
-
-    state.register_application(&app, true).unwrap();
-
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/register/start", post(start_register))
@@ -132,5 +146,5 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
         .route("/login/start", post(start_login))
         .route("/login/session", post(login_session))
         .route("/admin/users", post(admin_get_users_encoded))
-        .with_state(state)
+        .with_state(state.clone())
 }

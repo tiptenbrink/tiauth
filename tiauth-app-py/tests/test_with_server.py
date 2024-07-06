@@ -46,7 +46,6 @@ def registered_user(json_client: Client) -> Generator[RegisteredUser, None, None
     
     yield RegisteredUser(user_id, password)
 
-
 def test_register(registered_user: RegisteredUser):
     assert isinstance(registered_user, RegisteredUser)
 
