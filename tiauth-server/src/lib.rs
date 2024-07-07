@@ -1,5 +1,8 @@
 pub mod state;
 
+#[cfg(feature = "model")]
+pub mod model;
+
 #[cfg(feature = "functions")]
 pub mod functions;
 

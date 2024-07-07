@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-tiauth-core = { path="../tiauth-core", features = ["action"]}
+tiauth-core = { path="../tiauth-core", default-features = false }
 redb = "2.1.1"
 axum = { version = "0.7.5", features = ["macros"] }
 tower-http = { version = "0.5.2", features = ["timeout"] }
@@ -20,9 +20,9 @@ base64 = "0.22.1"
 serde_json = "1.0"
 
 [features]
-default = ["router", "app"]
-functions = []
+default = ["router"]
+model = []
+functions = ["model", "tiauth-core/action"]
 admin = []
 # Look at admin TODO
 router = ["functions", "admin"]
-app = ["tiauth-core/app", "functions"]

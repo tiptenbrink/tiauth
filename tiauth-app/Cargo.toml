@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tiauth-core = { path = "../tiauth-core", default-features = false, features = ["app"] }
-# tiauth-server = { path = "../tiauth-server", features = ["functions"] }
+tiauth-server = { path = "../tiauth-server", default-features = false, features = ["model"] }
 redb = "2.1.1"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 rand = "0.8"

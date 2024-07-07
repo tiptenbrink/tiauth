@@ -2054,6 +2054,7 @@ dependencies = [
  "serde",
  "terrors",
  "tiauth-core",
+ "tiauth-server",
  "tokio",
 ]
 

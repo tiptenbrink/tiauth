@@ -1,8 +1,7 @@
 use crate::admin;
-use crate::admin::GetUsers;
 use crate::functions;
-use crate::functions::{
-    LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse,
+use crate::model::{
+    LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, GetUsers
 };
 use crate::state::ServerState;
 use axum::{

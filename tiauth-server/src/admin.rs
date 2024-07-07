@@ -2,14 +2,9 @@ use rmp_serde::encode;
 use serde::Deserialize;
 use tiauth_core::{admin, Proof, State};
 
-use crate::encoded::Encoded;
+use crate::{encoded::Encoded, model::GetUsers};
 
-#[derive(Debug, Deserialize)]
-pub struct GetUsers {
-    pub application: String,
-    pub include_claims: Option<bool>,
-    pub read_proof: Encoded<Proof<()>>,
-}
+
 
 pub async fn get_users_encoded(state: &impl State, request: GetUsers) -> Vec<u8> {
     let proof = request.read_proof.get();

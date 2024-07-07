@@ -2,7 +2,7 @@
 
 pub mod crypto;
 mod data;
-mod error;
+pub mod error;
 mod proof;
 mod util;
 

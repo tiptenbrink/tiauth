@@ -1,19 +1,7 @@
 use crate::encoded::Encoded;
 use serde::{Deserialize, Serialize};
 use tiauth_core::{login, register, Claims, Proof, SessionClaims, State};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PakeRequest {
-    pub application: String,
-    pub opaque_request: String,
-    pub user_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PakeResponse {
-    pub opaque_response: String,
-    pub start_nonce: String,
-}
+use crate::model::*;
 
 pub fn start_register(state: &impl State, request: PakeRequest) -> PakeResponse {
     match register::start_register(
@@ -33,13 +21,7 @@ pub fn start_register(state: &impl State, request: PakeRequest) -> PakeResponse 
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct RegisterFinishRequest {
-    pub application: String,
-    pub opaque_request: String,
-    pub start_nonce: String,
-    pub claims_proof: Option<Encoded<Proof<Claims>>>,
-}
+
 
 pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
     let proof = request.claims_proof.map(|e| e.get());
@@ -79,20 +61,7 @@ pub fn start_login(state: &impl State, request: PakeRequest) -> PakeResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LoginFinishRequest {
-    pub application: String,
-    pub opaque_request: String,
-    pub start_nonce: String,
-    pub pake_secret: String,
-    pub all_claims: Option<bool>,
-    pub requested_claims: Option<Vec<String>>,
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionResponse {
-    pub session: String,
-}
 
 pub fn login_session(state: &impl State, request: LoginFinishRequest) -> SessionResponse {
     let session_claims =
