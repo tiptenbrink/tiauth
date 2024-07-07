@@ -5,6 +5,7 @@ use rand::rngs::StdRng;
 use rand::RngCore;
 use thiserror::Error;
 
+#[derive(Clone)]
 pub struct Key {
     kp: ed::KeyPair,
 }
@@ -90,6 +91,7 @@ pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
     }
 }
 
+#[derive(Clone)]
 pub struct SessionKey {
     key_256: aead::Key<aead::Aes256GcmSiv>,
 }

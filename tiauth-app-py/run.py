@@ -5,7 +5,7 @@ from httpx import Response, Client
 from msgspec import json, Struct, msgpack, Raw
 from opaquepy import register_client, register_client_finish
 from tiauth_app_py.model import RegisterFinishRequest, PakeRequest, PakeResponse, GetUsers, User, UserList, UserClaims
-from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof, load_key_from_pem
+from tiauth_app_py import create_set_claims_proof, create_read_all_proof, create_reset_proof, load_key_from_pem, public_from_private_key_pem
 from tiauth_app_py.app import create_read_range_proof, create_read_some_proof
 import tiauth_app_py
 from time import perf_counter
@@ -143,11 +143,25 @@ def proof_time():
 #get_all_users()
 
 # get_some_users(['f228bfbe-30a7-4ab0-813a-b39c4a57dcb1'])
+    
+def create_app():
+    gov_client = Client(base_url="http://localhost:3001")
 
-get_range_users(('3', 'b'))
+    public = public_from_private_key_pem(private)
+
+    # r = gov_client.post(f"/register/cool_app3", content=public.encode('utf-8'))
+
+    r = gov_client.post(f"/deregister/cool_app3")
+
+    print(r.status_code)
+    print(r.content)
+
+# get_range_users(('3', 'b'))
 
 # print(create_private_key_pem())
 
 # register_flow()
 
 # get_users()
+    
+create_app()

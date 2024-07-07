@@ -156,14 +156,22 @@ fn create_read_all_proof(application: &str, key: &Bound<'_, ProofKey>) -> PyResu
 }
 
 #[pyfunction]
-fn create_read_some_proof(application: &str, key: &Bound<'_, ProofKey>, selection: Vec<String>) -> PyResult<String> {
+fn create_read_some_proof(
+    application: &str,
+    key: &Bound<'_, ProofKey>,
+    selection: Vec<String>,
+) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
     Ok(app::create_read_some_proof(proof_base, selection))
 }
 
 #[pyfunction]
-fn create_read_range_proof(application: &str, key: &Bound<'_, ProofKey>, selection: Vec<String>) -> PyResult<String> {
+fn create_read_range_proof(
+    application: &str,
+    key: &Bound<'_, ProofKey>,
+    selection: Vec<String>,
+) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
     Ok(app::create_read_range_proof(proof_base, selection))

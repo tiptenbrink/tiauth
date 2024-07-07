@@ -13,41 +13,44 @@ use crate::{
 
 pub type TableStore = (String, String, String);
 
-pub struct AppTable {
-    store: TableStore,
+pub struct AppTable<'a> {
+    store: &'a TableStore,
 }
 
-impl AppTable {
-    pub fn new(store: TableStore) -> Self {
+impl<'a> AppTable<'a> {
+    pub fn new(store: &'a TableStore) -> Self {
         Self { store }
     }
 
     pub fn sessions(&self) -> TableDefinition<'_, &'static [u8], &'static str> {
-        let table_name = self.store.0.as_str();
+        let table_name = &self.store.0;
 
         TableDefinition::new(table_name)
     }
 
     pub fn users(&self) -> TableDefinition<'_, &'static str, &'static [u8]> {
-        let table_name = self.store.1.as_str();
+        let table_name = &self.store.1;
 
         TableDefinition::new(table_name)
     }
 
     pub fn ephemeral(&self) -> TableDefinition<'_, &'static str, &'static str> {
-        let table_name = self.store.2.as_str();
+        let table_name = &self.store.2;
 
         TableDefinition::new(table_name)
+    }
+
+    pub fn all(&self) -> Vec<String> {
+        let store = self.store.clone();
+        vec![store.0, store.1, store.2]
     }
 }
 
 pub trait Tables {
     fn app(&self, application: &str) -> AppTable;
-
-    fn register_application(&mut self, application: &str);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MapTables {
     tables: HashMap<String, TableStore>,
 }
@@ -67,19 +70,9 @@ impl MapTables {
 }
 
 impl Tables for MapTables {
-    fn register_application(&mut self, application: &str) {
-        let session_name = format!("{}:sessions", application);
-        let user_name = format!("{}:users", application);
-        let state_name = format!("{}:ephemeral", application);
-
-        self.tables.insert(
-            application.to_owned(),
-            (session_name, user_name, state_name),
-        );
-    }
-
     fn app(&self, application: &str) -> AppTable {
-        AppTable::new(self.tables.get(application).unwrap().clone())
+        let store = self.tables.get(application).unwrap();
+        AppTable::new(store)
     }
 }
 
@@ -209,7 +202,7 @@ pub fn write_ephemeral(
     application: &str,
     entry: EphemeralEntry,
 ) -> Result<(), DbError> {
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let write_txn = state.db().begin_write()?;
     {
@@ -234,7 +227,7 @@ pub fn pop_ephemeral(
     if allowed_types.iter().all(|t| *t != empty_entry.eph_type) {
         panic!("Types do no match for state!")
     }
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
     let write_txn = state.db().begin_write()?;
     let eph_data = {
         let mut table = write_txn.open_table(tables.ephemeral())?;
@@ -253,7 +246,7 @@ pub fn pop_ephemeral(
 pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
     let buf = login.serialize();
     let user_id = login.user_id.as_str();
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
     let write_txn = state.db().begin_write()?;
     {
         let mut table = write_txn.open_table(tables.users())?;
@@ -305,7 +298,7 @@ pub fn set_login_field_write(
     // One of the two must be set
     assert!(password_file.is_some() || claims.is_some());
 
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
     let mut table = write_txn.open_table(tables.users()).to_one_of_two()?;
 
     let user_bytes = {
@@ -371,7 +364,7 @@ pub fn get_login(
     user_id: &str,
 ) -> Result<Option<LoginPassword>, DbError> {
     let read_txn = state.db().begin_read()?;
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let table = read_txn.open_table(tables.users())?;
 
@@ -393,7 +386,7 @@ pub fn get_login_claims_bytes(
     requested_claims: SessionClaims,
 ) -> Result<Option<ByteOwned<Claims>>, DbError> {
     let read_txn = state.db().begin_read()?;
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let table = read_txn.open_table(tables.users())?;
 

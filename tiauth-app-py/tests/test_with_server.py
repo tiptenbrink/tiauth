@@ -1,35 +1,55 @@
 from dataclasses import dataclass
 from typing import Generator
 from uuid import uuid4
-from httpx import Client
+from httpx import Client, Response
 from opaquepy import register_client, register_client_finish
 from opaquepy.lib import login_client, login_client_finish
 import pytest
-from msgspec import json
+from msgspec import json, msgpack
+import random
 
-from tiauth_app_py.model import LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse
+from tiauth_app_py.app import create_read_all_proof, create_read_some_proof, load_key_from_pem, public_from_private_key_pem
+from tiauth_app_py.model import GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, UserClaims, UserList
 
-
-APP_NAME = "some_app"
-SERVER_URL = "http://localhost:3000"
-
-@pytest.fixture
+@pytest.fixture(scope="module")
 def json_client() -> Generator[Client, None, None]:
     yield Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
 
+@pytest.fixture(scope="module")
+def gov_client() -> Generator[Client, None, None]:
+    yield Client(base_url="http://localhost:3001")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def mod_app(gov_client: Client) -> Generator[str, None, None]:
+    n = random.randint(0, 1000000000)
+    app_name = f"app_{n}"
+
+    gov_client.post(f"/register/{app_name}", content=public.encode('utf-8'))
+
+    yield app_name
+
+    gov_client.post(f"/deregister/{app_name}")
+
+@pytest.fixture
+def once_app(gov_client: Client) -> Generator[str, None, None]:
+    n = random.randint(0, 1000000000)
+    app_name = f"app_{n}"
+
+    gov_client.post(f"/register/{app_name}", content=public.encode('utf-8'))
+
+    yield app_name
+
+    gov_client.post(f"/deregister/{app_name}")
 
 @dataclass
 class RegisteredUser:
     user_id: str
     password: str
 
-@pytest.fixture
-def registered_user(json_client: Client) -> Generator[RegisteredUser, None, None]:
-    user_id = str(uuid4())
-    password = "my_password"
-
+def make_registered_user(json_client: Client, app_name: str, user_id: str, password: str) -> RegisteredUser:
     request, state = register_client(password)
-    req = PakeRequest(APP_NAME, request, user_id)
+    req = PakeRequest(app_name, request, user_id)
     r = json_client.post("/register/start", content=json.encode(req))
 
     if r.status_code != 200 or r.headers['content-type'] != 'application/json':
@@ -38,13 +58,23 @@ def registered_user(json_client: Client) -> Generator[RegisteredUser, None, None
     res = json.decode(r.content, type=PakeResponse)
     request = register_client_finish(state, password, res.opaque_response)
 
-    req = RegisterFinishRequest(APP_NAME, request, res.start_nonce)
+    req = RegisterFinishRequest(app_name, request, res.start_nonce)
     r = json_client.post("/register/finish", content=json.encode(req))
 
     if r.status_code != 200:
         raise ValueError(r.text)
     
-    yield RegisteredUser(user_id, password)
+    return RegisteredUser(user_id, password)
+
+
+@pytest.fixture
+def registered_user(json_client: Client, mod_app: str) -> Generator[RegisteredUser, None, None]:
+    user_id = str(uuid4())
+    password = "my_pass"
+
+    reg_user = make_registered_user(json_client, mod_app, user_id, password)
+
+    yield reg_user
 
 def test_register(registered_user: RegisteredUser):
     assert isinstance(registered_user, RegisteredUser)
@@ -55,10 +85,9 @@ class UserSession:
     password: str
     session: str
 
-@pytest.fixture
-def user_session(json_client: Client, registered_user: RegisteredUser) -> Generator[UserSession, None, None]:
+def make_user_session(json_client: Client, registered_user: RegisteredUser, app_name: str) -> UserSession:
     request, state = login_client(registered_user.password)
-    req = PakeRequest(APP_NAME, request, registered_user.user_id)
+    req = PakeRequest(app_name, request, registered_user.user_id)
     r = json_client.post("/login/start", content=json.encode(req))
 
     if r.status_code != 200 or r.headers['content-type'] != 'application/json':
@@ -67,15 +96,75 @@ def user_session(json_client: Client, registered_user: RegisteredUser) -> Genera
     res = json.decode(r.content, type=PakeResponse)
     request, secret = login_client_finish(state, registered_user.password, res.opaque_response)
 
-    req = LoginFinishRequest(APP_NAME, request, res.start_nonce, secret, True, None)
+    req = LoginFinishRequest(app_name, request, res.start_nonce, secret, True, None)
     r = json_client.post("/login/session", content=json.encode(req))
 
     if r.status_code != 200 or r.headers['content-type'] != 'application/json':
         raise ValueError(r.text)
     
     session_response = json.decode(r.content, type=SessionResponse)
+
+    return UserSession(registered_user.user_id, registered_user.password, session_response.session)
+
+
+@pytest.fixture
+def user_session(json_client: Client, registered_user: RegisteredUser, mod_app: str) -> Generator[UserSession, None, None]:
+    sess = make_user_session(json_client, registered_user, mod_app)
     
-    yield UserSession(registered_user.user_id, registered_user.password, session_response.session)
+    yield sess
 
 def test_login(user_session: UserSession):
     assert len(user_session.session) > 0
+
+
+private = """
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
+-----END PRIVATE KEY-----
+""".strip()
+
+public = public_from_private_key_pem(private)
+
+# def get_some_users(json_client: Client, users: list[str], app_name: str):
+#     key = load_key_from_pem(private)
+
+#     proof = create_read_some_proof(app_name, key, users)
+#     req = GetUsers(app_name, proof, True)
+
+#     r: Response = json_client.post("/admin/users", content=json.encode(req))
+
+#     structs = msgpack.decode(r.content, type=UserList)
+
+#     # user_ids: list[str] = []
+#     for u_encoded in structs.users:
+#         u = msgpack.decode(u_encoded, type=UserClaims)
+#         # user_ids.append(u.user_id)
+
+def get_all_users(json_client: Client, app_name: str) -> list[str]:
+    key = load_key_from_pem(private)
+
+    proof = create_read_all_proof(app_name, key)
+    req = GetUsers(app_name, proof, True)
+
+    r: Response = json_client.post("/admin/users", content=json.encode(req))
+
+    structs = msgpack.decode(r.content, type=UserList)
+
+    user_ids: list[str] = []
+    for u_encoded in structs.users:
+        u = msgpack.decode(u_encoded, type=UserClaims)
+        user_ids.append(u.user_id)
+
+    return user_ids
+
+
+def test_has_users(json_client: Client, once_app: str):
+    user_1 = make_registered_user(json_client, once_app, "user1", "pass")
+    user_2 = make_registered_user(json_client, once_app, "user2", "pass")
+
+    user_ids = get_all_users(json_client, once_app)
+
+    assert len(user_ids) == 2
+    assert user_1.user_id in user_ids
+    assert user_2.user_id in user_ids
+

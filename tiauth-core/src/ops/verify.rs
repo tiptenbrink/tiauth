@@ -2,7 +2,7 @@ use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent};
 use crate::error::WrapErrorOneOf;
 use crate::proof::{verify_proof_content, verify_session_bytes, InvalidSession, VerifiedSession};
 use crate::state::State;
-use crate::{Proof, Session, Tables};
+use crate::{Proof, Session};
 use base64::{engine::general_purpose as b64, Engine as _};
 use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use terrors::OneOf;
@@ -12,7 +12,7 @@ pub fn verify_proof_write<T: ByteSerial>(
     write_txn: &WriteTransaction,
     content: &mut ProofContent<T>,
 ) -> Result<(), OneOf<(DbError, InvalidProof)>> {
-    let tables = state.tables().app(&content.about.application);
+    let tables = state.app_tables(&content.about.application);
     let nonce = b64::URL_SAFE_NO_PAD.encode(&content.nonce);
     let mut eph_table = write_txn.open_table(tables.ephemeral()).to_one_of_two()?;
     {

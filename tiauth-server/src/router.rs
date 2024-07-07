@@ -1,8 +1,10 @@
 use crate::admin;
-use crate::functions;
-use crate::functions::{LoginFinishRequest, SessionResponse, RegisterFinishRequest, PakeRequest, PakeResponse};
-use crate::state::ServerState;
 use crate::admin::GetUsers;
+use crate::functions;
+use crate::functions::{
+    LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse,
+};
+use crate::state::ServerState;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -12,9 +14,8 @@ use axum::{
 };
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::path::Path;
-use tiauth_core::crypto::SavedPublicKey;
-use tiauth_core::{Application, State};
+use std::time::Duration;
+use tower_http::timeout::TimeoutLayer;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessagePack<T>(pub T);
@@ -106,36 +107,7 @@ async fn admin_get_users_encoded(
     admin::get_users_encoded(&state, payload).await
 }
 
-// pub fn create_router<S, P>(db_path: P) -> Router<S>
-// where
-//     S: Clone + Send + Sync + 'static,
-//     P: AsRef<Path>,
-// {
-//     let mut state = ServerState::setup(db_path).unwrap();
-
-//     let public_key_pem = "-----BEGIN PUBLIC KEY-----
-// MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
-// -----END PUBLIC KEY-----"
-//         .to_owned();
-
-//     let app = Application::new(
-//         SavedPublicKey::validate_pem(&public_key_pem).unwrap(),
-//         "some_app",
-//     );
-
-//     state.register_application(&app, true).unwrap();
-
-//     Router::new()
-//         .route("/", get(|| async { "Hello, World!" }))
-//         .route("/register/start", post(start_register))
-//         .route("/register/finish", post(register_finish))
-//         .route("/login/start", post(start_login))
-//         .route("/login/session", post(login_session))
-//         .route("/admin/users", post(admin_get_users_encoded))
-//         .with_state(state)
-// }
-
-pub fn create_router<S>(state: &ServerState) -> Router<S>
+pub fn create_router<S>(state: ServerState) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -146,5 +118,6 @@ where
         .route("/login/start", post(start_login))
         .route("/login/session", post(login_session))
         .route("/admin/users", post(admin_get_users_encoded))
-        .with_state(state.clone())
+        .with_state(state)
+        .layer((TimeoutLayer::new(Duration::from_secs(15)),))
 }

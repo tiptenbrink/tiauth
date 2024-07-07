@@ -10,7 +10,7 @@ use crate::store::{
 };
 use crate::util::nonce_384;
 use crate::verify::verify_session;
-use crate::{Claims, Proof, Session, Tables};
+use crate::{Claims, Proof, Session};
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -50,7 +50,7 @@ fn reset_password(
     );
     let set_nonce = set_entry.key();
 
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let write_txn = state
         .db()
@@ -118,7 +118,7 @@ fn change_password(
         "".to_owned(),
     );
     let change_nonce = change_entry.key();
-    let tables = state.tables().app(&session.application);
+    let tables = state.app_tables(&session.application);
 
     let write_txn = state.db().begin_write().into_one_of()?;
     {
@@ -164,7 +164,7 @@ fn session_delete_user(
         panic!("Session too old to be used for deleting account!");
     }
 
-    let tables = state.tables().app(&session.application);
+    let tables = state.app_tables(&session.application);
 
     let write_txn = state
         .db()
@@ -217,7 +217,7 @@ fn app_delete_user(
     )
     .map_err(OneOf::broaden)?;
 
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
@@ -299,7 +299,8 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let session = login_create_session(&state, user_id, app, password, None, SessionClaims::All);
+        let session =
+            login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
         let nonce = change_password(&state, &session).unwrap();
 
@@ -323,7 +324,8 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let session = login_create_session(&state, user_id, app, password, None, SessionClaims::All);
+        let session =
+            login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
         session_delete_user(&state, &session).unwrap();
 

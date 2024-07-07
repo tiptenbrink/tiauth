@@ -250,20 +250,25 @@ pub trait Encodable {
 #[derive(Debug)]
 pub enum SessionClaims {
     All,
-    Some(Vec<String>)
+    Some(Vec<String>),
 }
 
 impl SessionClaims {
-    pub fn from_options(all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> Result<SessionClaims, &'static str> {
+    pub fn from_options(
+        all_claims: Option<bool>,
+        requested_claims: Option<Vec<String>>,
+    ) -> Result<SessionClaims, &'static str> {
         if let Some(requested_claims) = requested_claims {
             if all_claims.is_some() && all_claims.unwrap() {
-                return Err("Invalid requested claims! Cannot request all_claims: true and provide claims!")
+                return Err(
+                    "Invalid requested claims! Cannot request all_claims: true and provide claims!",
+                );
             }
 
-            return Ok(SessionClaims::Some(requested_claims))
-        } else if let Some(all_claims) = all_claims{
+            return Ok(SessionClaims::Some(requested_claims));
+        } else if let Some(all_claims) = all_claims {
             if all_claims {
-                return Ok(SessionClaims::All)
+                return Ok(SessionClaims::All);
             }
         }
 
@@ -809,7 +814,7 @@ mod test {
         let login = Login {
             user_id: "some_name".to_owned(),
             password_file: "pw".to_owned(),
-            claims: claims.as_packed()
+            claims: claims.as_packed(),
         };
 
         let login_serial = login.serialize();

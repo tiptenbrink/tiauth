@@ -3,37 +3,49 @@
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use redb::{Database, Error as DbError, ReadableTable};
+use redb::{Database, Error as DbError, ReadableTable, TableDefinition};
 use rmp_serde::{decode, encode};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::crypto::{
     create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key,
     Key, PublicKey, SessionKey,
 };
 use crate::data::Application;
-use crate::store::{open_db, MapTables, Tables, APPS, SERVER};
-pub trait State {
-    fn register_application_internal(&mut self, application: &Application);
+use crate::store::{open_db, AppTable, TableStore, APPS, SERVER};
 
-    fn register_application(
-        &mut self,
-        application: &Application,
-        save: bool,
-    ) -> Result<(), DbError> {
-        if save {
-            write_app_to_db(self.db(), application)?;
-        }
+pub trait GovernorState {
+    type Readonly;
 
-        self.register_application_internal(application);
+    fn add_app_to_state(&mut self, application: &Application);
+
+    fn register_application(&mut self, application: &Application) -> Result<(), DbError> {
+        write_app_to_db(self.db(), application)?;
+
+        self.add_app_to_state(application);
 
         Ok(())
     }
 
-    fn tables(&self) -> &impl Tables;
+    fn remove_app_from_state(&mut self, application: &str);
+
+    fn deregister_application(&mut self, application: &str) -> Result<(), DbError> {
+        let tables = self.app_tables(application);
+
+        remove_app_from_db(self.db(), application, tables)?;
+
+        self.remove_app_from_state(application);
+
+        Ok(())
+    }
+
+    fn app_tables(&self, application: &str) -> AppTable;
 
     fn app_key(&self, application: &str) -> PublicKey;
+
+    fn apps(&self) -> Vec<&String>;
 
     fn db(&self) -> &Database;
 
@@ -54,13 +66,52 @@ pub trait State {
         let registered_apps = get_apps(state.db())?;
 
         for app in registered_apps {
-            state.register_application(&app, false)?;
+            state.add_app_to_state(&app);
         }
 
         Ok(state)
     }
 }
 
+pub trait State {
+    fn app_tables(&self, application: &str) -> AppTable;
+
+    fn app_key(&self, application: &str) -> PublicKey;
+
+    fn apps(&self) -> Vec<&String>;
+
+    fn db(&self) -> &Database;
+
+    fn private(&self) -> &PrivateState;
+
+    fn rng(&self) -> StdRng {
+        StdRng::from_entropy()
+    }
+}
+
+impl<T: GovernorState> State for T {
+    fn app_tables(&self, application: &str) -> AppTable {
+        self.app_tables(application)
+    }
+
+    fn app_key(&self, application: &str) -> PublicKey {
+        self.app_key(application)
+    }
+
+    fn db(&self) -> &Database {
+        self.db()
+    }
+
+    fn private(&self) -> &PrivateState {
+        self.private()
+    }
+
+    fn apps(&self) -> Vec<&String> {
+        self.apps()
+    }
+}
+
+#[derive(Clone)]
 pub struct PrivateState {
     pub opaque: String,
     pub session: SessionKey,
@@ -68,22 +119,38 @@ pub struct PrivateState {
 }
 
 /// CoreState is a single-threaded implementation of State. See `tiauth-server`'s ServerState for a multi-threaded impelementation.
+#[derive(Clone)]
 pub struct CoreState {
-    table_map: MapTables,
-    app_keys: HashMap<String, PublicKey>,
-    db: Database,
-    private: PrivateState,
+    pub tables: HashMap<String, TableStore>,
+    pub app_keys: HashMap<String, PublicKey>,
+    pub db: Arc<Database>,
+    pub private: PrivateState,
 }
 
-impl State for CoreState {
-    fn register_application_internal(&mut self, application: &Application) {
-        self.table_map.register_application(&application.name);
+fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
+    let session_name = format!("{}:sessions", application);
+    let user_name = format!("{}:users", application);
+    let state_name = format!("{}:ephemeral", application);
+
+    map.insert(
+        application.to_owned(),
+        (session_name, user_name, state_name),
+    );
+}
+
+impl GovernorState for CoreState {
+    type Readonly = CoreState;
+
+    fn add_app_to_state(&mut self, application: &Application) {
+        register_application_tables(&mut self.tables, &application.name);
+
         self.app_keys
             .insert(application.name.clone(), application.public_key());
     }
 
-    fn tables(&self) -> &impl Tables {
-        &self.table_map
+    fn app_tables(&self, application: &str) -> AppTable {
+        let store = self.tables.get(application).unwrap();
+        AppTable::new(store)
     }
 
     fn db(&self) -> &Database {
@@ -96,15 +163,24 @@ impl State for CoreState {
 
     fn from_init(init_state: InitState) -> Self {
         Self {
-            table_map: MapTables::new(),
+            tables: HashMap::new(),
             app_keys: HashMap::new(),
-            db: init_state.db,
+            db: Arc::new(init_state.db),
             private: init_state.private,
         }
     }
 
     fn app_key(&self, application: &str) -> PublicKey {
         self.app_keys.get(application).unwrap().clone()
+    }
+
+    fn remove_app_from_state(&mut self, application: &str) {
+        self.app_keys.remove(application);
+        self.tables.remove(application);
+    }
+
+    fn apps(&self) -> Vec<&String> {
+        self.tables.keys().collect()
     }
 }
 
@@ -187,6 +263,27 @@ pub fn write_app_to_db(db: &Database, application: &Application) -> Result<(), D
     Ok(())
 }
 
+pub fn remove_app_from_db(
+    db: &Database,
+    application: &str,
+    tables: AppTable,
+) -> Result<(), DbError> {
+    let write_txn = db.begin_write()?;
+    {
+        let mut table = write_txn.open_table(APPS)?;
+        table.remove(application)?;
+
+        for t in tables.all() {
+            // This is a fake definition with wrong types, but the types don't have to match to delete the table
+            let definition: TableDefinition<String, String> = TableDefinition::new(&t);
+            write_txn.delete_table(definition)?;
+        }
+    }
+    write_txn.commit()?;
+
+    Ok(())
+}
+
 fn get_apps(db: &Database) -> Result<Vec<Application>, DbError> {
     let write_txn = db.begin_write()?;
     let apps = {
@@ -229,7 +326,7 @@ pub mod test_util {
 
     /// TestState also contains application private keys for easier testing.
     pub struct TestState {
-        table_map: MapTables,
+        tables: HashMap<String, TableStore>,
         app_keys: HashMap<String, Key>,
         app_public_keys: HashMap<String, PublicKey>,
         db: Database,
@@ -241,7 +338,7 @@ pub mod test_util {
             let tmp = tempfile::NamedTempFile::new().unwrap();
             let InitState { db, private } = InitState::init(tmp.path()).unwrap();
 
-            let mut table_map = MapTables::new();
+            let mut tables: HashMap<String, TableStore> = HashMap::new();
             let mut app_keys: HashMap<String, Key> = HashMap::new();
             let mut app_public_keys: HashMap<String, PublicKey> = HashMap::new();
 
@@ -250,7 +347,7 @@ pub mod test_util {
 
                 write_app_to_db(&db, &app).unwrap();
 
-                table_map.register_application(app_name);
+                register_application_tables(&mut tables, app_name);
                 app_public_keys.insert(app_name.to_owned(), key.to_public_key());
                 app_keys.insert(app_name.to_owned(), key);
             }
@@ -258,7 +355,7 @@ pub mod test_util {
             Self {
                 db,
                 private,
-                table_map,
+                tables,
                 app_keys,
                 app_public_keys,
             }
@@ -269,13 +366,16 @@ pub mod test_util {
         }
     }
 
-    impl State for TestState {
-        fn register_application_internal(&mut self, _application: &Application) {
+    impl GovernorState for TestState {
+        type Readonly = TestState;
+
+        fn add_app_to_state(&mut self, _: &Application) {
             unimplemented!("Do not use this function for TestState. Register through `setup_test`.")
         }
 
-        fn tables(&self) -> &impl Tables {
-            &self.table_map
+        fn app_tables(&self, application: &str) -> AppTable {
+            let store = self.tables.get(application).unwrap();
+            AppTable::new(store)
         }
 
         fn db(&self) -> &Database {
@@ -286,7 +386,7 @@ pub mod test_util {
             &self.private
         }
 
-        fn from_init(_init_state: InitState) -> Self {
+        fn from_init(_: InitState) -> Self {
             unimplemented!("Do not use this function for TestState! Use `setup_test`.")
         }
 
@@ -294,11 +394,19 @@ pub mod test_util {
             self.app_public_keys.get(application).unwrap().clone()
         }
 
-        fn setup<P: AsRef<Path>>(_db_path: P) -> Result<Self, DbError>
+        fn setup<P: AsRef<Path>>(_: P) -> Result<Self, DbError>
         where
             Self: Sized,
         {
             unimplemented!("Do not use this function for TestState!")
+        }
+
+        fn remove_app_from_state(&mut self, _: &str) {
+            unimplemented!("Do not use this function for TestState!")
+        }
+
+        fn apps(&self) -> Vec<&String> {
+            self.tables.keys().collect()
         }
     }
 }

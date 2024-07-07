@@ -91,14 +91,15 @@ pub struct LoginFinishRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionResponse {
-    pub session: String
+    pub session: String,
 }
 
 pub fn login_session(state: &impl State, request: LoginFinishRequest) -> SessionResponse {
-    let session_claims = match SessionClaims::from_options(request.all_claims, request.requested_claims) {
-        Ok(s) => s,
-        Err(_e) => panic!()
-    };
+    let session_claims =
+        match SessionClaims::from_options(request.all_claims, request.requested_claims) {
+            Ok(s) => s,
+            Err(_e) => panic!(),
+        };
 
     match login::login_session(
         state,
@@ -106,10 +107,10 @@ pub fn login_session(state: &impl State, request: LoginFinishRequest) -> Session
         &request.opaque_request,
         &request.start_nonce,
         &request.pake_secret,
-        session_claims
+        session_claims,
     ) {
         Ok(session) => SessionResponse {
-            session: session.into_encoded()
+            session: session.into_encoded(),
         },
         Err(e) => match e.to_enum() {
             terrors::E2::A(_e) => todo!(),

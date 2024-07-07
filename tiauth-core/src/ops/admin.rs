@@ -1,20 +1,17 @@
-use std::iter::Peekable;
-use std::vec::IntoIter;
-
 use crate::data::{AboutVerify, ActionType, InvalidProof, Login, LoginPassword, Target};
 use crate::error::WrapErrorOneOf;
 use crate::ops::verify::verify_proof_write;
 use crate::proof::verify_proof_content;
 use crate::state::State;
-use crate::{Proof, Tables};
+use crate::Proof;
 use redb::{Error as DbError, ReadableTable};
 use serde::{Deserialize, Serialize};
-use serde_bytes::{ByteBuf, Bytes};
+use serde_bytes::ByteBuf;
 use terrors::OneOf;
 
 #[derive(Debug, Serialize)]
 pub struct UserList {
-    users: Vec<ByteBuf>
+    users: Vec<ByteBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +23,7 @@ struct User<'a> {
 struct UserClaims<'a> {
     user_id: &'a str,
     #[serde(with = "serde_bytes")]
-    claims: &'a [u8]
+    claims: &'a [u8],
 }
 
 pub fn get_users_bytes(
@@ -40,7 +37,7 @@ pub fn get_users_bytes(
         verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read))
             .map_err(OneOf::broaden)?;
 
-    let tables = state.tables().app(application);
+    let tables = state.app_tables(application);
 
     let write_txn = state.db().begin_write().to_one_of_two()?;
 
@@ -58,24 +55,24 @@ pub fn get_users_bytes(
 
     // None here corresponds to selecting all!
     let (user_selection, is_range) = match proof_content.about.target {
-        Target::Select =>  (Some(proof_content.target_data.as_vec()), false),
+        Target::Select => (Some(proof_content.target_data.as_vec()), false),
         Target::Range => {
             let mut targets = proof_content.target_data.as_vec();
             if targets.len() != 2 {
-                return Err(OneOf::new(InvalidProof {}))
+                return Err(OneOf::new(InvalidProof {}));
             }
             let last = targets.pop().unwrap();
             let first = targets.pop().unwrap();
 
             (Some(vec![first, last]), true)
         }
-        Target::All => (None, false)
+        Target::All => (None, false),
     };
 
     // Now None user_selection corresponds to not having to check anything in the iter
-    let iter= if let Some(user_selection) = &user_selection {
-        if user_selection.len() == 0 {
-            return Err(OneOf::new(InvalidProof {}))
+    let iter = if let Some(user_selection) = &user_selection {
+        if user_selection.is_empty() {
+            return Err(OneOf::new(InvalidProof {}));
         }
 
         let first = user_selection.first().unwrap();
@@ -85,14 +82,19 @@ pub fn get_users_bytes(
             panic!("Selection or range is not sorted!")
         }
 
-        user_table.range(first.as_str()..=last.as_str()).to_one_of_two()?
-
+        user_table
+            .range(first.as_str()..=last.as_str())
+            .to_one_of_two()?
     } else {
         user_table.iter().to_one_of_two()?
     };
 
     let filter_selection = user_selection.is_some() && !is_range;
-    let user_selection = if filter_selection { user_selection.unwrap() } else { Vec::new() };
+    let user_selection = if filter_selection {
+        user_selection.unwrap()
+    } else {
+        Vec::new()
+    };
 
     let mut sel_i = 0;
     for maybe_user in iter {
@@ -108,13 +110,12 @@ pub fn get_users_bytes(
             (login.user_id, None)
         };
 
-
         if sel_i < user_selection.len() {
             let next_selected = user_selection[sel_i].as_str();
-            if sel_i > 0 && user_selection[sel_i-1].as_str() > next_selected {
+            if sel_i > 0 && user_selection[sel_i - 1].as_str() > next_selected {
                 panic!("Selection is not sorted!")
             }
-            
+
             if user_id != next_selected {
                 // We do not want this user, so continue
                 continue;
@@ -124,12 +125,14 @@ pub fn get_users_bytes(
             }
         } else if filter_selection {
             // No more to select, we are finished
-            break
+            break;
         }
 
-
         let user_bytes = if let Some(claims) = claims {
-            let user_claims = UserClaims { user_id: &user_id, claims: claims.as_bytes() };
+            let user_claims = UserClaims {
+                user_id: &user_id,
+                claims: claims.as_bytes(),
+            };
             rmp_serde::to_vec(&user_claims).unwrap()
         } else {
             let user = User { user_id: &user_id };
@@ -144,13 +147,23 @@ pub fn get_users_bytes(
 
 #[cfg(test)]
 mod test {
-    use crate::{data::Login, proof::create_proof, store::set_login, test::TestState, BytePacked, ByteSerial, Claims, TargetList};
     use super::*;
+    use crate::{
+        data::Login, proof::create_proof, store::set_login, test::TestState, BytePacked,
+        ByteSerial, Claims, TargetList,
+    };
 
     fn parse_user_list(user_list: UserList) -> Vec<String> {
-        user_list.users.into_iter().map(|u| {
-            rmp_serde::from_slice::<User>(u.as_slice()).unwrap().user_id.to_owned()
-        }).collect()
+        user_list
+            .users
+            .into_iter()
+            .map(|u| {
+                rmp_serde::from_slice::<User>(u.as_slice())
+                    .unwrap()
+                    .user_id
+                    .to_owned()
+            })
+            .collect()
     }
 
     fn setup_users(state: &impl State, application: &str) {
@@ -245,7 +258,6 @@ mod test {
         let user_range = get_users_bytes(&state, "app", false, &proof).unwrap();
         let user_ids = parse_user_list(user_range);
         assert_eq!(vec!["a", "de", "df"], user_ids);
-
     }
 
     #[test]
@@ -270,7 +282,7 @@ mod test {
             key,
         );
         let one_user = get_users_bytes(&state, "app", false, &proof).unwrap();
-        let user_ids = parse_user_list(one_user);
+        let _ = parse_user_list(one_user);
     }
 
     #[test]

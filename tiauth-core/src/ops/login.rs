@@ -190,8 +190,15 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let session =
-            login_session(&state, app, &request, &nonce, &secret, SessionClaims::from_subset_str(vec!["email"])).unwrap();
+        let session = login_session(
+            &state,
+            app,
+            &request,
+            &nonce,
+            &secret,
+            SessionClaims::from_subset_str(vec!["email"]),
+        )
+        .unwrap();
 
         let verified = verify_session(&state, &session).unwrap();
 

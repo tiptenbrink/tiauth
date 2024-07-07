@@ -113,7 +113,7 @@ pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>
     if selection.len() != 2 {
         panic!("Range should include exactly two elements!")
     }
-    
+
     let action = ActionType::Read;
     let target = Target::Range;
 
