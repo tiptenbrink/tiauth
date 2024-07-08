@@ -163,5 +163,26 @@ def create_app():
 # register_flow()
 
 # get_users()
-    
-create_app()
+
+from tiauth_app_py.app import UserClient, ServerClient
+
+server_client = ServerClient("some_app", private)
+client = UserClient("some_app", "http://localhost:3000")
+
+time_start = perf_counter()
+
+# register = server_client.prepare_register("xiwen")
+# client.register_user(register, "mypass")
+
+login = server_client.prepare_login("xiwen", all_claims=False, requested_claims=[])
+session = client.login_user(login, "mypass")
+
+print(session)
+
+time_end = perf_counter() - time_start
+
+print(f"took {time_end*1000} ms.")
+
+# get_all_users()
+
+# create_app()

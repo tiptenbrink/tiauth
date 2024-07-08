@@ -8,6 +8,9 @@ claims about the user, as verified by the application, can be stored and later r
 type ClaimsBytes = bytes
 """Serialized Claims object."""
 
+type Session = str
+"""Session obtained from login."""
+
 class PakeRequest(Struct):
     application: str
     opaque_request: str
@@ -59,4 +62,4 @@ class LoginFinishRequest(Struct):
     requested_claims: Optional[list[str]]
 
 class SessionResponse(Struct):
-    session: str
+    session: Session

@@ -2,8 +2,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyBytes, PyDict, PyString};
+use tiauth_core::encoded::Encodable;
 use std::cmp::Ordering;
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 use tiauth_core::app::ProofBaseView;
 use tiauth_core::crypto::{load_key, Key};
 use tiauth_core::Claims;
@@ -12,6 +14,100 @@ use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
 #[pyclass(frozen)]
 struct ProofKey {
     key: Key,
+}
+
+#[pyclass(frozen)]
+struct ServerClient {
+    inner: Arc<tiauth_app::ServerClient>
+}
+
+
+#[pyclass(frozen)]
+pub struct ApplicationLogin {
+    inner: Arc<tiauth_app::ApplicationLogin>
+}
+
+
+#[pyclass(frozen)]
+pub struct ApplicationRegister {
+    // We use an Mutex<Option<T>> to ensure it is used once while avoiding the need to copy the proof, which can be quite large
+    inner: Arc<Mutex<Option<tiauth_app::ApplicationRegister>>>
+}
+
+#[pymethods]
+impl ServerClient {
+    #[new]
+    #[pyo3(signature = (application, private_key_pem, proof_expiration=None))]
+    fn new(application: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
+        let inner = Arc::new(tiauth_app::ServerClient::new(application, private_key_pem, proof_expiration));
+
+        Self {
+            inner
+        }
+    }
+
+    #[pyo3(signature = (user_id, all_claims=None, requested_claims=None))]
+    pub fn prepare_login(&self, user_id: &str, all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> ApplicationLogin {
+        let inner = self.inner.prepare_login(user_id, all_claims, requested_claims);
+
+        ApplicationLogin {
+            inner: Arc::new(inner)
+        }
+    }
+
+    #[pyo3(signature = (user_id, set_claims=None))]
+    pub fn prepare_register(&self, user_id: &str, set_claims: Option<ClaimsSerialized>) -> ApplicationRegister {
+        let set_claims = set_claims.as_ref().map(|c| c.as_bytes());
+
+        let inner = self.inner.prepare_register(user_id, set_claims);
+
+        ApplicationRegister {
+            inner: Arc::new(Mutex::new(Some(inner)))
+        }
+    }
+}
+
+#[pyclass(frozen)]
+struct UserClient {
+    inner: Arc<tiauth_app::UserClient>
+}
+
+#[pymethods]
+impl UserClient {
+    #[new]
+    fn new(application: &str, tiauth_url: &str) -> Self {
+        let inner = Arc::new(tiauth_app::UserClient::new(application, tiauth_url));
+
+        Self {
+            inner
+        }
+    }
+
+    /// The ApplicationRegister can be quite big as it can contain all claim values. For now we only have an Encoded type
+    /// that must own its data to be encoded, but we can create a new type in the future that contains a reference that can
+    /// be encoded and serialized from a reference.
+    /// So until then we want to have the owned value without cloning, so we must consume the given value. This is done by
+    /// taking it out of an Option inside a Mutex. You cannot reuse the ApplicationRegister.
+    pub fn register_user(&self, app_register: &ApplicationRegister, password: &str) -> PyResult<()> {
+        let app_register = {
+            // We use a scope to ensure the Mutex is dropped before we call unwrap below
+            app_register.inner.lock().unwrap().take().ok_or_else(|| {
+                PyValueError::new_err("ApplicationRegister can only be used once! Create a new value and do not reuse it.")
+            })?
+        };
+
+        self.inner.register_user_blocking(app_register, password).unwrap();
+
+        Ok(())
+    }
+
+    pub fn login_user(&self, app_login: &ApplicationLogin, password: &str) -> String {
+        // ApplicationLogin is likely not very larg so we are fine with just cloning
+        // Note that in cases of a very large amount of requested claims it can still be big
+        let app_login = app_login.inner.as_ref().clone();
+
+        self.inner.login_user_blocking(app_login, password).unwrap()
+    }
 }
 
 #[pyfunction]
@@ -34,6 +130,10 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_read_some_proof, m)?)?;
     m.add_function(wrap_pyfunction!(create_read_range_proof, m)?)?;
     m.add_class::<ProofKey>()?;
+    m.add_class::<UserClient>()?;
+    m.add_class::<ServerClient>()?;
+    m.add_class::<ApplicationLogin>()?;
+    m.add_class::<ApplicationRegister>()?;
     // m.add_submodule(&internal)?;
 
     Ok(())
@@ -134,7 +234,7 @@ fn create_set_claims_proof(
         app::create_set_claims_proof(proof_base, user_id, claims.as_bytes())
     });
 
-    Ok(proof)
+    Ok(proof.encode())
 }
 
 #[pyfunction]
@@ -145,14 +245,14 @@ fn create_reset_proof(
 ) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_reset_proof(proof_base, user_id))
+    Ok(app::create_reset_proof(proof_base, user_id).encode())
 }
 
 #[pyfunction]
 fn create_read_all_proof(application: &str, key: &Bound<'_, ProofKey>) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_read_all_proof(proof_base))
+    Ok(app::create_read_all_proof(proof_base).encode())
 }
 
 #[pyfunction]
@@ -163,7 +263,7 @@ fn create_read_some_proof(
 ) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_read_some_proof(proof_base, selection))
+    Ok(app::create_read_some_proof(proof_base, selection).encode())
 }
 
 #[pyfunction]
@@ -174,5 +274,5 @@ fn create_read_range_proof(
 ) -> PyResult<String> {
     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_read_range_proof(proof_base, selection))
+    Ok(app::create_read_range_proof(proof_base, selection).encode())
 }

@@ -5,15 +5,15 @@ edition = "2021"
 
 [dependencies]
 tiauth-core = { path="../tiauth-core", default-features = false }
-redb = "2.1.1"
-axum = { version = "0.7.5", features = ["macros"] }
-tower-http = { version = "0.5.2", features = ["timeout"] }
+redb = { version = "2.1.1", optional = true }
+axum = { version = "0.7.5", features = ["macros"], optional = true}
+tower-http = { version = "0.5.2", features = ["timeout"], optional = true}
 # tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 rand = "0.8"
 terrors = "=0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
-bytes = "1"
+bytes =  { version = "1", optional = true }
 rmp = "0.8"
 rmp-serde = "1.3.0"
 base64 = "0.22.1"
@@ -22,7 +22,7 @@ serde_json = "1.0"
 [features]
 default = ["router"]
 model = []
-functions = ["model", "tiauth-core/action"]
+functions = ["model", "tiauth-core/action", "dep:redb"]
 admin = []
 # Look at admin TODO
-router = ["functions", "admin"]
+router = ["functions", "admin", "dep:axum", "dep:tower-http", "dep:bytes"]

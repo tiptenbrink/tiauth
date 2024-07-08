@@ -2,6 +2,10 @@ import tiauth_app_py._internal as _internal
 from tiauth_app_py.model import ClaimsBytes, Claims, ReadAllProof, ReadSomeProof, ReadRangeProof, ClaimsProof
 
 ProofKey = _internal.ProofKey
+ApplicationLogin = _internal.ApplicationLogin
+ApplicationRegister = _internal.ApplicationRegister
+ServerClient = _internal.ServerClient
+UserClient = _internal.UserClient
 
 def create_private_key_pem() -> str:
    return  _internal.create_private_key_pem()

@@ -1,4 +1,4 @@
-use crate::encoded::Encoded;
+use tiauth_core::encoded::Encoded;
 use serde::{Deserialize, Serialize};
 use tiauth_core::{login, register, Claims, Proof, SessionClaims, State};
 use crate::model::*;

@@ -237,16 +237,6 @@ impl ByteSerial for () {
     }
 }
 
-pub trait Encodable {
-    type Error: Display;
-
-    fn decode(encoded: &str) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-
-    fn encode(&self) -> String;
-}
-
 #[derive(Debug)]
 pub enum SessionClaims {
     All,

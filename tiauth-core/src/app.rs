@@ -4,10 +4,11 @@
 
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
+use crate::encoded::Encoded;
 use crate::error::OneOfTo;
 use crate::proof::create_proof;
 use crate::{ActionType, SessionClaims, Target, TargetList};
-use crate::{Claims, Encodable, Proof};
+use crate::{Claims, Proof};
 
 pub fn create_private_key_pem() -> String {
     let key = create_key();
@@ -41,7 +42,7 @@ pub fn create_set_claims_proof(
     proof_base: ProofBaseView,
     user_id: &str,
     claims: &BytePacked<Claims>,
-) -> String {
+) -> Encoded<Proof<Claims>> {
     let action = ActionType::Set;
     let target = Target::Select;
     let target_data = vec![user_id.to_owned()];
@@ -56,10 +57,10 @@ pub fn create_set_claims_proof(
         proof_base.key,
     );
 
-    proof.encode()
+    Encoded::from_encodable(proof)
 }
 
-pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
+pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> Encoded<Proof<()>> {
     let action = ActionType::Reset;
     let target = Target::Select;
     let target_data = TargetList::from_vec(vec![user_id.to_owned()]);
@@ -74,10 +75,10 @@ pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> String {
         proof_base.key,
     );
 
-    proof.encode()
+    Encoded::from_encodable(proof)
 }
 
-pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
+pub fn create_read_all_proof(proof_base: ProofBaseView) -> Encoded<Proof<()>> {
     let action = ActionType::Read;
     let target = Target::All;
 
@@ -91,11 +92,11 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> String {
         proof_base.key,
     );
 
-    proof.encode()
+    Encoded::from_encodable(proof)
 }
 
 /// Ensure that the selection is sorted.
-pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>) -> String {
+pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>) -> Encoded<Proof<()>> {
     let action = ActionType::Read;
     let target = Target::Select;
 
@@ -109,10 +110,10 @@ pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>)
         proof_base.key,
     );
 
-    proof.encode()
+    Encoded::from_encodable(proof)
 }
 
-pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>) -> String {
+pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>) -> Encoded<Proof<()>> {
     if selection.len() != 2 {
         panic!("Range should include exactly two elements!")
     }
@@ -130,5 +131,5 @@ pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>
         proof_base.key,
     );
 
-    proof.encode()
+    Encoded::from_encodable(proof)
 }

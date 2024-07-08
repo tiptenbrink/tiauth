@@ -1,4 +1,5 @@
 use js_sys::{Array, Error, Object, Uint8Array};
+use tiauth_core::encoded::Encodable;
 use std::cmp::Ordering;
 use tiauth_core::{app, ByteOwned, ByteSerial};
 use tiauth_core::{
@@ -78,19 +79,19 @@ pub fn create_set_claims_proof_map(
         proof_base,
         &user_id,
         claims.as_packed(),
-    ))
+    ).encode())
 }
 
 #[wasm_bindgen(js_name = createResetProof)]
 pub fn create_reset_proof(application: String, key: &ProofKey, user_id: String) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    app::create_reset_proof(proof_base, &user_id)
+    app::create_reset_proof(proof_base, &user_id).encode()
 }
 
 #[wasm_bindgen(js_name = createReadAllProof)]
 pub fn create_read_all_proof(application: String, key: &ProofKey) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    app::create_read_all_proof(proof_base)
+    app::create_read_all_proof(proof_base).encode()
 }

@@ -1,7 +1,8 @@
-pub mod state;
-
 #[cfg(feature = "model")]
 pub mod model;
+
+#[cfg(feature = "functions")]
+pub mod state;
 
 #[cfg(feature = "functions")]
 pub mod functions;
@@ -11,5 +12,3 @@ pub mod router;
 
 #[cfg(feature = "admin")]
 pub mod admin;
-
-mod encoded;

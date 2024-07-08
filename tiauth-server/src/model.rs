@@ -1,4 +1,4 @@
-use crate::encoded::Encoded;
+use tiauth_core::encoded::Encoded;
 use serde::{Deserialize, Serialize};
 use tiauth_core::{Claims, Proof};
 
@@ -16,7 +16,7 @@ pub struct PakeResponse {
 }
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RegisterFinishRequest {
     pub application: String,
     pub opaque_request: String,

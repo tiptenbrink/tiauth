@@ -3,7 +3,7 @@ use napi::{
     Either, Error, JsObject,
 };
 use std::cmp::Ordering;
-use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
+use tiauth_core::{app, encoded::Encodable, ByteOwned, BytePacked, ByteSerial};
 use tiauth_core::{
     app::ProofBaseView,
     crypto::{load_key, Key},
@@ -87,19 +87,19 @@ pub fn create_set_claims_proof_map(
         proof_base,
         &user_id,
         claims.as_bytes(),
-    ))
+    ).encode())
 }
 
 #[napi(js_name = createResetProof)]
 pub fn create_reset_proof(application: String, key: &ProofKey, user_id: String) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    app::create_reset_proof(proof_base, &user_id)
+    app::create_reset_proof(proof_base, &user_id).encode()
 }
 
 #[napi(js_name = createReadAllProof)]
 pub fn create_read_all_proof(application: String, key: &ProofKey) -> String {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    app::create_read_all_proof(proof_base)
+    app::create_read_all_proof(proof_base).encode()
 }

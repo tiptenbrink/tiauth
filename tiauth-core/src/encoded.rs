@@ -3,8 +3,17 @@ use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use std::marker::PhantomData;
-use tiauth_core::Encodable;
+use std::{fmt::Display, marker::PhantomData};
+
+pub trait Encodable {
+    type Error: Display;
+
+    fn decode(encoded: &str) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
+
+    fn encode(&self) -> String;
+}
 
 /// Simple newtype that implements Serialize and Deserialize for Encodable types. This means those types don't have to
 /// implement Serialize and Deserialize themselves, giving more control by allowing (de)serialization to happen only
@@ -16,6 +25,10 @@ impl<T> Encoded<T>
 where
     T: Encodable,
 {
+    pub fn from_encodable(encodable: T) -> Self {
+        Self(encodable)
+    }
+
     pub fn get(self) -> T {
         self.0
     }

@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 tiauth-core = { path = "../tiauth-core", default-features = false, features = ["app"]}
-# tiauth-app = { path = "../tiauth-app" }
+tiauth-app = { path = "../tiauth-app", default_features = false}
 # tiauth-server = { path = "../tiauth-server", features = ["functions"] }
 
 # lazy-borink = { path = "../../lazy-borink/lazy-borink", version = "0.2", features = ["python"] }

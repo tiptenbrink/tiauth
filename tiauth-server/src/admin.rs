@@ -1,8 +1,8 @@
 use rmp_serde::encode;
 use serde::Deserialize;
 use tiauth_core::{admin, Proof, State};
-
-use crate::{encoded::Encoded, model::GetUsers};
+use tiauth_core::encoded::Encoded;
+use crate::{model::GetUsers};
 
 
 

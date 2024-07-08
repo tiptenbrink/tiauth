@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod crypto;
+pub mod encoded;
 mod data;
 pub mod error;
 mod proof;
@@ -19,7 +20,7 @@ pub use crate::data::Claims;
 pub use crate::data::SessionClaims;
 pub use crate::data::Target;
 pub use crate::data::TargetList;
-pub use crate::data::{ByteOwned, BytePacked, ByteSerial, Encodable};
+pub use crate::data::{ByteOwned, BytePacked, ByteSerial};
 pub use crate::proof::{Proof, Session};
 
 #[cfg(feature = "action")]
