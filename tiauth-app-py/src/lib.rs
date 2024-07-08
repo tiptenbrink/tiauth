@@ -17,8 +17,8 @@ struct ProofKey {
 }
 
 #[pyclass(frozen)]
-struct ServerClient {
-    inner: Arc<tiauth_app::ServerClient>
+struct AppClient {
+    inner: Arc<tiauth_app::AppClient>
 }
 
 
@@ -35,11 +35,11 @@ pub struct ApplicationRegister {
 }
 
 #[pymethods]
-impl ServerClient {
+impl AppClient {
     #[new]
     #[pyo3(signature = (application, private_key_pem, proof_expiration=None))]
     fn new(application: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
-        let inner = Arc::new(tiauth_app::ServerClient::new(application, private_key_pem, proof_expiration));
+        let inner = Arc::new(tiauth_app::AppClient::new(application, private_key_pem, proof_expiration));
 
         Self {
             inner
@@ -131,7 +131,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_read_range_proof, m)?)?;
     m.add_class::<ProofKey>()?;
     m.add_class::<UserClient>()?;
-    m.add_class::<ServerClient>()?;
+    m.add_class::<AppClient>()?;
     m.add_class::<ApplicationLogin>()?;
     m.add_class::<ApplicationRegister>()?;
     // m.add_submodule(&internal)?;

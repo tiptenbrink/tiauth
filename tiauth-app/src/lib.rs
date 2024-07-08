@@ -34,13 +34,13 @@ pub struct ApplicationRegister {
 }
 
 #[derive(Clone)]
-pub struct ServerClient {
+pub struct AppClient {
     application: String,
     private_key: Key,
     proof_expiration: u64
 }
 
-impl ServerClient {
+impl AppClient {
     pub fn new(application: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
         let key = load_key(private_key_pem).unwrap();
 
@@ -117,7 +117,7 @@ impl UserClient {
         }
     }
 
-    pub fn from_server(server_client: &ServerClient, tiauth_url: &str) -> Self {
+    pub fn from_server(server_client: &AppClient, tiauth_url: &str) -> Self {
         Self::new(&server_client.application, tiauth_url)
     }
 
@@ -207,7 +207,7 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 -----END PRIVATE KEY-----";
 
     async fn register_user(application: &str, user_id: &str, password: &str) {
-        let server_client = ServerClient::new(application, PRIVATE, None);
+        let server_client = AppClient::new(application, PRIVATE, None);
 
         let register = server_client.prepare_register(user_id, None);
 
@@ -217,7 +217,7 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
     }
 
     fn register_user_blocking(application: &str, user_id: &str, password: &str) {
-        let server_client = ServerClient::new(application, PRIVATE, None);
+        let server_client = AppClient::new(application, PRIVATE, None);
 
         let register = server_client.prepare_register(user_id, None);
 

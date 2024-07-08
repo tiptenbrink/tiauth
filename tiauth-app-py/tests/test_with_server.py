@@ -9,15 +9,19 @@ from msgspec import json, msgpack
 import random
 
 from tiauth_app_py.app import create_read_all_proof, create_read_some_proof, load_key_from_pem, public_from_private_key_pem
+from tiauth_app_py.app import AppClient, UserClient, ApplicationLogin, ApplicationRegister
 from tiauth_app_py.model import GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, UserClaims, UserList
+
+TIAUTH_URL = "http://localhost:3000"
+GOV_URL = "http://localhost:3001"
 
 @pytest.fixture(scope="module")
 def json_client() -> Generator[Client, None, None]:
-    yield Client(base_url="http://localhost:3000", headers={'content-type': 'application/json'})
+    yield Client(base_url=TIAUTH_URL, headers={'content-type': 'application/json'})
 
 @pytest.fixture(scope="module")
 def gov_client() -> Generator[Client, None, None]:
-    yield Client(base_url="http://localhost:3001")
+    yield Client(base_url=GOV_URL)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -115,6 +119,49 @@ def user_session(json_client: Client, registered_user: RegisteredUser, mod_app: 
 
 def test_login(user_session: UserSession):
     assert len(user_session.session) > 0
+
+def make_user_client(app_name: str):
+    return UserClient(app_name, TIAUTH_URL)
+
+def make_app_client(app_name: str):
+    return AppClient(app_name, private)
+
+@pytest.fixture(scope="module")
+def app_client(mod_app: str):
+    yield make_app_client(mod_app)
+
+@pytest.fixture
+def app_client_once(once_app: str):
+    yield make_app_client(once_app)
+
+@pytest.fixture(scope="module")
+def user_client(mod_app: str):
+    yield make_user_client(mod_app)
+
+@pytest.fixture
+def user_client_once(once_app: str):
+    yield make_user_client(once_app)
+
+
+def test_client_login(app_client: AppClient, user_client: UserClient, registered_user: RegisteredUser):
+    login = app_client.prepare_login(registered_user.user_id)
+
+    session = user_client.login_user(login, registered_user.password)
+    
+    assert len(session) > 0
+
+
+def test_client_register(app_client: AppClient, user_client: UserClient, json_client: Client, mod_app: str):
+    user_id = str(uuid4())
+    password = "my_pass"
+
+    register = app_client.prepare_register(user_id)
+
+    user_client.register_user(register, password)
+
+    registered_user = RegisteredUser(user_id, password)
+
+    make_user_session(json_client, registered_user, mod_app)
 
 
 private = """
