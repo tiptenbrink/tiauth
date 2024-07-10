@@ -1,6 +1,6 @@
 use tiauth_core::encoded::Encoded;
 use serde::{Deserialize, Serialize};
-use tiauth_core::{login, register, Claims, Proof, SessionClaims, State};
+use tiauth_core::{login, register, modify, Claims, Proof, SessionClaims, State};
 use crate::model::*;
 
 pub fn start_register(state: &impl State, request: PakeRequest) -> PakeResponse {
@@ -20,8 +20,6 @@ pub fn start_register(state: &impl State, request: PakeRequest) -> PakeResponse 
         },
     }
 }
-
-
 
 pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
     let proof = request.claims_proof.map(|e| e.get());
@@ -61,8 +59,6 @@ pub fn start_login(state: &impl State, request: PakeRequest) -> PakeResponse {
     }
 }
 
-
-
 pub fn login_session(state: &impl State, request: LoginFinishRequest) -> SessionResponse {
     let session_claims =
         match SessionClaims::from_options(request.all_claims, request.requested_claims) {
@@ -85,6 +81,17 @@ pub fn login_session(state: &impl State, request: LoginFinishRequest) -> Session
             terrors::E2::A(_e) => todo!(),
             terrors::E2::B(_e) => todo!(),
         },
+    }
+}
+
+pub fn reset_password(state: &impl State, request: ResetPasswordRequest) {
+    let proof = request.reset_proof.get();
+
+    match modify::reset_password(state, &request.application, &proof) {
+        Ok(change_nonce) => {
+            
+        }
+        Err(e) => todo!(),
     }
 }
 

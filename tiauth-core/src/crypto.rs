@@ -1,8 +1,11 @@
 use aes_gcm_siv::{self as aead, aead::Aead, KeyInit};
 use base64::{engine::general_purpose as b64, Engine as _};
 use ed25519_compact::{self as ed};
+use rand_chacha::ChaCha20Rng;
+use sha2::Sha256;
+use hmac::{Hmac, Mac};
 use rand::rngs::StdRng;
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -91,7 +94,7 @@ pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct SessionKey {
     key_256: aead::Key<aead::Aes256GcmSiv>,
 }
@@ -133,6 +136,91 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u
     ciphertext.append(&mut iv_bytes);
 
     ciphertext
+}
+
+// HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
+pub struct EphemeralKey {
+    bytes: [u8; 32]
+}
+
+impl EphemeralKey {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self {
+            bytes
+        }
+    }
+
+    pub fn compute(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
+        let passed = now - ref_time;
+
+        let mut rng = ChaCha20Rng::from_seed(base_secret);
+        let ten_minute_intervals_passed = passed / 1200;
+
+        rng.set_stream(ten_minute_intervals_passed);
+        let mut new_key = [0u8; 32];
+        rng.fill_bytes(&mut new_key);
+
+        Self {
+            bytes: new_key
+        }
+    }
+
+    pub fn last<const N: usize>(base_secret: [u8; 32], now: u64, ref_time: u64) -> [Self; N] {
+        let range_arr: [u64; N] = const { gen_array() };
+        range_arr.map(|i| {
+           Self::compute(base_secret, now - (i*600), ref_time)
+        })
+    }
+}
+
+const fn gen_array<const N: usize>() -> [u64; N] {
+    let mut res = [0u64; N];
+    
+    let mut i = 0;
+    while i < N {
+        res[i] = i as u64;
+        i += 1;
+    }
+    
+    res
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub fn ephemeral(ephemeral_data: &[u8], key: &EphemeralKey) -> [u8; 32] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
+
+    mac.update(ephemeral_data);
+
+    let code: [u8; 32] = mac.finalize().into_bytes().into();
+
+    code
+}
+
+#[derive(Error, Debug)]
+#[error("Verification failed.")]
+pub struct VerifyFailed;
+
+pub fn verify_ephemeral<const N: usize>(ephemeral_data: &[u8], keys: &[EphemeralKey; N], code: &[u8]) -> Result<(), VerifyFailed> {
+    let mut i = N-1;
+    loop {
+        let key = &keys[i];
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
+
+        mac.update(ephemeral_data);
+
+        if mac.verify_slice(code).is_ok() {
+            return Ok(())
+        }
+
+        i -= 1;
+
+        if i == 0 {
+            break;
+        }
+    }
+    
+    Err(VerifyFailed)
 }
 
 /// The decryption failed. This can be due to tampered data, an invalid key, invalid IV or incorrect tag.

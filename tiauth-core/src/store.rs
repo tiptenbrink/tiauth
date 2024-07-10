@@ -281,7 +281,6 @@ impl SetLoginOptions {
     }
 }
 
-/// Assumes "Claims" are a valid string-value map. It asserts only the map.
 /// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
 /// If `create_user` is set to true, it will create a user when the user does not exist. Otherwise, it
 /// will return a [LoginFieldError::AlreadyExists]. When set to false, it will instead return [LoginFieldError::NotFound]

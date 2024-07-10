@@ -39,9 +39,15 @@ pub struct SessionResponse {
     pub session: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetUsers {
     pub application: String,
     pub include_claims: Option<bool>,
     pub read_proof: Encoded<Proof<()>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub application: String,
+    pub reset_proof: Encoded<Proof<()>>
 }

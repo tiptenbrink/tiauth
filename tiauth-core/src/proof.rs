@@ -12,9 +12,10 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::marker::PhantomData;
 /// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
+
+use terrors::OneOf;
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
-use terrors::OneOf;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
 

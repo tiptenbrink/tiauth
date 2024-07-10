@@ -600,6 +600,10 @@ pub enum ActionType {
     Delete,
     #[serde(rename = "set")]
     Set,
+    #[serde(rename = "add")]
+    Add,
+    #[serde(rename = "merge")]
+    Merge,
     #[serde(rename = "read")]
     Read,
 }
@@ -629,8 +633,10 @@ impl ActionType {
         match &self {
             Self::Reset => "reset",
             Self::Delete => "delete",
-            Self::Set => "set",
             Self::Read => "read",
+            Self::Set => "set",
+            Self::Add => "add",
+            Self::Merge => "merge"
         }
     }
 }

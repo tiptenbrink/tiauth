@@ -25,7 +25,7 @@ use terrors::OneOf;
 /// time (in seconds after the Unix epoch) and is no longer valid afterwards.
 ///
 /// The function returns a "change nonce" that serves as a one-time token that allows one to re-enter the registration flow.
-fn reset_password(
+pub fn reset_password(
     state: &impl State,
     application: &str,
     proof: &Proof<()>,
@@ -48,7 +48,11 @@ fn reset_password(
         None,
         "".to_owned(),
     );
+    // TODO come up with eph bytes
+    let eph_bytes: Vec<u8> = Vec::new();
     let set_nonce = set_entry.key();
+
+    
 
     let tables = state.app_tables(application);
 
@@ -70,6 +74,8 @@ fn reset_password(
             SetLoginOptions::new(false, false),
         )
         .map_err(OneOf::broaden)?;
+
+        
 
         let mut eph_table = write_txn
             .open_table(tables.ephemeral())
@@ -245,6 +251,19 @@ fn app_delete_user(
         .map_err(OneOf::broaden)?;
 
     Ok(())
+}
+
+enum SetStrategy {
+    // Adds new claims, errors if any already exists
+    Add,
+    // Adds new claims, overwrites previous values of claims
+    Merge,
+    // Replaces the entire claims map, discarding any previous claims
+    Replace
+}
+
+fn modify_claims(state: &impl State, claims_proof: &Proof<Claims>) {
+
 }
 
 #[cfg(test)]

@@ -55,6 +55,8 @@ pub fn register_finish(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
+    // It can either be an entry from register_start (NewUser), or entry from reset_password (SetPassword), which cleared the password,
+    // or from change_password (ChangePassword)
     let entry = pop_ephemeral(
         state,
         application,

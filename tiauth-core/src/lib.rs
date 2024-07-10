@@ -38,6 +38,7 @@ mod action {
     pub use crate::ops::login;
     pub use crate::ops::register;
     pub use crate::ops::verify;
+    pub use crate::ops::modify;
     pub use crate::state::CoreState;
     pub use crate::state::GovernorState;
     pub use crate::state::State;

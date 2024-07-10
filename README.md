@@ -186,6 +186,10 @@ redb cannot store bytes in an aligned way. This is required for rkyv's zero-copy
 https://blog.myhro.info/2017/01/benchmarking-ip-and-unix-domain-sockets-for-real
 
 
+### Key rotation
+
+We want 
+
 ### Mutability
 
 We need some way to add applications at runtime. But this requires modifying the state. This means AppTables etc. has to all be wrapped in Mutex.

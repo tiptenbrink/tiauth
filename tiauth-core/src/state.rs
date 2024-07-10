@@ -2,16 +2,22 @@
 
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition};
 use rmp_serde::{decode, encode};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::SystemTime;
 
 use crate::crypto::{
-    create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key,
-    Key, PublicKey, SessionKey,
+    create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key, EphemeralKey, Key, PublicKey, SessionKey
 };
 use crate::data::Application;
 use crate::store::{open_db, AppTable, TableStore, APPS, SERVER};
@@ -49,9 +55,13 @@ pub trait GovernorState {
 
     fn db(&self) -> &Database;
 
+    fn keys(&self) -> &impl GovernorKeyState<2, 2>;
+
     fn rng(&self) -> StdRng {
         StdRng::from_entropy()
     }
+
+     
 
     fn private(&self) -> &PrivateState;
 
@@ -84,6 +94,8 @@ pub trait State {
 
     fn private(&self) -> &PrivateState;
 
+    fn keys(&self) -> &impl KeyState<2, 2>;
+
     fn rng(&self) -> StdRng {
         StdRng::from_entropy()
     }
@@ -111,10 +123,121 @@ impl<T: GovernorState> State for T {
     }
 }
 
+impl<const SN: usize, const EN: usize, T: GovernorKeyState<SN, EN>> KeyState<SN, EN> for T {
+    fn opaque(&self) -> &str {
+        self.opaque()
+    }
+
+    fn session_keys(&self) -> &[SessionKey; SN] {
+        self.session_keys()
+    }
+
+    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN] {
+        self.ephemeral_keys(application)
+    }
+}
+
+trait GovernorKeyState<const SN: usize, const EN: usize> {
+    fn opaque(&self) -> &str;
+
+    fn session_keys(&self) -> &[SessionKey; SN];
+
+    fn register_application(&mut self, application: &str);
+
+    fn rotate_session_keys(&mut self, key: SessionKey);
+
+    // Moves all keys from the invalidated key to the end one place left, and puts the new key at the end. If the key does not exist, it must call rotate_session_keys.
+    fn invalidate_session_key(&mut self, key_to_invalidate: &SessionKey, new_key: SessionKey);
+
+    fn update_ephemeral_time(&mut self);
+
+    fn rotate_opaque(&mut self) {
+        todo!()
+    }
+
+    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN];
+}
+
+trait KeyState<const SN: usize, const EN: usize> {
+    fn opaque(&self) -> &str;
+
+    fn session_keys(&self) -> &[SessionKey; SN];
+
+    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN];
+}
+
+pub struct CoreKeyState<const SN: usize, const EN: usize> {
+    valid_session_keys: [SessionKey; SN],
+    ephemeral_secret: [u8; 32],
+    ephemeral_time: u64,
+    app_secrets: HashMap<String, [u8; 32]>,
+    opaque: String
+}
+
+impl<const SN: usize, const EN: usize> GovernorKeyState<SN, EN> for CoreKeyState<SN, EN> {
+    fn opaque(&self) -> &str {
+        &self.opaque
+    }
+
+    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN] {
+        let base_secret = self.app_secrets.get(application).unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+        EphemeralKey::last(base_secret.clone(), now, self.ephemeral_time)
+    }
+    
+    fn session_keys(&self) -> &[SessionKey; SN] {
+        &self.valid_session_keys
+    }
+    
+    fn rotate_session_keys(&mut self, key: SessionKey) {
+        self.valid_session_keys.rotate_left(1);
+        self.valid_session_keys[SN-1] = key;
+    }
+    
+    fn invalidate_session_key(&mut self, key_to_invalidate: &SessionKey, new_key: SessionKey) {
+        let invalid_key_i = self.valid_session_keys.iter().position(|s| {
+            s == key_to_invalidate
+        });
+
+        if let Some(invalid_key_i) = invalid_key_i {
+            for i in invalid_key_i..(SN-1) {
+                self.valid_session_keys[i] = self.valid_session_keys[i+1].clone()
+            }
+            self.valid_session_keys[SN-1] = new_key;
+        } else {
+            self.rotate_session_keys(new_key)
+        }
+    }
+
+    fn update_ephemeral_time(&mut self) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+        self.ephemeral_time = now;
+    }
+    
+    fn register_application(&mut self, application: &str) {
+        let base_secret = &self.ephemeral_secret;
+
+        let mut hasher = Sha256::new();
+
+        hasher.update(application.as_bytes());
+        hasher.update(base_secret);
+
+        let application_seed: [u8; 32] = hasher.finalize().into();
+
+        self.app_secrets.insert(application.to_owned(), application_seed);
+    }
+}
+
 #[derive(Clone)]
 pub struct PrivateState {
+    // If this is leaked, passwords are not immediately at risk. However, it does allow another server to impersonate this one as it is now
+    // able to verify user passwords (if it also has their password files).
     pub opaque: String,
+    // Leaking this is catastrophic, as this allows an attacker to create verified sessions at will which are accepted by this server.
     pub session: SessionKey,
+    // Leaking this is catastrophic, as it allows attackers to impersonate applications, allowing them to query and modify users at will.
     pub private: Key,
 }
 
