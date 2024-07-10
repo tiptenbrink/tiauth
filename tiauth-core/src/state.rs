@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
+use base64::{engine::general_purpose as b64, Engine as _};
 
 use crate::crypto::{
     create_key, create_session_key, load_key, load_session_key, save_private_key, save_session_key, EphemeralKey, Key, PublicKey, SessionKey
@@ -55,7 +56,7 @@ pub trait GovernorState {
 
     fn db(&self) -> &Database;
 
-    fn keys(&self) -> &impl GovernorKeyState<2, 2>;
+    fn keys(&self) -> &impl GovernorKeyState<2>;
 
     fn rng(&self) -> StdRng {
         StdRng::from_entropy()
@@ -65,13 +66,13 @@ pub trait GovernorState {
 
     fn private(&self) -> &PrivateState;
 
-    fn from_init(init_state: InitState) -> Self;
+    fn from_init(init_state: InitState<2>) -> Self;
 
-    fn setup<P: AsRef<Path>>(db_path: P) -> Result<Self, DbError>
+    fn setup<P: AsRef<Path>>(db_path: P, now: u64) -> Result<Self, DbError>
     where
         Self: Sized,
     {
-        let mut state = Self::from_init(InitState::init(db_path)?);
+        let mut state = Self::from_init(InitState::init(db_path, now)?);
 
         let registered_apps = get_apps(state.db())?;
 
@@ -94,7 +95,7 @@ pub trait State {
 
     fn private(&self) -> &PrivateState;
 
-    fn keys(&self) -> &impl KeyState<2, 2>;
+    fn keys(&self) -> &impl KeyState<2>;
 
     fn rng(&self) -> StdRng {
         StdRng::from_entropy()
@@ -121,9 +122,13 @@ impl<T: GovernorState> State for T {
     fn apps(&self) -> Vec<&String> {
         self.apps()
     }
+    
+    fn keys(&self) -> &impl KeyState<2> {
+        self.keys()
+    }
 }
 
-impl<const SN: usize, const EN: usize, T: GovernorKeyState<SN, EN>> KeyState<SN, EN> for T {
+impl<const SN: usize, T: GovernorKeyState<SN>> KeyState<SN> for T {
     fn opaque(&self) -> &str {
         self.opaque()
     }
@@ -132,17 +137,17 @@ impl<const SN: usize, const EN: usize, T: GovernorKeyState<SN, EN>> KeyState<SN,
         self.session_keys()
     }
 
-    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN] {
+    fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize) {
         self.ephemeral_keys(application)
     }
 }
 
-trait GovernorKeyState<const SN: usize, const EN: usize> {
+trait GovernorKeyState<const SN: usize> {
     fn opaque(&self) -> &str;
 
     fn session_keys(&self) -> &[SessionKey; SN];
 
-    fn register_application(&mut self, application: &str);
+    fn register_application(&mut self, application: &str, amount_valid: Option<usize>);
 
     fn rotate_session_keys(&mut self, key: SessionKey);
 
@@ -155,35 +160,59 @@ trait GovernorKeyState<const SN: usize, const EN: usize> {
         todo!()
     }
 
-    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN];
+    fn from_init(key_init: KeyInitState<SN>) -> Self;
+
+    fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize);
 }
 
-trait KeyState<const SN: usize, const EN: usize> {
+trait KeyState<const SN: usize> {
     fn opaque(&self) -> &str;
 
     fn session_keys(&self) -> &[SessionKey; SN];
 
-    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN];
+    fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize);
 }
 
-pub struct CoreKeyState<const SN: usize, const EN: usize> {
+struct AppSecret {
+    base_seed: [u8; 32],
+    amount_valid: usize
+}
+
+pub struct CoreKeyState<const SN: usize> {
     valid_session_keys: [SessionKey; SN],
     ephemeral_secret: [u8; 32],
     ephemeral_time: u64,
-    app_secrets: HashMap<String, [u8; 32]>,
+    app_secrets: HashMap<String, AppSecret>,
     opaque: String
 }
 
-impl<const SN: usize, const EN: usize> GovernorKeyState<SN, EN> for CoreKeyState<SN, EN> {
+fn create_app_secret(base_secret: &[u8; 32], application: &str, amount_valid: Option<usize>) -> AppSecret {
+
+    let mut hasher = Sha256::new();
+
+    hasher.update(application.as_bytes());
+    hasher.update(base_secret.clone());
+
+    let base_seed: [u8; 32] = hasher.finalize().into();
+
+    let amount_valid = amount_valid.unwrap_or(2);
+
+    AppSecret {
+        amount_valid,
+        base_seed
+    }
+}
+
+impl<const SN: usize> GovernorKeyState<SN> for CoreKeyState<SN> {
     fn opaque(&self) -> &str {
         &self.opaque
     }
 
-    fn ephemeral_keys(&self, application: &str) -> [EphemeralKey; EN] {
-        let base_secret = self.app_secrets.get(application).unwrap();
+    fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize) {
+        let app_secret = self.app_secrets.get(application).unwrap();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-        EphemeralKey::last(base_secret.clone(), now, self.ephemeral_time)
+        (EphemeralKey::last(app_secret.base_seed.clone(), now, self.ephemeral_time, app_secret.amount_valid), app_secret.amount_valid)
     }
     
     fn session_keys(&self) -> &[SessionKey; SN] {
@@ -216,17 +245,22 @@ impl<const SN: usize, const EN: usize> GovernorKeyState<SN, EN> for CoreKeyState
         self.ephemeral_time = now;
     }
     
-    fn register_application(&mut self, application: &str) {
+    fn register_application(&mut self, application: &str, amount_valid: Option<usize>) {
         let base_secret = &self.ephemeral_secret;
 
-        let mut hasher = Sha256::new();
+        let app_secret = create_app_secret(base_secret, application, amount_valid);
 
-        hasher.update(application.as_bytes());
-        hasher.update(base_secret);
-
-        let application_seed: [u8; 32] = hasher.finalize().into();
-
-        self.app_secrets.insert(application.to_owned(), application_seed);
+        self.app_secrets.insert(application.to_owned(), app_secret);
+    }
+    
+    fn from_init(key_init: KeyInitState<SN>) -> Self {
+        Self {
+            valid_session_keys: key_init.session_keys,
+            ephemeral_secret: key_init.ephemeral_secret,
+            opaque: key_init.opaque,
+            ephemeral_time: key_init.ephemeral_time,
+            app_secrets: HashMap::new()
+        }
     }
 }
 
@@ -241,6 +275,13 @@ pub struct PrivateState {
     pub private: Key,
 }
 
+pub struct KeyInitState<const SN: usize> {
+    pub opaque: String,
+    pub ephemeral_secret: [u8; 32],
+    pub session_keys: [SessionKey; SN],
+    pub ephemeral_time: u64
+}
+
 /// CoreState is a single-threaded implementation of State. See `tiauth-server`'s ServerState for a multi-threaded impelementation.
 #[derive(Clone)]
 pub struct CoreState {
@@ -248,6 +289,7 @@ pub struct CoreState {
     pub app_keys: HashMap<String, PublicKey>,
     pub db: Arc<Database>,
     pub private: PrivateState,
+    pub key_state: Arc<CoreKeyState<2>>
 }
 
 fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
@@ -284,12 +326,13 @@ impl GovernorState for CoreState {
         &self.private
     }
 
-    fn from_init(init_state: InitState) -> Self {
+    fn from_init(init_state: InitState<2>) -> Self {
         Self {
             tables: HashMap::new(),
             app_keys: HashMap::new(),
             db: Arc::new(init_state.db),
             private: init_state.private,
+            key_state: todo!()
         }
     }
 
@@ -305,20 +348,121 @@ impl GovernorState for CoreState {
     fn apps(&self) -> Vec<&String> {
         self.tables.keys().collect()
     }
+    
+    fn keys(&self) -> &impl GovernorKeyState<2> {
+        self.key_state.as_ref()
+    }
 }
 
-pub struct InitState {
+pub struct InitState<const SN: usize> {
     pub db: Database,
     pub private: PrivateState,
+    pub key_init: KeyInitState<SN>,
 }
 
-impl InitState {
-    fn init<P: AsRef<Path>>(db_path: P) -> Result<Self, DbError> {
+impl<const SN: usize> InitState<SN> {
+    fn init<P: AsRef<Path>>(db_path: P, now: u64) -> Result<Self, DbError> {
         let db = open_db(db_path)?;
-        let private = init_private_state(&db, &mut StdRng::from_entropy())?;
+        let mut rng = StdRng::from_entropy();
+        let private = init_private_state(&db, &mut rng)?;
+        let key_init = init_key_state(&db, &mut rng, now)?;
 
-        Ok(Self { db, private })
+        Ok(Self { db, private, key_init })
     }
+}
+
+const fn gen_range_array<const N: usize>() -> [usize; N] {
+    let mut res = [0usize; N];
+    
+    let mut i = 0;
+    while i < N {
+        res[i] = i;
+        i += 1;
+    }
+    
+    res
+}
+
+fn init_key_state<const SN: usize>(db: &Database, rng: &mut StdRng, now: u64) -> Result<KeyInitState<SN>, DbError> {
+    let write_txn = db.begin_write()?;
+
+    let (opaque, session_keys, private, ephemeral_secret, ephemeral_time) = {
+        let mut table = write_txn.open_table(SERVER)?;
+        let setup = table.get("opaque_setup")?.map(|a| a.value());
+
+        let setup = if let Some(setup) = setup {
+            setup
+        } else {
+            let setup = create_setup();
+            table.insert("opaque_setup", setup.clone())?;
+            setup
+        };
+
+        let range_arr: [usize; SN] = const { gen_range_array() };
+
+        let session_keys: Result<Vec<Option<SessionKey>>, DbError> = (0..SN).map(|i| {
+            let key_name = format!("session_key_{}", i);
+            let session_key = table.get(key_name.as_str())?.map(|a| a.value());
+            if let Some(session_key) = session_key {
+                Ok(Some(load_session_key(&session_key)))
+            } else {
+                let session_key = create_session_key(rng);
+                let saved_session_key = save_session_key(&session_key);
+                table.insert(key_name.as_str(), saved_session_key.session)?;
+                Ok(Some(session_key))
+            }
+        }).collect();
+
+        let mut session_keys = session_keys?;
+
+        let session_keys: [SessionKey; SN] = range_arr.map(|i| {
+            session_keys[i].take().unwrap()
+        });
+
+        let private_key = table.get("private_key")?.map(|a| a.value());
+
+        let keypair = if let Some(private_key) = private_key {
+            load_key(&private_key).unwrap()
+        } else {
+            let keypair = create_key();
+            let saved_private_key = save_private_key(&keypair);
+
+            table.insert("private_key", saved_private_key)?;
+            keypair
+        };
+
+        let ephemeral_secret = table.get("ephemeral_secret")?.map(|a| a.value());
+
+        let ephemeral_secret = if let Some(ephemeral_secret) = ephemeral_secret {
+            let secret_bytes = b64::URL_SAFE_NO_PAD.decode(ephemeral_secret).unwrap();
+            assert_eq!(secret_bytes.len(), 32);
+            let mut ephemeral_secret = [0u8; 32];
+            ephemeral_secret.copy_from_slice(&secret_bytes);
+            ephemeral_secret
+        } else {
+            let mut ephemeral_secret = [0u8; 32];
+            rng.fill_bytes(&mut ephemeral_secret);
+            ephemeral_secret
+        };
+
+        let ephemeral_time = table.get("ephemeral_time")?.map(|a| a.value());
+
+        let ephemeral_time = if let Some(ephemeral_time) = ephemeral_time {
+            (&ephemeral_time).parse().unwrap()
+        } else {
+            now
+        };
+
+        (setup, session_keys, keypair, ephemeral_secret, ephemeral_time)
+    };
+    write_txn.commit()?;
+
+    Ok(KeyInitState {
+        opaque,
+        session_keys,
+        ephemeral_secret,
+        ephemeral_time
+    })
 }
 
 fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, DbError> {
@@ -454,26 +598,87 @@ pub mod test_util {
         app_public_keys: HashMap<String, PublicKey>,
         db: Database,
         private: PrivateState,
+        key_state: TestKeyState
+    }
+
+    pub struct TestKeyState {
+        valid_session_keys: [SessionKey; 2],
+        ephemeral_secret: [u8; 32],
+        ephemeral_time: u64,
+        app_secrets: HashMap<String, AppSecret>,
+        opaque: String
+    }
+
+    impl GovernorKeyState<2> for TestKeyState {
+        fn opaque(&self) -> &str {
+            todo!()
+        }
+    
+        fn session_keys(&self) -> &[SessionKey; 2] {
+            todo!()
+        }
+    
+        fn register_application(&mut self, application: &str, amount_valid: Option<usize>) {
+            todo!()
+        }
+    
+        fn rotate_session_keys(&mut self, key: SessionKey) {
+            todo!()
+        }
+    
+        fn invalidate_session_key(&mut self, key_to_invalidate: &SessionKey, new_key: SessionKey) {
+            todo!()
+        }
+    
+        fn update_ephemeral_time(&mut self) {
+            todo!()
+        }
+    
+        fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize) {
+            todo!()
+        }
+        
+        fn from_init(key_init: KeyInitState<2>) -> Self {
+            todo!()
+        }
     }
 
     impl TestState {
         pub fn setup_test(applications: Vec<&str>) -> Self {
             let tmp = tempfile::NamedTempFile::new().unwrap();
-            let InitState { db, private } = InitState::init(tmp.path()).unwrap();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - (86400 * 15);
+
+            let InitState { db, private, key_init } = InitState::init(tmp.path(), now).unwrap();
 
             let mut tables: HashMap<String, TableStore> = HashMap::new();
             let mut app_keys: HashMap<String, Key> = HashMap::new();
             let mut app_public_keys: HashMap<String, PublicKey> = HashMap::new();
 
+            let mut app_secrets: HashMap<String, AppSecret> = HashMap::new();
+
             for app_name in applications {
                 let (key, app) = create_app(app_name);
 
-                write_app_to_db(&db, &app).unwrap();
+                // TODO? check if re-enable
+                //write_app_to_db(&db, &app).unwrap();
 
+                // TODO app secrets
                 register_application_tables(&mut tables, app_name);
                 app_public_keys.insert(app_name.to_owned(), key.to_public_key());
                 app_keys.insert(app_name.to_owned(), key);
+
+                let app_secret = create_app_secret(&key_init.ephemeral_secret, app_name, Some(2));
+
+                app_secrets.insert(app_name.to_owned(), app_secret);
             }
+
+            let key_state = TestKeyState {
+                valid_session_keys: key_init.session_keys,
+                ephemeral_secret: key_init.ephemeral_secret,
+                ephemeral_time: key_init.ephemeral_time,
+                app_secrets,
+                opaque: key_init.opaque,
+            };
 
             Self {
                 db,
@@ -481,6 +686,7 @@ pub mod test_util {
                 tables,
                 app_keys,
                 app_public_keys,
+                key_state
             }
         }
 
@@ -509,7 +715,7 @@ pub mod test_util {
             &self.private
         }
 
-        fn from_init(_: InitState) -> Self {
+        fn from_init(_: InitState<2>) -> Self {
             unimplemented!("Do not use this function for TestState! Use `setup_test`.")
         }
 
@@ -517,7 +723,7 @@ pub mod test_util {
             self.app_public_keys.get(application).unwrap().clone()
         }
 
-        fn setup<P: AsRef<Path>>(_: P) -> Result<Self, DbError>
+        fn setup<P: AsRef<Path>>(_: P, _: u64) -> Result<Self, DbError>
         where
             Self: Sized,
         {
@@ -530,6 +736,10 @@ pub mod test_util {
 
         fn apps(&self) -> Vec<&String> {
             self.tables.keys().collect()
+        }
+        
+        fn keys(&self) -> &impl GovernorKeyState<2> {
+            &self.key_state
         }
     }
 }

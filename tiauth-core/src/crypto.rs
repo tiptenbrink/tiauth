@@ -165,25 +165,14 @@ impl EphemeralKey {
         }
     }
 
-    pub fn last<const N: usize>(base_secret: [u8; 32], now: u64, ref_time: u64) -> [Self; N] {
-        let range_arr: [u64; N] = const { gen_array() };
-        range_arr.map(|i| {
-           Self::compute(base_secret, now - (i*600), ref_time)
-        })
+    pub fn last(base_secret: [u8; 32], now: u64, ref_time: u64, amount_valid: usize) -> Vec<EphemeralKey> {
+        (0..(amount_valid as u64)).into_iter().map(|i| {
+            Self::compute(base_secret, now - (i * 600), ref_time)
+        }).collect()
     }
 }
 
-const fn gen_array<const N: usize>() -> [u64; N] {
-    let mut res = [0u64; N];
-    
-    let mut i = 0;
-    while i < N {
-        res[i] = i as u64;
-        i += 1;
-    }
-    
-    res
-}
+
 
 type HmacSha256 = Hmac<Sha256>;
 
