@@ -1,4 +1,5 @@
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tiauth_core::{crypto::SavedPublicKey, Application, State};
 use tiauth_core::{CoreState, GovernorState};
 use tiauth_server::state::ReadonlyState;
@@ -9,7 +10,8 @@ use tokio::runtime;
 use tokio::sync::watch::{self, Receiver, Sender};
 
 fn init_state() -> CoreState {
-    let mut state = CoreState::setup("server.redb").unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let mut state = CoreState::setup("server.redb", now).unwrap();
 
     let public_key_pem = "-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=

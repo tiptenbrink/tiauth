@@ -32,6 +32,7 @@ pub trait GovernorState {
         write_app_to_db(self.db(), application)?;
 
         self.add_app_to_state(application);
+        self.keys_mut().register_application(&application.name, None);
 
         Ok(())
     }
@@ -57,6 +58,8 @@ pub trait GovernorState {
     fn db(&self) -> &Database;
 
     fn keys(&self) -> &impl GovernorKeyState<2>;
+
+    fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2>;
 
     fn rng(&self) -> StdRng {
         StdRng::from_entropy()
@@ -142,7 +145,7 @@ impl<const SN: usize, T: GovernorKeyState<SN>> KeyState<SN> for T {
     }
 }
 
-trait GovernorKeyState<const SN: usize> {
+pub trait GovernorKeyState<const SN: usize> {
     fn opaque(&self) -> &str;
 
     fn session_keys(&self) -> &[SessionKey; SN];
@@ -165,7 +168,7 @@ trait GovernorKeyState<const SN: usize> {
     fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize);
 }
 
-trait KeyState<const SN: usize> {
+pub trait KeyState<const SN: usize> {
     fn opaque(&self) -> &str;
 
     fn session_keys(&self) -> &[SessionKey; SN];
@@ -173,11 +176,13 @@ trait KeyState<const SN: usize> {
     fn ephemeral_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize);
 }
 
+#[derive(Clone)]
 struct AppSecret {
     base_seed: [u8; 32],
     amount_valid: usize
 }
 
+#[derive(Clone)]
 pub struct CoreKeyState<const SN: usize> {
     valid_session_keys: [SessionKey; SN],
     ephemeral_secret: [u8; 32],
@@ -289,7 +294,7 @@ pub struct CoreState {
     pub app_keys: HashMap<String, PublicKey>,
     pub db: Arc<Database>,
     pub private: PrivateState,
-    pub key_state: Arc<CoreKeyState<2>>
+    pub key_state: CoreKeyState<2>
 }
 
 fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
@@ -332,7 +337,7 @@ impl GovernorState for CoreState {
             app_keys: HashMap::new(),
             db: Arc::new(init_state.db),
             private: init_state.private,
-            key_state: todo!()
+            key_state: CoreKeyState::from_init(init_state.key_init)
         }
     }
 
@@ -350,7 +355,11 @@ impl GovernorState for CoreState {
     }
     
     fn keys(&self) -> &impl GovernorKeyState<2> {
-        self.key_state.as_ref()
+        &self.key_state
+    }
+    
+    fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
+        &mut self.key_state
     }
 }
 
@@ -442,6 +451,7 @@ fn init_key_state<const SN: usize>(db: &Database, rng: &mut StdRng, now: u64) ->
         } else {
             let mut ephemeral_secret = [0u8; 32];
             rng.fill_bytes(&mut ephemeral_secret);
+            table.insert("ephemeral_secret", b64::URL_SAFE_NO_PAD.encode(&ephemeral_secret))?;
             ephemeral_secret
         };
 
@@ -450,6 +460,7 @@ fn init_key_state<const SN: usize>(db: &Database, rng: &mut StdRng, now: u64) ->
         let ephemeral_time = if let Some(ephemeral_time) = ephemeral_time {
             (&ephemeral_time).parse().unwrap()
         } else {
+            table.insert("ephemeral_time", now.to_string())?;
             now
         };
 
@@ -740,6 +751,10 @@ pub mod test_util {
         
         fn keys(&self) -> &impl GovernorKeyState<2> {
             &self.key_state
+        }
+        
+        fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
+            &mut self.key_state
         }
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tiauth_core::crypto::PublicKey;
 use tiauth_core::state_impl::{AppTable, PrivateState, TableStore};
-use tiauth_core::CoreState;
+use tiauth_core::{CoreKeyState, CoreState, KeyState};
 use tiauth_core::State;
 
 #[derive(Clone)]
@@ -12,6 +12,7 @@ pub struct ServerState {
     db: Arc<Database>,
     private: Arc<PrivateState>,
     app_keys: Arc<HashMap<String, PublicKey>>,
+    key_state: Arc<CoreKeyState<2>>
 }
 
 impl State for ServerState {
@@ -35,6 +36,10 @@ impl State for ServerState {
     fn apps(&self) -> Vec<&String> {
         self.tables.keys().collect()
     }
+    
+    fn keys(&self) -> &impl KeyState<2> {
+        self.key_state.as_ref()
+    }
 }
 
 pub trait ReadonlyState {
@@ -52,6 +57,7 @@ impl ReadonlyState for CoreState {
             db,
             private,
             app_keys,
+            key_state
         } = self.clone();
 
         Self::Readonly {
@@ -59,6 +65,7 @@ impl ReadonlyState for CoreState {
             db,
             private: Arc::new(private),
             app_keys: Arc::new(app_keys),
+            key_state: Arc::new(key_state)
         }
     }
 }

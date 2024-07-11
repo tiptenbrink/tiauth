@@ -119,7 +119,7 @@ pub mod test_util {
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(state, application, user_id, &request).unwrap();
+        let (response, nonce) = login_start(state, application, &request, user_id).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
@@ -159,7 +159,7 @@ mod tests {
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&state, app, user_id, &request).unwrap();
+        let (response, nonce) = login_start(&state, app, &request, user_id).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
@@ -186,7 +186,7 @@ mod tests {
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&state, app, user_id, &request).unwrap();
+        let (response, nonce) = login_start(&state, app, &request, user_id).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 

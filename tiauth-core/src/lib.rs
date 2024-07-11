@@ -42,6 +42,8 @@ mod action {
     pub use crate::state::CoreState;
     pub use crate::state::GovernorState;
     pub use crate::state::State;
+    pub use crate::state::CoreKeyState;
+    pub use crate::state::KeyState;
 
     pub use crate::store::Tables;
 }
