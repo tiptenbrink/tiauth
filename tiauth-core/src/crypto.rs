@@ -1,11 +1,11 @@
 use aes_gcm_siv::{self as aead, aead::Aead, KeyInit};
 use base64::{engine::general_purpose as b64, Engine as _};
 use ed25519_compact::{self as ed};
-use rand_chacha::ChaCha20Rng;
-use sha2::Sha256;
 use hmac::{Hmac, Mac};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
+use sha2::Sha256;
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -139,15 +139,14 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u
 }
 
 // HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
+#[derive(Debug)]
 pub struct EphemeralKey {
-    bytes: [u8; 32]
+    bytes: [u8; 32],
 }
 
 impl EphemeralKey {
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self {
-            bytes
-        }
+        Self { bytes }
     }
 
     pub fn compute(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
@@ -160,19 +159,22 @@ impl EphemeralKey {
         let mut new_key = [0u8; 32];
         rng.fill_bytes(&mut new_key);
 
-        Self {
-            bytes: new_key
-        }
+        Self { bytes: new_key }
     }
 
-    pub fn last(base_secret: [u8; 32], now: u64, ref_time: u64, amount_valid: usize) -> Vec<EphemeralKey> {
-        (0..(amount_valid as u64)).into_iter().map(|i| {
-            Self::compute(base_secret, now - (i * 600), ref_time)
-        }).collect()
+    pub fn last(
+        base_secret: [u8; 32],
+        now: u64,
+        ref_time: u64,
+        amount_valid: usize,
+    ) -> Vec<EphemeralKey> {
+        (0..(amount_valid as u64))
+            .into_iter()
+            .rev()
+            .map(|i| Self::compute(base_secret, now - (i * 600), ref_time))
+            .collect()
     }
 }
-
-
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -190,8 +192,12 @@ pub fn ephemeral(ephemeral_data: &[u8], key: &EphemeralKey) -> [u8; 32] {
 #[error("Verification failed.")]
 pub struct VerifyFailed;
 
-pub fn verify_ephemeral<const N: usize>(ephemeral_data: &[u8], keys: &[EphemeralKey; N], code: &[u8]) -> Result<(), VerifyFailed> {
-    let mut i = N-1;
+pub fn verify_ephemeral(
+    ephemeral_data: &[u8],
+    keys: &Vec<EphemeralKey>,
+    code: &[u8],
+) -> Result<(), VerifyFailed> {
+    let mut i = keys.len() - 1;
     loop {
         let key = &keys[i];
         let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
@@ -199,16 +205,16 @@ pub fn verify_ephemeral<const N: usize>(ephemeral_data: &[u8], keys: &[Ephemeral
         mac.update(ephemeral_data);
 
         if mac.verify_slice(code).is_ok() {
-            return Ok(())
+            return Ok(());
         }
-
-        i -= 1;
 
         if i == 0 {
             break;
         }
+
+        i -= 1;
     }
-    
+
     Err(VerifyFailed)
 }
 

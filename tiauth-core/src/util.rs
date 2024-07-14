@@ -2,6 +2,7 @@ use std::io::Cursor;
 
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::{rngs::StdRng, Rng};
+use thiserror::Error;
 
 pub fn nonce_384_bytes(rng: &mut StdRng) -> Vec<u8> {
     let mut data = vec![0u8; 48];
@@ -24,6 +25,55 @@ pub fn cursor_slice<'a>(bytes: &'a [u8], cursor: &mut Cursor<&[u8]>, len: u32) -
     let end = start + (len as usize);
     cursor.set_position(end as u64);
     &bytes[start..end]
+}
+
+#[derive(Error, Debug)]
+pub enum RmpDeserError {
+    #[error("MessagePack deserialization failure at position {0}: Failed to read str len.")]
+    ExpectedStrLen(u64),
+    #[error("MessagePack deserialization failure at position {0}: Failed to read bin len.")]
+    ExpectedBinLen(u64),
+    #[error("MessagePack deserialization failure at position {0}: Not enough bytes left to read string of length {1}.")]
+    NotEnoughBytes(u64, usize),
+    #[error("MessagePack deserialization failure at position {0}: String bytes of length {1} are not valid UTF-8.")]
+    Utf8Error(u64, u32),
+}
+
+pub fn try_cursor_slice<'a>(
+    bytes: &'a [u8],
+    cursor: &mut Cursor<&[u8]>,
+    len: u32,
+) -> Result<&'a [u8], RmpDeserError> {
+    let position = cursor.position();
+    if position + len as u64 > bytes.len() as u64 {
+        return Err(RmpDeserError::NotEnoughBytes(position, bytes.len()));
+    }
+    let start = cursor.position() as usize;
+    let end = start + (len as usize);
+    cursor.set_position(end as u64);
+    Ok(&bytes[start..end])
+}
+
+pub fn rmp_read_bin<'a>(
+    bytes: &'a [u8],
+    mut cursor: &mut Cursor<&[u8]>,
+) -> Result<&'a [u8], RmpDeserError> {
+    let position = cursor.position();
+    let bin_len = rmp::decode::read_bin_len(&mut cursor)
+        .map_err(|_| RmpDeserError::ExpectedBinLen(position))?;
+    try_cursor_slice(bytes, cursor, bin_len)
+}
+
+pub fn rmp_read_str<'a>(
+    bytes: &'a [u8],
+    mut cursor: &mut Cursor<&[u8]>,
+) -> Result<&'a str, RmpDeserError> {
+    let position = cursor.position();
+    let str_len = rmp::decode::read_str_len(&mut cursor)
+        .map_err(|_| RmpDeserError::ExpectedStrLen(position))?;
+    let position = cursor.position();
+    let str_bytes = try_cursor_slice(bytes, &mut cursor, str_len)?;
+    std::str::from_utf8(str_bytes).map_err(|_| RmpDeserError::Utf8Error(position, str_len))
 }
 
 pub fn combine_encode(inputs: &[&[u8]], total_len: usize) -> String {

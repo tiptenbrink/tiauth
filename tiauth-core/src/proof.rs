@@ -3,19 +3,19 @@ use crate::data::LEEWAY;
 use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
-use crate::util::combine_encode;
 use crate::encoded::Encodable;
+use crate::error::OneOfTo;
+use crate::util::combine_encode;
 use crate::{ActionType, Claims, Target, TargetList};
 use base64::DecodeError;
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::marker::PhantomData;
-/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
-
-use terrors::OneOf;
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
+/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
+use terrors::OneOf;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
 
@@ -27,16 +27,30 @@ pub struct Proof<T> {
 }
 
 impl<T> Encodable for Proof<T> {
-    type Error = DecodeError;
+    type Error = InvalidProof;
 
     fn decode(encoded: &str) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
-        let mut bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
+        let mut bytes = match b64::URL_SAFE_NO_PAD.decode(encoded) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!("invalid decode");
+                return Err(InvalidProof {});
+            }
+        };
         let total_len = bytes.len();
+        if total_len < 4 {
+            println!("shorter than 4 bytes, no content length.");
+            return Err(InvalidProof {});
+        }
         let ln = &bytes[(total_len - 4)..total_len];
         let content_length = u32::from_le_bytes([ln[0], ln[1], ln[2], ln[3]]) as usize;
+        if total_len < 4 + 64 + content_length {
+            println!("Not long enough to content content and valid signature.");
+            return Err(InvalidProof {});
+        }
         // After this the original contains only the content
         let mut signature = bytes.split_off(content_length);
         signature.truncate(signature.len() - 4);
@@ -101,17 +115,13 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
     public_key: &PublicKey,
     verify: AboutVerify,
 ) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
-    let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content);
+    let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
-    if verify.application != proof_input.about.application {
-        println!("invalid app");
+    if verify.verify(&proof_input.about).is_err() {
+        println!("bad action");
         return Err(OneOf::new(InvalidProof {}));
-    }
-    if let Some(action) = verify.action {
-        if action != proof_input.about.action {
-            println!("bad action");
-            return Err(OneOf::new(InvalidProof {}));
-        }
     }
 
     let time = SystemTime::now()

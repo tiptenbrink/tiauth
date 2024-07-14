@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-
-
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
 use crate::encoded::Encoded;
@@ -96,7 +94,10 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> Encoded<Proof<()>> {
 }
 
 /// Ensure that the selection is sorted.
-pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>) -> Encoded<Proof<()>> {
+pub fn create_read_some_proof(
+    proof_base: ProofBaseView,
+    selection: Vec<String>,
+) -> Encoded<Proof<()>> {
     let action = ActionType::Read;
     let target = Target::Select;
 
@@ -113,7 +114,10 @@ pub fn create_read_some_proof(proof_base: ProofBaseView, selection: Vec<String>)
     Encoded::from_encodable(proof)
 }
 
-pub fn create_read_range_proof(proof_base: ProofBaseView, selection: Vec<String>) -> Encoded<Proof<()>> {
+pub fn create_read_range_proof(
+    proof_base: ProofBaseView,
+    selection: Vec<String>,
+) -> Encoded<Proof<()>> {
     if selection.len() != 2 {
         panic!("Range should include exactly two elements!")
     }

@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 pub mod crypto;
-pub mod encoded;
 mod data;
+pub mod encoded;
 pub mod error;
 mod proof;
 mod util;
@@ -36,14 +36,14 @@ pub mod state_impl {
 mod action {
     pub use crate::ops::admin;
     pub use crate::ops::login;
+    pub use crate::ops::modify;
     pub use crate::ops::register;
     pub use crate::ops::verify;
-    pub use crate::ops::modify;
+    pub use crate::state::CoreKeyState;
     pub use crate::state::CoreState;
     pub use crate::state::GovernorState;
-    pub use crate::state::State;
-    pub use crate::state::CoreKeyState;
     pub use crate::state::KeyState;
+    pub use crate::state::State;
 
     pub use crate::store::Tables;
 }

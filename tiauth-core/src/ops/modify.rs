@@ -1,5 +1,5 @@
 use crate::data::{
-    AboutVerify, ActionType, ByteOwned, InvalidProof, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
+    AboutVerify, ActionType, ByteOwned, ClaimKeys, InvalidProof, Login, ModifyClaimError, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 use crate::error::OneOfTo;
 use crate::ops::verify::verify_proof_write;
@@ -10,7 +10,7 @@ use crate::store::{
 };
 use crate::util::nonce_384;
 use crate::verify::verify_session;
-use crate::{Claims, Proof, Session};
+use crate::{BytePacked, ByteSerial, Claims, Proof, Session};
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -52,8 +52,6 @@ pub fn reset_password(
     let eph_bytes: Vec<u8> = Vec::new();
     let set_nonce = set_entry.key();
 
-    
-
     let tables = state.app_tables(application);
 
     let write_txn = state
@@ -74,8 +72,6 @@ pub fn reset_password(
             SetLoginOptions::new(false, false),
         )
         .map_err(OneOf::broaden)?;
-
-        
 
         let mut eph_table = write_txn
             .open_table(tables.ephemeral())
@@ -253,18 +249,211 @@ fn app_delete_user(
     Ok(())
 }
 
-enum SetStrategy {
-    // Adds new claims, errors if any already exists
-    Add,
-    // Adds new claims, overwrites previous values of claims
-    Merge,
-    // Replaces the entire claims map, discarding any previous claims
-    Replace
+pub fn user_new_claims(
+    state: &impl State,
+    application: &str,
+    claims_proof: &Proof<Claims>,
+) -> Result<(), OneOf<(InvalidProof, DbError, ModifyClaimError)>> {
+    let key = state.app_key(application);
+    let proof_content = verify_proof_content(
+        claims_proof,
+        &key,
+        AboutVerify::with_allowed(
+            application,
+            vec![
+                ActionType::Merge,
+                ActionType::Add,
+                ActionType::Set
+            ],
+        ),
+    )
+    .map_err(OneOf::broaden)?;
+
+    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+
+    let write_txn = state
+        .db()
+        .begin_write()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+
+    {
+        let mut table = write_txn
+            .open_table(state.app_tables(application).users())
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+        let new_login_bytes ={
+            let login = table
+            .get(user_id.as_str())
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+            
+            if let Some(login_bytes) = login {
+                let login_bytes = login_bytes.value();
+                let (login_password, claims) = Login::deserialize_tuple(login_bytes);
+
+                let proof_claims = proof_content.data.try_deserialize().map_err(|_| OneOf::new(InvalidProof {}))?;
+
+                let new_claims = if proof_content.about.action == ActionType::Set {
+                    proof_claims.to_claims_sorted().map_err(|_| OneOf::new(ModifyClaimError::NotSorted))?
+                } else {
+                    let claims = claims.deserialize();
+                    let exists_ok = if proof_content.about.action == ActionType::Add {
+                        false
+                    } else if proof_content.about.action == ActionType::Merge {
+                        true
+                    } else {
+                        panic!("Only action merge and add allowed!")
+                    };
+
+                    claims.add_claims(proof_claims, exists_ok).to_one_of()
+                        .map_err(OneOf::broaden)?
+                };
+
+                login_password.into_login(new_claims.serialize().as_packed()).serialize()
+            } else {
+                return Err(OneOf::new(ModifyClaimError::UserNotFound))
+            }
+        };
+
+        table.insert(user_id.as_str(), new_login_bytes.as_slice())
+        .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?;
+
+    }
+
+    Ok(())
 }
 
-fn modify_claims(state: &impl State, claims_proof: &Proof<Claims>) {
+pub fn user_remove_claims(
+    state: &impl State,
+    application: &str,
+    claims_proof: &Proof<ClaimKeys>,
+) -> Result<(), OneOf<(InvalidProof, DbError, ModifyClaimError)>> {
+    let key = state.app_key(application);
+    let proof_content = verify_proof_content(
+        claims_proof,
+        &key,
+        AboutVerify::with_allowed(
+            application,
+            vec![
+                ActionType::Delete,
+            ],
+        ),
+    )
+    .map_err(OneOf::broaden)?;
 
+    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+
+    todo!()
+
+    // let write_txn = state
+    //     .db()
+    //     .begin_write()
+    //     .into_one_of::<DbError>()
+    //     .map_err(OneOf::broaden)?;
+
+    // {
+    //     let mut table = write_txn
+    //         .open_table(state.app_tables(application).users())
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+
+    //     let new_login_bytes ={
+    //         let login = table
+    //         .get(user_id.as_str())
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+            
+    //         if let Some(login_bytes) = login {
+    //             let login_bytes = login_bytes.value();
+    //             let (login_password, claims) = Login::deserialize_tuple(login_bytes);
+
+    //             let proof_claims = proof_content.data.try_deserialize().map_err(|_| OneOf::new(InvalidProof {}))?;
+
+    //             claims.
+
+    //             let new_claims = if proof_content.about.action == ActionType::Set {
+    //                 proof_claims.to_claims_sorted().map_err(|_| OneOf::new(ModifyClaimError::NotSorted))?
+    //             } else {
+    //                 let claims = claims.deserialize();
+    //                 let exists_ok = if proof_content.about.action == ActionType::Add {
+    //                     false
+    //                 } else if proof_content.about.action == ActionType::Merge {
+    //                     true
+    //                 } else {
+    //                     panic!("Only action merge and add allowed!")
+    //                 };
+
+    //                 claims.add_claims(proof_claims, exists_ok).to_one_of()
+    //                     .map_err(OneOf::broaden)?
+    //             };
+
+    //             login_password.into_login(new_claims.serialize().as_packed()).serialize()
+    //         } else {
+    //             return Err(OneOf::new(ModifyClaimError::UserNotFound))
+    //         }
+    //     };
+
+    //     table.insert(user_id.as_str(), new_login_bytes.as_slice())
+    //     .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+
+    // }
+
+    // Ok(())
 }
+
+// fn remove_reset_claims(
+//     state: &impl State,
+//     application: &str,
+//     claims_proof: &Proof<ClaimKeys>,
+// ) -> Result<(), OneOf<(InvalidProof, DbError)>> {
+//     let key = state.app_key(application);
+//     let proof_content = verify_proof_content(
+//         claims_proof,
+//         &key,
+//         AboutVerify::with_allowed(
+//             application,
+//             vec![
+//                 ActionType::Delete,
+//                 ActionType::Reset,
+//             ],
+//         ),
+//     )
+//     .map_err(OneOf::broaden)?;
+
+//     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+
+//     let write_txn = state
+//         .db()
+//         .begin_write()
+//         .into_one_of::<DbError>()
+//         .map_err(OneOf::broaden)?;
+
+//     {
+//         let mut table = write_txn
+//             .open_table(state.app_tables(application).users())
+//             .into_one_of::<DbError>()
+//             .map_err(OneOf::broaden)?;
+
+//         let login = table
+//             .get(user_id.as_str())
+//             .into_one_of::<DbError>()
+//             .map_err(OneOf::broaden)?;
+
+//         if let Some(login_bytes) = login {
+//             let login_bytes = login_bytes.value();
+//             let (login_password, claims) = Login::deserialize_tuple(login_bytes);
+//             let claims = claims.deserialize();
+//         } else {
+
+//         }
+//     }
+
+//     ()
+// }
 
 #[cfg(test)]
 mod tests {

@@ -196,6 +196,25 @@ We need some way to add applications at runtime. But this requires modifying the
 
 - Adding an 
 
+### Login performance
+
+The login server time is about 2.1 ms, of which 1.2 ms is the login_start. This is with no claims.
+
+### Database performance
+
+Opening, writing and comitting a write transaction takes ~1 ms. A 1 MB write can be completed in around ~10 ms.
+
+Opening and reading a read transaction takes less than 1 us.
+
+### Ephemeral:
+
+NewUser,
+ChangePassword,
+SetPassword,
+Opaque,
+
+
+
 ### Subset algo results
 
 ```

@@ -1,19 +1,23 @@
 #![allow(dead_code)]
 
 use crate::crypto::{load_public_key, PublicKey, SavedPublicKey};
-use crate::util::{cursor_slice, nonce_384_bytes};
+use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::borrow::Borrow;
+use std::collections::HashSet;
+use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::io::Cursor;
 use std::marker::PhantomData;
 use std::ops::Range;
-use std::str;
+use std::str::{self, Utf8Error};
+use std::sync::OnceLock;
 use terrors::OneOf;
 use thiserror::Error;
+use zerovec::maps::MutableZeroVecLike;
 
 use zerovec::vecs::Index32;
 use zerovec::VarZeroVec;
@@ -55,6 +59,14 @@ impl LoginPassword {
         assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
         deserialize_login_password(bytes, &mut cursor)
     }
+
+    pub fn into_login(self, claims: &BytePacked<Claims>) -> Login {
+        Login {
+            user_id: self.user_id,
+            password_file: self.password_file,
+            claims
+        }
+    }
 }
 
 impl<'a> Login<'a> {
@@ -68,21 +80,30 @@ impl<'a> Login<'a> {
         buf
     }
 
-    pub fn deserialize(bytes: &'a [u8]) -> Self {
+    pub fn deserialize_tuple(bytes: &'a [u8]) -> (LoginPassword, &BytePacked<Claims>) {
         let mut cursor = Cursor::new(bytes);
         assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
-        let LoginPassword {
-            user_id,
-            password_file,
-        } = deserialize_login_password(bytes, &mut cursor);
+        let login_password = deserialize_login_password(bytes, &mut cursor);
 
         let claims_len = rmp::decode::read_bin_len(&mut cursor).unwrap();
         let claims_bytes = cursor_slice(bytes, &mut cursor, claims_len);
 
+        (login_password, BytePacked::new(claims_bytes))
+    }
+
+    pub fn deserialize(bytes: &'a [u8]) -> Self {
+        let (
+            LoginPassword {
+                user_id,
+                password_file,
+            },
+            claims,
+        ) = Self::deserialize_tuple(bytes);
+
         Self {
             user_id,
             password_file,
-            claims: BytePacked::new(claims_bytes),
+            claims,
         }
     }
 }
@@ -134,6 +155,10 @@ where
     pub fn as_packed(&self) -> &BytePacked<T> {
         <Self as Borrow<_>>::borrow(self)
     }
+
+    pub fn cast<U: ByteSerial>(self) -> ByteOwned<U> {
+        ByteOwned::<U>::new(self.bytes)
+    }
 }
 
 impl<T> Borrow<BytePacked<T>> for ByteOwned<T>
@@ -178,19 +203,46 @@ where
     pub fn deserialize_owned(&self) -> T {
         T::deserialize_owned(&self.bytes)
     }
+
+    pub fn try_deserialize(&self) -> Result<T::Deserialized<'_>, T::DeserializeErr> {
+        T::try_deserialize(&self.bytes)
+    }
+
+    pub fn try_deserialize_owned(&self) -> Result<T, T::DeserializeErr> {
+        T::try_deserialize_owned(&self.bytes)
+    }
+
+    pub fn cast<U: ByteSerial>(&self) -> &BytePacked<U> {
+        BytePacked::<U>::new(&self.bytes)
+    }
 }
 
 pub trait ByteSerial {
     type Deserialized<'a>
     where
         Self: 'a;
+    type DeserializeErr: Debug;
+
     fn serialize(&self) -> ByteOwned<Self>
     where
         Self: Sized;
 
-    fn deserialize(bytes: &[u8]) -> Self::Deserialized<'_>;
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr>;
 
-    fn deserialize_owned(bytes: &[u8]) -> Self;
+    fn deserialize(bytes: &[u8]) -> Self::Deserialized<'_> {
+        Self::try_deserialize(bytes).unwrap()
+    }
+
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    where
+        Self: Sized;
+
+    fn deserialize_owned(bytes: &[u8]) -> Self
+    where
+        Self: Sized,
+    {
+        Self::try_deserialize_owned(bytes).unwrap()
+    }
 }
 
 pub trait SerializedAs<T>
@@ -218,6 +270,10 @@ where
     }
 }
 
+#[derive(Error, Debug)]
+#[error("Bytes should be empty to deserialize as ().")]
+pub struct NonEmptyBytes;
+
 impl ByteSerial for () {
     type Deserialized<'a> = ();
 
@@ -225,15 +281,43 @@ impl ByteSerial for () {
         ByteOwned::new(Vec::with_capacity(0))
     }
 
-    fn deserialize(bytes: &[u8]) -> Self::Deserialized<'_> {
+    type DeserializeErr = NonEmptyBytes;
+
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
         if bytes.is_empty() {
+            return Ok(());
         } else {
-            panic!("Only empty bytes can be deserialized as ()")
+            return Err(NonEmptyBytes);
         }
     }
 
-    fn deserialize_owned(bytes: &[u8]) -> Self {
-        <Self as ByteSerial>::deserialize(bytes)
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    where
+        Self: Sized,
+    {
+        <Self as ByteSerial>::try_deserialize(bytes)
+    }
+}
+
+// TODO make ByteSerial work for &str and other byte-native types
+impl ByteSerial for String {
+    type Deserialized<'a> = &'a str;
+
+    fn serialize(&self) -> ByteOwned<Self> {
+        ByteOwned::new(self.as_bytes().to_vec())
+    }
+
+    type DeserializeErr = Utf8Error;
+
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
+        std::str::from_utf8(bytes)
+    }
+
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    where
+        Self: Sized,
+    {
+        Ok(<Self as ByteSerial>::try_deserialize(bytes)?.to_owned())
     }
 }
 
@@ -290,28 +374,74 @@ pub struct Claims {
     values: Vec<Vec<u8>>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct ClaimKeys(Vec<String>);
+
+#[derive(Error, Debug)]
+#[error("Unable to deserialize bytes as ClaimKeys.")]
+pub struct InvalidClaimKeys;
+
+impl ByteSerial for ClaimKeys {
+    type Deserialized<'a> = Self;
+
+    type DeserializeErr = InvalidClaimKeys;
+
+    fn serialize(&self) -> ByteOwned<Self>
+    {
+        let bytes = rmp_serde::to_vec(&self).unwrap();
+        ByteOwned::new(bytes)
+    }
+
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
+        rmp_serde::decode::from_slice(bytes).map_err(|_| InvalidClaimKeys)
+    }
+
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    {
+        <Self as ByteSerial>::try_deserialize(bytes)
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("Unable to deserialize bytes as ClaimsView.")]
+pub struct InvalidClaimsBytes;
+
 impl ByteSerial for Claims {
     type Deserialized<'a> = ClaimsView<'a>;
 
     fn serialize(&self) -> ByteOwned<Self> {
         let view = self.to_view();
 
-        ByteOwned::new(rmp_serde::to_vec(&view).unwrap())
+        ByteOwned::new(view.to_vec())
     }
 
-    fn deserialize(bytes: &[u8]) -> ClaimsView {
-        let view: ClaimsView = rmp_serde::from_slice(bytes).unwrap();
+    type DeserializeErr = InvalidClaimsBytes;
 
-        view
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
+        let view: ClaimsView = rmp_serde::from_slice(bytes).map_err(|_| InvalidClaimsBytes)?;
+
+        Ok(view)
     }
 
     /// Note that this is quite expensive, as it has to iterate and clone the data. You probably don't want to use this.
-    fn deserialize_owned(bytes: &[u8]) -> Self {
-        let view = <Self as ByteSerial>::deserialize(bytes);
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    where
+        Self: Sized,
+    {
+        let view = <Self as ByteSerial>::try_deserialize(bytes)?;
         let keys = view.keys.iter().map(|t| t.to_owned()).collect();
         let values = view.values.iter().map(|t| t.to_vec()).collect();
-        Self { keys, values }
+        Ok(Self { keys, values })
     }
+}
+
+static EMPTY_CLAIMS: OnceLock<ByteOwned<Claims>> = OnceLock::new();
+
+pub fn empty_claim_bytes() -> &'static BytePacked<Claims> {
+    EMPTY_CLAIMS
+        .get_or_init(|| Claims::empty().serialize())
+        .as_packed()
 }
 
 impl Claims {
@@ -364,7 +494,80 @@ impl Claims {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum ModifyClaimError {
+    #[error("Could not add claim: already exists!")]
+    AddExists,
+    #[error("Could not modify claims. User does not exist.")]
+    UserNotFound,
+    #[error("Could not modify claims. Claims are not sorted.")]
+    NotSorted
+}
+
+#[derive(Error, Debug)]
+#[error("Claim keys are not in ascending order.")]
+pub struct ClaimsUnsortedError;
+
 impl<'a> ClaimsView<'a> {
+    pub fn add_claims<'b>(
+        &self,
+        claims: ClaimsView<'b>,
+        exists_ok: bool,
+    ) -> Result<Claims, ModifyClaimError> {
+        let Claims { mut keys, mut values } = self.to_claims_sorted().map_err(|_| ModifyClaimError::NotSorted)?;
+        let left_i = 0;
+
+        for (claim, value) in claims.keys.iter().zip(claims.values.iter()) {
+            let right_i = keys.len();
+            let claim = claim.to_owned();
+            match &keys[left_i..right_i].binary_search(&claim) {
+                Ok(found_i) => {
+                    if exists_ok {
+                        values[*found_i+left_i] = value.to_owned();
+                    } else {
+                        return Err(ModifyClaimError::AddExists);
+                    }
+                }
+                Err(not_found_i) => {
+                    keys.insert(*not_found_i+left_i, claim);
+                    values.insert(*not_found_i+left_i, value.to_owned())
+                }
+            }
+        }
+
+        Ok(Claims { keys, values})
+    }
+
+    pub fn remove_claims(
+        &self,
+        claim_keys: &ClaimKeys
+    ) -> Result<Claims, ModifyClaimError> {
+        if claim_keys.0.len() == 0 {
+            return self.to_claims_sorted().map_err(|_| ModifyClaimError::NotSorted)
+        }
+
+        let mut keys: Vec<String> = Vec::with_capacity(self.keys.len());
+        let mut values: Vec<Vec<u8>> = Vec::with_capacity(self.values.len());
+
+        let mut i = 0;
+        let mut current: &str = &claim_keys.0[i];
+        for (claim, value) in self.keys.iter().zip(self.values.iter()) {
+            if i >= claim_keys.0.len() || claim != current {
+                keys.push(claim.to_owned());
+                values.push(value.to_vec());
+            } else if i < claim_keys.0.len()-1 {
+                i += 1;
+                let new_value = &claim_keys.0[i];
+                if current > new_value {
+                    return Err(ModifyClaimError::NotSorted);
+                }
+                current = new_value;
+            }
+        }
+
+        Ok(Claims { keys, values})
+    }
+
     /// If k is generally a fraction of n, doing linear search is almost always better. However, when k is a power of n (k = k^C) where C < 1, at some point doing binary search is faster.
     /// For C < 0.6, even for small n binary search is almost just as fast as linear. For larger n though binary search is faster even at far greater k than just k^C.
     /// If using binary search for each item on the original vec, for a subset of size k out of n claims, we would have O(k ln2(n)).
@@ -486,6 +689,27 @@ impl<'a> ClaimsView<'a> {
         let claim_i = self.keys.binary_search(claim_key).unwrap();
         &self.values[claim_i]
     }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        rmp_serde::to_vec(&self).unwrap()
+    }
+
+    pub fn to_claims_sorted(&self) -> Result<Claims, ClaimsUnsortedError> {
+        let mut keys: Vec<String> = Vec::with_capacity(self.keys.len());
+        for i in 0..self.keys.len() {
+            let current = &self.keys[i];
+            if i != 0 {
+                let prev = &self.keys[i-1];
+                if prev < current {
+                    return Err(ClaimsUnsortedError)
+                }
+            }
+
+            keys.push(current.to_owned());
+        }
+        let values: Vec<Vec<u8>> = self.values.iter().map(|v| v.to_vec()).collect();
+        Ok(Claims { keys, values })
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -592,7 +816,7 @@ pub const DELETE_AGE: u64 = 600;
 // Can only change password with session that is less than 10 minutes old
 pub const CHANGE_AGE: u64 = 600;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub enum ActionType {
     #[serde(rename = "reset")]
     Reset,
@@ -636,7 +860,7 @@ impl ActionType {
             Self::Read => "read",
             Self::Set => "set",
             Self::Add => "add",
-            Self::Merge => "merge"
+            Self::Merge => "merge",
         }
     }
 }
@@ -706,36 +930,31 @@ where
         buf
     }
 
-    pub fn from_bytes(bytes: &'a [u8]) -> Self {
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, InvalidProof> {
         // let mut cursor = Cursor::new(bytes);
         let mut cursor = Cursor::new(bytes);
 
-        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
-        let about = cursor_slice(bytes, &mut cursor, len);
-        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
-        let nonce = cursor_slice(bytes, &mut cursor, len);
-        let array_len = rmp::decode::read_array_len(&mut cursor).unwrap();
+        let about = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let nonce = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
         let mut targets = Vec::new();
 
         for _ in 0..array_len {
-            let str_len = rmp::decode::read_str_len(&mut cursor).unwrap();
-            let str_bytes = cursor_slice(bytes, &mut cursor, str_len);
-            // TODO make borrowed as well?
-            targets.push(std::str::from_utf8(str_bytes).unwrap().to_owned())
+            let target = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+            targets.push(target.to_owned())
         }
 
-        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
-        let data = cursor_slice(bytes, &mut cursor, len);
+        let data = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
         let data = BytePacked::new(data);
 
-        let about: ProofAbout = rmp_serde::from_slice(about).unwrap();
+        let about: ProofAbout = rmp_serde::from_slice(about).map_err(|_| InvalidProof {})?;
 
-        Self {
+        Ok(Self {
             about,
             nonce: nonce.to_owned(),
             target_data: TargetList(targets),
             data,
-        }
+        })
     }
 
     pub fn select_one(&self) -> Result<String, OneOf<(InvalidProof,)>> {
@@ -781,15 +1000,42 @@ impl TargetList {
 
 pub struct AboutVerify {
     pub application: String,
-    pub action: Option<ActionType>,
+    allowed_actions: HashSet<ActionType>,
 }
 
 impl AboutVerify {
     pub fn new(application: &str, action: ActionType) -> Self {
         Self {
             application: application.to_owned(),
-            action: Some(action),
+            allowed_actions: HashSet::from_iter(vec![action]),
         }
+    }
+
+    pub fn with_allowed(application: &str, allowed: Vec<ActionType>) -> Self {
+        Self {
+            application: application.to_owned(),
+            allowed_actions: HashSet::from_iter(allowed),
+        }
+    }
+
+    // pub fn with_claims_actions(application: &str) -> Self {
+    //     Self::with_allowed(
+    //         application,
+    //         vec![
+    //             ActionType::Reset,
+    //             ActionType::Merge,
+    //             ActionType::Add,
+    //             ActionType::Delete,
+    //         ],
+    //     )
+    // }
+
+    pub fn verify(&self, about: &ProofAbout) -> Result<(), InvalidProof> {
+        if !self.allowed_actions.contains(&about.action) || self.application != about.application {
+            return Err(InvalidProof {});
+        }
+
+        Ok(())
     }
 }
 

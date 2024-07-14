@@ -1,14 +1,21 @@
-use std::{collections::HashMap, path::Path, time::SystemTime};
-
+use base64::{engine::general_purpose as b64, Engine as _};
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
+use rmp::decode::ValueReadError;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{collections::HashMap, io::Cursor, marker::PhantomData, path::Path, time::SystemTime};
 use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    data::{ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs, SessionClaims},
+    crypto::{self, EphemeralKey, VerifyFailed},
+    data::{
+        empty_claim_bytes, ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs, SessionClaims,
+    },
     error::WrapErrorOneOf,
     state::State,
-    Claims,
+    util::{cursor_slice, rmp_read_bin, rmp_read_str},
+    ActionType, BytePacked, Claims,
 };
 
 pub type TableStore = (String, String, String);
@@ -94,6 +101,10 @@ pub enum EphemeralType {
     Opaque,
 }
 
+#[derive(Error, Debug)]
+#[error("Invalid EphemeralType.")]
+pub struct InvalidEphemeral;
+
 impl EphemeralType {
     pub fn is(&self) -> impl Fn(&EphemeralType) -> bool + '_ {
         |t: &EphemeralType| t.key_name() == self.key_name()
@@ -108,14 +119,148 @@ impl EphemeralType {
         }
     }
 
-    fn from_key_name(key_name: &str) -> Self {
-        match key_name {
+    fn from_key_name(key_name: &str) -> Result<Self, InvalidEphemeral> {
+        let eph_type = match key_name {
             "new_user" => Self::NewUser,
             "change_pass" => Self::ChangePassword,
             "set_pass" => Self::SetPassword,
             "opaque" => Self::Opaque,
-            _ => panic!("Invalid key_name for state type!"),
+            _ => return Err(InvalidEphemeral),
+        };
+
+        Ok(eph_type)
+    }
+}
+
+#[derive(Debug)]
+pub struct Ephemeral<T: ByteSerial> {
+    phantom: PhantomData<T>,
+    bytes: Vec<u8>,
+}
+
+impl<T: ByteSerial> Ephemeral<T> {
+    pub fn tagged_encoded(
+        key: &EphemeralKey,
+        user_id: &str,
+        application: &str,
+        state: &[u8],
+        eph_type: EphemeralType,
+        data: &BytePacked<T>,
+    ) -> String {
+        let ephemeral = EphemeralContent {
+            user_id,
+            application,
+            state,
+            eph_type,
+            data,
+        };
+
+        let mut serialized = ephemeral.serialize();
+
+        let tag = crypto::ephemeral(&serialized, key);
+
+        serialized.extend(tag);
+
+        b64::URL_SAFE_NO_PAD.encode(serialized)
+    }
+
+    pub fn verify_encoded(
+        encoded: &str,
+        verify_keys: &Vec<EphemeralKey>,
+    ) -> Result<Self, VerifyFailed> {
+        let mut bytes = b64::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_e| VerifyFailed)?;
+        if bytes.len() < 32 {
+            return Err(VerifyFailed);
         }
+        let tag = bytes.split_off(bytes.len() - 32);
+
+        crypto::verify_ephemeral(&bytes, verify_keys, &tag)?;
+        Ok(Self {
+            bytes,
+            phantom: PhantomData,
+        })
+    }
+
+    pub fn content<'a>(
+        &'a self,
+        application: &str,
+    ) -> Result<EphemeralContent<'a, T>, VerifyFailed> {
+        let content = EphemeralContent::deserialize(&self.bytes)?;
+
+        if content.application != application {
+            return Err(VerifyFailed);
+        }
+
+        Ok(content)
+    }
+}
+
+#[derive(Debug)]
+pub struct EphemeralContent<'a, T: ByteSerial> {
+    pub user_id: &'a str,
+    pub application: &'a str,
+    /// This can be used for the either the state itself or a hash of the state (based on the EphemeralType), the Ephemeral is only
+    /// valid if the state is unchanged from when the Ephemeral was handed out
+    pub state: &'a [u8],
+    pub eph_type: EphemeralType,
+    pub data: &'a BytePacked<T>,
+}
+
+impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
+    pub fn new(
+        user_id: &'a str,
+        application: &'a str,
+        state: &'a [u8],
+        eph_type: EphemeralType,
+        data: &'a BytePacked<T>,
+    ) -> Self {
+        Self {
+            user_id,
+            application,
+            state,
+            eph_type,
+            data,
+        }
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+
+        rmp::encode::write_array_len(&mut buf, 5).unwrap();
+        rmp::encode::write_str(&mut buf, self.user_id).unwrap();
+        rmp::encode::write_str(&mut buf, self.application).unwrap();
+        rmp::encode::write_bin(&mut buf, self.state).unwrap();
+        let eph_type = self.eph_type.key_name();
+        rmp::encode::write_str(&mut buf, eph_type).unwrap();
+        let data_bytes = self.data.as_bytes();
+        rmp::encode::write_bin(&mut buf, data_bytes).unwrap();
+
+        buf
+    }
+
+    pub fn deserialize(bytes: &'a [u8]) -> Result<Self, VerifyFailed> {
+        let mut cursor = Cursor::new(bytes);
+
+        let len = rmp::decode::read_array_len(&mut cursor).map_err(|_| VerifyFailed)?;
+        if len != 5 {
+            return Err(VerifyFailed);
+        }
+        let user_id = rmp_read_str(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
+        let application = rmp_read_str(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
+        let state = rmp_read_bin(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
+        let eph_type = rmp_read_str(bytes, &mut cursor).unwrap();
+        let eph_type = EphemeralType::from_key_name(eph_type).map_err(|_| VerifyFailed)?;
+        let data = rmp_read_bin(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
+        let data: &BytePacked<T> = BytePacked::new(data);
+        Ok(Self {
+            user_id,
+            application,
+            state,
+            eph_type,
+            data,
+        })
     }
 }
 
@@ -171,7 +316,7 @@ impl EphemeralEntry {
             user_id,
             expires,
             entropy,
-            eph_type: EphemeralType::from_key_name(&eph_type),
+            eph_type: EphemeralType::from_key_name(&eph_type).unwrap(),
             value: None,
         }
     }
@@ -279,6 +424,71 @@ impl SetLoginOptions {
             create_user,
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum SetLoginError {
+    #[error(
+        "Could not set login as Ephemeral does not match expected state. Was it already used?"
+    )]
+    StateMismatch,
+    // #[error("Could not set login with NewUser ephemeral: user already exists.")]
+    // AlreadyExists,
+    #[error("Could not set login: user does not exist.")]
+    NotFound,
+}
+
+// For EphemeralType = ChangePassword, old_login_bytes must be set.
+pub fn login_change_ephemeral<'a, T: ByteSerial>(
+    entry: &EphemeralContent<T>,
+    old_login_bytes: Option<&'a [u8]>,
+    password_file: String,
+) -> Result<Login<'a>, OneOf<(SetLoginError,)>> {
+    let login = match entry.eph_type {
+        EphemeralType::NewUser => {
+            // TODO check if we want AlreadyExists error
+            if let Some(old_login_bytes) = old_login_bytes {
+                return Ok(Login::deserialize(&old_login_bytes));
+            }
+            // if old_login_bytes.is_some() {
+            //     return Err(OneOf::new(SetLoginError::AlreadyExists))
+            // }
+            assert!(entry.state.is_empty());
+            assert!(entry.data.as_bytes().is_empty());
+
+            Login {
+                user_id: entry.user_id.to_owned(),
+                password_file,
+                claims: empty_claim_bytes(),
+            }
+        }
+        EphemeralType::ChangePassword => {
+            let old_login_bytes = if let Some(old_login_bytes) = old_login_bytes {
+                old_login_bytes
+            } else {
+                return Err(OneOf::new(SetLoginError::NotFound));
+            };
+            let login = Login::deserialize(old_login_bytes);
+            let mut hasher = Sha256::new();
+            hasher.update(login.password_file.as_bytes());
+            let hash: [u8; 32] = hasher.finalize().into();
+
+            if hash != entry.state {
+                return Err(OneOf::new(SetLoginError::StateMismatch));
+            }
+
+            assert_eq!(login.user_id, entry.user_id);
+
+            Login {
+                user_id: entry.user_id.to_owned(),
+                password_file,
+                claims: login.claims,
+            }
+        }
+        _ => panic!("Only NewUser|ChangePassword ephemeral allowed for set login!"),
+    };
+
+    Ok(login)
 }
 
 /// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
@@ -399,6 +609,7 @@ pub fn get_login_claims_bytes(
         let claim_bytes = if let SessionClaims::Some(subset) = requested_claims {
             // This is very cheap since it's a zero-copy deserialization
             let claim_view = login.claims.deserialize();
+            println!("claim_view: {:?}", claim_view);
             claim_view.subset_serialize(&subset)
         } else {
             // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function

@@ -44,3 +44,11 @@ tiauth-core = { path = ".", features = ["test", "action", "app"] }
 [[bench]]
 name = "deser"
 harness = false
+
+[[bin]]
+name = "experiment"
+required-features = ["test"]
+
+[[bin]]
+name = "experiment_big"
+required-features = ["test"]

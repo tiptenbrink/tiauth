@@ -1,19 +1,20 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 
+use crate::crypto::VerifyFailed;
 use crate::data::Claims;
 use crate::data::{AboutVerify, ActionType, InvalidProof};
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::proof::verify_proof_content;
 use crate::state::State;
 use crate::store::{
-    pop_ephemeral, set_login_field_write, write_ephemeral, EphemeralEntry, EphemeralType,
-    LoginFieldError, SetLoginOptions,
+    login_change_ephemeral, pop_ephemeral, set_login_field_write, write_ephemeral, Ephemeral,
+    EphemeralEntry, EphemeralType, LoginFieldError, SetLoginError, SetLoginOptions,
 };
 use crate::util::nonce_384;
 use crate::verify::verify_proof_write;
-use crate::Proof;
+use crate::{crypto, BytePacked, KeyState, Proof};
 use opaque_borink::server::register_server_finish;
-use redb::Error as DbError;
+use redb::{Error as DbError, ReadableTable};
 use std::str;
 use terrors::OneOf;
 
@@ -28,116 +29,171 @@ pub fn start_register(
 ) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
     let response = register_server(&state.private().opaque, request, user_id).to_one_of_twond()?;
 
-    let entropy = nonce_384(&mut state.rng());
-    let entry = EphemeralEntry::new(
+    // let entropy = nonce_384(&mut state.rng());
+    // let entry = EphemeralEntry::new(
+    //     user_id,
+    //     EphemeralType::NewUser,
+    //     entropy,
+    //     None,
+    //     "".to_owned(),
+    // );
+    let key = state.keys().ephemeral_key(application);
+
+    let ephemeral = Ephemeral::tagged_encoded(
+        &key,
         user_id,
+        application,
+        &[],
         EphemeralType::NewUser,
-        entropy,
-        None,
-        "".to_owned(),
+        BytePacked::<()>::empty(),
     );
-    let nonce = entry.key();
 
-    write_ephemeral(state, application, entry).to_one_of_two()?;
-
-    Ok((response, nonce))
+    Ok((response, ephemeral))
 }
 
-/// The proof should be for SetClaims. This should be verified beforehand.
 pub fn register_finish(
     state: &impl State,
     application: &str,
     request: &str,
     register_flow_nonce: &str,
-    claims_proof: Option<&Proof<Claims>>,
-) -> Result<(), OneOf<(DbError, OpaqueError, InvalidProof, LoginFieldError)>> {
+) -> Result<
+    (),
+    OneOf<(
+        DbError,
+        OpaqueError,
+        InvalidProof,
+        SetLoginError,
+        VerifyFailed,
+    )>,
+> {
     let password_file = register_server_finish(request)
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-    // It can either be an entry from register_start (NewUser), or entry from reset_password (SetPassword), which cleared the password,
-    // or from change_password (ChangePassword)
-    let entry = pop_ephemeral(
-        state,
-        application,
-        register_flow_nonce,
-        vec![
-            EphemeralType::SetPassword,
-            EphemeralType::ChangePassword,
-            EphemeralType::NewUser,
-        ],
-    )
-    .to_one_of()
-    .map_err(OneOf::broaden)?;
+    let (verify_keys, _) = state.keys().eph_veri_keys(application);
+    let eph = Ephemeral::<()>::verify_encoded(register_flow_nonce, &verify_keys);
 
-    if let Some(entry) = entry {
-        let proof = if let Some(proof) = claims_proof {
-            let key: crate::crypto::PublicKey = state.app_key(application);
-            let proof_content =
-                verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
-                    .map_err(OneOf::broaden)?;
-
-            let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
-            if user_id != entry.user_id {
-                return Err(OneOf::new(InvalidProof {}));
-            }
-
-            Some(proof_content)
-        } else {
-            None
-        };
-
-        let require_unset_password = match entry.eph_type {
-            EphemeralType::ChangePassword => false,
-            EphemeralType::SetPassword => true,
-            _ => true,
-        };
-
-        let create_user = matches!(entry.eph_type, EphemeralType::NewUser);
-
+    if let Ok(eph) = eph {
+        let content = eph
+            .content(application)
+            .to_one_of()
+            .map_err(OneOf::broaden)?;
         let write_txn = state
             .db()
             .begin_write()
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
-        let claims = if let Some(mut proof) = proof {
-            verify_proof_write(state, &write_txn, &mut proof).map_err(OneOf::broaden)?;
+        {
+            let mut table = write_txn
+                .open_table(state.app_tables(application).users())
+                .into_one_of::<DbError>()
+                .map_err(OneOf::broaden)?;
+            let new_login_bytes = if let Some(login_bytes) = table
+                .get(content.user_id)
+                .into_one_of::<DbError>()
+                .map_err(OneOf::broaden)?
+            {
+                login_change_ephemeral(&content, Some(login_bytes.value()), password_file)
+                    .map_err(OneOf::broaden)?
+                    .serialize()
+            } else {
+                login_change_ephemeral(&content, None, password_file)
+                    .map_err(OneOf::broaden)?
+                    .serialize()
+            };
 
-            Some(proof.data)
-        } else {
-            None
+            table
+                .insert(content.user_id, new_login_bytes.as_slice())
+                .into_one_of::<DbError>()
+                .map_err(OneOf::broaden)?;
         };
-
-        match set_login_field_write(
-            &write_txn,
-            state,
-            application,
-            &entry.user_id,
-            Some(password_file),
-            claims,
-            SetLoginOptions::new(require_unset_password, create_user),
-        ) {
-            Ok(()) => Ok(()),
-            Err(e) => match entry.eph_type {
-                EphemeralType::NewUser => match e.to_enum() {
-                    terrors::E2::A(e) => Err(OneOf::new(e)),
-                    // If it already exists, we do not want to cause an error to alert the user exists, it is up to the application to handle the rest of the defense against client enumeration
-                    terrors::E2::B(LoginFieldError::AlreadyExists(_)) => Ok(()),
-                    terrors::E2::B(e) => Err(OneOf::new(e)),
-                },
-                // For other types some additional check has been done that already implies the requester is trusted in some way (either through application proof or previous session)
-                _ => Err(e.broaden()),
-            },
-        }?;
 
         write_txn
             .commit()
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
     } else {
-        panic!("Invalid nonce.")
+        return Err(OneOf::new(VerifyFailed))
     }
+    // // It can either be an entry from register_start (NewUser), or entry from reset_password (SetPassword), which cleared the password,
+    // // or from change_password (ChangePassword)
+    // else if let Some(entry) = pop_ephemeral(
+    //     state,
+    //     application,
+    //     register_flow_nonce,
+    //     vec![EphemeralType::SetPassword, EphemeralType::ChangePassword],
+    // )
+    // .to_one_of()
+    // .map_err(OneOf::broaden)?
+    // {
+    //     let proof = if let Some(proof) = claims_proof {
+    //         let key: crate::crypto::PublicKey = state.app_key(application);
+    //         let proof_content =
+    //             verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Set))
+    //                 .map_err(OneOf::broaden)?;
+
+    //         let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+    //         if user_id != entry.user_id {
+    //             return Err(OneOf::new(InvalidProof {}));
+    //         }
+
+    //         Some(proof_content)
+    //     } else {
+    //         None
+    //     };
+
+    //     let require_unset_password = match entry.eph_type {
+    //         EphemeralType::ChangePassword => false,
+    //         EphemeralType::SetPassword => true,
+    //         _ => true,
+    //     };
+
+    //     let create_user = matches!(entry.eph_type, EphemeralType::NewUser);
+
+    //     let write_txn = state
+    //         .db()
+    //         .begin_write()
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+
+    //     let claims = if let Some(mut proof) = proof {
+    //         verify_proof_write(state, &write_txn, &mut proof).map_err(OneOf::broaden)?;
+
+    //         Some(proof.data)
+    //     } else {
+    //         None
+    //     };
+
+    //     match set_login_field_write(
+    //         &write_txn,
+    //         state,
+    //         application,
+    //         &entry.user_id,
+    //         Some(password_file),
+    //         claims,
+    //         SetLoginOptions::new(require_unset_password, create_user),
+    //     ) {
+    //         Ok(()) => Ok(()),
+    //         Err(e) => match entry.eph_type {
+    //             EphemeralType::NewUser => match e.to_enum() {
+    //                 terrors::E2::A(e) => Err(OneOf::new(e)),
+    //                 // If it already exists, we do not want to cause an error to alert the user exists, it is up to the application to handle the rest of the defense against client enumeration
+    //                 terrors::E2::B(LoginFieldError::AlreadyExists(_)) => Ok(()),
+    //                 terrors::E2::B(e) => Err(OneOf::new(e)),
+    //             },
+    //             // For other types some additional check has been done that already implies the requester is trusted in some way (either through application proof or previous session)
+    //             _ => Err(e.broaden()),
+    //         },
+    //     }?;
+
+    //     write_txn
+    //         .commit()
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+    // } else {
+    //     panic!("Invalid nonce.")
+    // }
 
     Ok(())
 }
@@ -166,7 +222,7 @@ pub mod test_util {
         // Use alternative if provided
         let nonce = alt_nonce.unwrap_or(&nonce);
 
-        register_finish(state, application, &request, nonce, claims_proof).unwrap();
+        register_finish(state, application, &request, nonce).unwrap();
     }
 }
 

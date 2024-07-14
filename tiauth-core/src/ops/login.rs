@@ -101,6 +101,8 @@ pub fn login_session(
 
 #[cfg(feature = "test")]
 pub mod test_util {
+    use std::time::Instant;
+
     use crate::{data::Claims, ops::register::test_util::*, state::test_util::TestState, Proof};
     use opaque_borink::client::{client_login, client_login_finish};
 
@@ -118,12 +120,14 @@ pub mod test_util {
         register_flow(state, user_id, application, password, None, claims);
 
         let (request, client_state) = client_login(password).unwrap();
-
+        //let mut time_server = 0f64;
+        //let before = Instant::now();
         let (response, nonce) = login_start(state, application, &request, user_id).unwrap();
-
+        //time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
-
-        login_session(
+        // println!("server time: {} ms", time_server);
+        // let before = Instant::now();
+        let session = login_session(
             state,
             application,
             &request,
@@ -131,7 +135,10 @@ pub mod test_util {
             &secret,
             session_claims,
         )
-        .unwrap()
+        .unwrap();
+        // time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
+        // println!("server time: {} ms", time_server);
+        session
     }
 }
 

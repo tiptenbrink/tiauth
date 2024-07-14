@@ -29,14 +29,14 @@ pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
         &request.application,
         &request.opaque_request,
         &request.start_nonce,
-        proof.as_ref(),
     ) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {
-            terrors::E4::A(_e) => todo!(),
-            terrors::E4::B(_e) => todo!(),
-            terrors::E4::C(_e) => todo!(),
-            terrors::E4::D(_e) => todo!(),
+            terrors::E5::A(_) => todo!(),
+            terrors::E5::B(_) => todo!(),
+            terrors::E5::C(_) => todo!(),
+            terrors::E5::D(_) => todo!(),
+            terrors::E5::E(_) => todo!(),
         },
     }
 }
