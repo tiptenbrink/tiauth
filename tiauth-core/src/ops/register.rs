@@ -202,7 +202,7 @@ pub fn register_finish(
 pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
-    use crate::state::test_util::TestState;
+    use crate::{data::{Login, LoginPassword}, state::test_util::TestState, store::{get_login, set_login}, ByteSerial};
 
     use super::*;
 
@@ -212,7 +212,7 @@ pub mod test_util {
         application: &str,
         password: &str,
         alt_nonce: Option<&str>,
-        claims_proof: Option<&Proof<Claims>>,
+        claims_set: Option<Claims>,
     ) {
         let (request, client_state) = client_register(password).unwrap();
         let (server_response, nonce) =
@@ -223,6 +223,22 @@ pub mod test_util {
         let nonce = alt_nonce.unwrap_or(&nonce);
 
         register_finish(state, application, &request, nonce).unwrap();
+
+        if let Some(claims_set) = claims_set {
+            let LoginPassword { user_id, password_file} = get_login(state, application, user_id).unwrap().unwrap();
+
+            let claims = claims_set.serialize();
+
+            let claims_login = Login {
+                user_id,
+                password_file,
+                claims: claims.as_packed()
+            };
+
+            set_login(state, &claims_login, application).unwrap();
+        }
+
+        
     }
 }
 

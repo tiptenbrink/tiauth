@@ -113,7 +113,7 @@ pub mod test_util {
         user_id: &str,
         application: &str,
         password: &str,
-        claims: Option<&Proof<Claims>>,
+        claims: Option<Claims>,
         // empty vec is no claims, none is all claims (default)
         session_claims: SessionClaims,
     ) -> Session {
@@ -187,9 +187,7 @@ mod tests {
 
         let state = TestState::setup_test(vec![app]);
 
-        let claims_proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
-
-        register_flow(&state, user_id, app, password, None, Some(&claims_proof));
+        register_flow(&state, user_id, app, password, None, Some(claims));
 
         let (request, client_state) = client_login(password).unwrap();
 

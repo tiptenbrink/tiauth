@@ -191,7 +191,7 @@ impl VerifiedSession {
 }
 
 #[derive(Debug)]
-pub struct InvalidSession {}
+pub struct InvalidSession;
 
 pub fn verify_session_bytes(
     session_encrypted: &Session,

@@ -83,7 +83,7 @@ pub mod test_util {
         create_proof(
             application,
             expires_in,
-            ActionType::Set,
+            ActionType::SetClaims,
             Target::Select,
             TargetList::user(user_id),
             claims,
@@ -138,7 +138,7 @@ mod tests {
         let proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
 
         let proof_content =
-            verify_proof(&state, &proof, AboutVerify::new(app, ActionType::Set)).unwrap();
+            verify_proof(&state, &proof, AboutVerify::new(app, ActionType::SetClaims)).unwrap();
 
         let deser_claims = proof_content.data.deserialize();
 

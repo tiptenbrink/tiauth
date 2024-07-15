@@ -1,16 +1,16 @@
 use crate::data::{
-    AboutVerify, ActionType, ByteOwned, ClaimKeys, InvalidProof, Login, ModifyClaimError, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY
+    AboutVerify, ActionType, ByteOwned, ClaimKeys, InvalidProof, Login, LoginPassword, ModifyClaimError, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 use crate::error::OneOfTo;
 use crate::ops::verify::verify_proof_write;
-use crate::proof::verify_proof_content;
+use crate::proof::{verify_proof_content, InvalidSession};
 use crate::state::State;
 use crate::store::{
-    set_login_field_write, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions,
+    get_login, set_login_field_write, Ephemeral, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions
 };
 use crate::util::nonce_384;
 use crate::verify::verify_session;
-use crate::{BytePacked, ByteSerial, Claims, Proof, Session};
+use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
@@ -34,69 +34,82 @@ pub fn reset_password(
     let mut proof_content = verify_proof_content(
         proof,
         &key,
-        AboutVerify::new(application, ActionType::Reset),
+        AboutVerify::new(application, ActionType::ResetPassword),
     )
     .map_err(OneOf::broaden)?;
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+    let about = proof_content.about;
+    let LoginPassword { password_file, .. } = match get_login(state, &about.application, &user_id).to_one_of().map_err(OneOf::broaden)? {
+        Some(user) => user,
+        None => {
+            println!("User no longer exists!");
+        return Err(OneOf::new(InvalidProof {}))
+        }
+    };
 
-    let entropy = nonce_384(&mut state.rng());
-    let set_entry = EphemeralEntry::new(
-        &user_id,
-        EphemeralType::SetPassword,
-        entropy,
-        None,
-        "".to_owned(),
-    );
-    // TODO come up with eph bytes
-    let eph_bytes: Vec<u8> = Vec::new();
-    let set_nonce = set_entry.key();
+    let key = state.keys().ephemeral_key(&about.application);
 
-    let tables = state.app_tables(application);
+    // let entropy = nonce_384(&mut state.rng());
+    // let set_entry = EphemeralEntry::new(
+    //     &user_id,
+    //     EphemeralType::SetPassword,
+    //     entropy,
+    //     None,
+    //     "".to_owned(),
+    // );
+    // // TODO come up with eph bytes
+    // let eph_bytes: Vec<u8> = Vec::new();
+    // let set_nonce = set_entry.key();
 
-    let write_txn = state
-        .db()
-        .begin_write()
-        .into_one_of::<DbError>()
-        .map_err(OneOf::broaden)?;
-    {
-        verify_proof_write(state, &write_txn, &mut proof_content).map_err(OneOf::broaden)?;
+    // let tables = state.app_tables(application);
 
-        set_login_field_write(
-            &write_txn,
-            state,
-            application,
-            &user_id,
-            Some("".to_owned()),
-            None::<ByteOwned<Claims>>,
-            SetLoginOptions::new(false, false),
-        )
-        .map_err(OneOf::broaden)?;
+    // let write_txn = state
+    //     .db()
+    //     .begin_write()
+    //     .into_one_of::<DbError>()
+    //     .map_err(OneOf::broaden)?;
+    // {
+    //     verify_proof_write(state, &write_txn, &mut proof_content).map_err(OneOf::broaden)?;
 
-        let mut eph_table = write_txn
-            .open_table(tables.ephemeral())
-            .into_one_of::<DbError>()
-            .map_err(OneOf::broaden)?;
+    //     set_login_field_write(
+    //         &write_txn,
+    //         state,
+    //         application,
+    //         &user_id,
+    //         Some("".to_owned()),
+    //         None::<ByteOwned<Claims>>,
+    //         SetLoginOptions::new(false, false),
+    //     )
+    //     .map_err(OneOf::broaden)?;
 
-        eph_table
-            .insert(set_entry.key().as_str(), set_entry.value.unwrap().as_str())
-            .into_one_of::<DbError>()
-            .map_err(OneOf::broaden)?;
-    }
-    write_txn
-        .commit()
-        .into_one_of::<DbError>()
-        .map_err(OneOf::broaden)?;
+    //     let mut eph_table = write_txn
+    //         .open_table(tables.ephemeral())
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
 
-    Ok(set_nonce)
+    //     eph_table
+    //         .insert(set_entry.key().as_str(), set_entry.value.unwrap().as_str())
+    //         .into_one_of::<DbError>()
+    //         .map_err(OneOf::broaden)?;
+    // }
+    // write_txn
+    //     .commit()
+    //     .into_one_of::<DbError>()
+    //     .map_err(OneOf::broaden)?;
+
+    let state =  EphemeralType::ChangePassword.change_password_state(&password_file);
+    let change_entry = Ephemeral::tagged_encoded(&key, &user_id, &about.application, &state, EphemeralType::ChangePassword, BytePacked::<()>::empty());
+
+    Ok(change_entry)
 }
 
 fn change_password(
     state: &impl State,
     session_encrypted: &Session,
-) -> Result<String, OneOf<(DbError,)>> {
-    let verified = verify_session(state, session_encrypted).unwrap();
-    let session = verified.read().unwrap();
+) -> Result<String, OneOf<(DbError, InvalidSession,)>> {
+    let verified = verify_session(state, session_encrypted).to_one_of().map_err(OneOf::broaden)?;
+    let session = verified.read().to_one_of().map_err(OneOf::broaden)?;
 
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -104,46 +117,28 @@ fn change_password(
         .as_secs();
 
     if time > session.expires + LEEWAY {
-        panic!("Session has expired!");
+        println!("Session has expired!");
+        return Err(OneOf::new(InvalidSession))
     }
 
     if time > session.issued + CHANGE_AGE {
-        panic!("Session too old to be used for changing password!");
+        return Err(OneOf::new(InvalidSession))
     }
 
-    let entropy = nonce_384(&mut state.rng());
-    let change_entry = EphemeralEntry::new(
-        &session.user_id,
-        EphemeralType::ChangePassword,
-        entropy,
-        None,
-        "".to_owned(),
-    );
-    let change_nonce = change_entry.key();
-    let tables = state.app_tables(&session.application);
-
-    let write_txn = state.db().begin_write().into_one_of()?;
-    {
-        let table = write_txn.open_table(tables.sessions()).into_one_of()?;
-
-        let result = table.get(session_encrypted.raw_bytes()).into_one_of()?;
-
-        if result.is_some() {
-            panic!("Session has been revoked!");
+    let key = state.keys().ephemeral_key(&session.application);
+    
+    let LoginPassword { password_file, .. } = match get_login(state, &session.application, &session.user_id).to_one_of().map_err(OneOf::broaden)? {
+        Some(user) => user,
+        None => {
+            println!("User no longer exists!");
+        return Err(OneOf::new(InvalidSession))
         }
+    };
+    // As state we use the password file, this ensures it can be used successfully only once, because any change would change the password file
+    let state =  EphemeralType::ChangePassword.change_password_state(&password_file);
+    let change_entry = Ephemeral::tagged_encoded(&key, &session.user_id, &session.application, &state, EphemeralType::ChangePassword, BytePacked::<()>::empty());
 
-        let mut eph_table = write_txn.open_table(tables.ephemeral()).into_one_of()?;
-
-        eph_table
-            .insert(
-                change_entry.key().as_str(),
-                change_entry.value.unwrap().as_str(),
-            )
-            .into_one_of()?;
-    }
-    write_txn.commit().into_one_of()?;
-
-    Ok(change_nonce)
+    Ok(change_entry)
 }
 
 fn session_delete_user(
@@ -215,7 +210,7 @@ fn app_delete_user(
     let mut proof_content: ProofContent<()> = verify_proof_content(
         proof,
         &key,
-        AboutVerify::new(application, ActionType::Delete),
+        AboutVerify::new(application, ActionType::DeleteUser),
     )
     .map_err(OneOf::broaden)?;
 
@@ -261,9 +256,9 @@ pub fn user_new_claims(
         AboutVerify::with_allowed(
             application,
             vec![
-                ActionType::Merge,
-                ActionType::Add,
-                ActionType::Set
+                ActionType::MergeClaims,
+                ActionType::AddClaims,
+                ActionType::SetClaims
             ],
         ),
     )
@@ -295,13 +290,13 @@ pub fn user_new_claims(
 
                 let proof_claims = proof_content.data.try_deserialize().map_err(|_| OneOf::new(InvalidProof {}))?;
 
-                let new_claims = if proof_content.about.action == ActionType::Set {
+                let new_claims = if proof_content.about.action == ActionType::SetClaims {
                     proof_claims.to_claims_sorted().map_err(|_| OneOf::new(ModifyClaimError::NotSorted))?
                 } else {
                     let claims = claims.deserialize();
-                    let exists_ok = if proof_content.about.action == ActionType::Add {
+                    let exists_ok = if proof_content.about.action == ActionType::AddClaims {
                         false
-                    } else if proof_content.about.action == ActionType::Merge {
+                    } else if proof_content.about.action == ActionType::MergeClaims {
                         true
                     } else {
                         panic!("Only action merge and add allowed!")
@@ -338,7 +333,7 @@ pub fn user_remove_claims(
         AboutVerify::with_allowed(
             application,
             vec![
-                ActionType::Delete,
+                ActionType::DeleteClaims,
             ],
         ),
     )
@@ -479,7 +474,7 @@ mod tests {
         let proof = create_proof(
             app,
             1800,
-            ActionType::Reset,
+            ActionType::ResetPassword,
             Target::Select,
             TargetList::user(user_id),
             BytePacked::empty(),
@@ -490,13 +485,13 @@ mod tests {
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 
-        assert_eq!(login.password_file, "");
+        let start_pass = login.password_file;
 
         register_flow(&state, user_id, app, password, Some(&nonce), None);
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 
-        assert!(!login.password_file.is_empty());
+        assert!(start_pass != login.password_file);
     }
 
     #[test]
@@ -556,7 +551,7 @@ mod tests {
         let proof = create_proof(
             app,
             1800,
-            ActionType::Delete,
+            ActionType::DeleteUser,
             Target::Select,
             TargetList::user(user_id),
             BytePacked::empty(),

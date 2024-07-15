@@ -110,6 +110,14 @@ impl EphemeralType {
         |t: &EphemeralType| t.key_name() == self.key_name()
     }
 
+    pub fn change_password_state(&self, password_file: &str) -> Vec<u8> {
+        assert_eq!(self, &EphemeralType::ChangePassword);
+
+        let mut hasher = Sha256::new();
+        hasher.update(password_file.as_bytes());
+        hasher.finalize().to_vec()
+    }
+
     fn key_name(&self) -> &'static str {
         match self {
             Self::NewUser => "new_user",
@@ -469,11 +477,9 @@ pub fn login_change_ephemeral<'a, T: ByteSerial>(
                 return Err(OneOf::new(SetLoginError::NotFound));
             };
             let login = Login::deserialize(old_login_bytes);
-            let mut hasher = Sha256::new();
-            hasher.update(login.password_file.as_bytes());
-            let hash: [u8; 32] = hasher.finalize().into();
+            let state = entry.eph_type.change_password_state(&login.password_file);
 
-            if hash != entry.state {
+            if &state != entry.state {
                 return Err(OneOf::new(SetLoginError::StateMismatch));
             }
 

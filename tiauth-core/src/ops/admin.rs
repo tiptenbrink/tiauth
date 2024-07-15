@@ -34,7 +34,7 @@ pub fn get_users_bytes(
 ) -> Result<UserList, OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
     let mut proof_content =
-        verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::Read))
+        verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::ReadUsers))
             .map_err(OneOf::broaden)?;
 
     let tables = state.app_tables(application);
@@ -202,7 +202,7 @@ mod test {
 
         setup_users(&state, "app");
 
-        let action = ActionType::Read;
+        let action = ActionType::ReadUsers;
 
         let key = state.proof_key("app");
         let empty_data = BytePacked::new(&[]);
@@ -267,7 +267,7 @@ mod test {
 
         setup_users(&state, "app");
 
-        let action = ActionType::Read;
+        let action = ActionType::ReadUsers;
 
         let key = state.proof_key("app");
         let empty_data = BytePacked::new(&[]);
@@ -292,7 +292,7 @@ mod test {
 
         setup_users(&state, "app");
 
-        let action = ActionType::Read;
+        let action = ActionType::ReadUsers;
 
         let key = state.proof_key("app");
         let empty_data = BytePacked::new(&[]);

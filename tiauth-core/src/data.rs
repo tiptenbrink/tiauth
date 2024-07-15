@@ -818,18 +818,22 @@ pub const CHANGE_AGE: u64 = 600;
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub enum ActionType {
-    #[serde(rename = "reset")]
-    Reset,
-    #[serde(rename = "delete")]
-    Delete,
-    #[serde(rename = "set")]
-    Set,
-    #[serde(rename = "add")]
-    Add,
-    #[serde(rename = "merge")]
-    Merge,
-    #[serde(rename = "read")]
-    Read,
+    #[serde(rename = "reset_password")]
+    ResetPassword,
+    #[serde(rename = "delete_claims")]
+    DeleteClaims,
+    #[serde(rename = "set_claims")]
+    SetClaims,
+    #[serde(rename = "add_claims")]
+    AddClaims,
+    #[serde(rename = "merge_claims")]
+    MergeClaims,
+    #[serde(rename = "read_users")]
+    ReadUsers,
+    #[serde(rename = "read_password")]
+    ReadPassword,
+    #[serde(rename = "delete_user")]
+    DeleteUser,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -853,16 +857,16 @@ impl Target {
 }
 
 impl ActionType {
-    fn name(&self) -> &'static str {
-        match &self {
-            Self::Reset => "reset",
-            Self::Delete => "delete",
-            Self::Read => "read",
-            Self::Set => "set",
-            Self::Add => "add",
-            Self::Merge => "merge",
-        }
-    }
+    // fn name(&self) -> &'static str {
+    //     match &self {
+    //         Self::Reset => "reset",
+    //         Self::Delete => "delete",
+    //         Self::Read => "read",
+    //         Self::Set => "set",
+    //         Self::Add => "add",
+    //         Self::Merge => "merge",
+    //     }
+    // }
 }
 
 #[derive(Error, Debug)]

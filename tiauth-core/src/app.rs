@@ -41,7 +41,7 @@ pub fn create_set_claims_proof(
     user_id: &str,
     claims: &BytePacked<Claims>,
 ) -> Encoded<Proof<Claims>> {
-    let action = ActionType::Set;
+    let action = ActionType::SetClaims;
     let target = Target::Select;
     let target_data = vec![user_id.to_owned()];
 
@@ -58,26 +58,26 @@ pub fn create_set_claims_proof(
     Encoded::from_encodable(proof)
 }
 
-pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> Encoded<Proof<()>> {
-    let action = ActionType::Reset;
-    let target = Target::Select;
-    let target_data = TargetList::from_vec(vec![user_id.to_owned()]);
+// pub fn create_reset_proof(proof_base: ProofBaseView, user_id: &str) -> Encoded<Proof<()>> {
+//     let action = ActionType::Reset;
+//     let target = Target::Select;
+//     let target_data = TargetList::from_vec(vec![user_id.to_owned()]);
 
-    let proof: Proof<()> = create_proof(
-        proof_base.application,
-        proof_base.expires_in,
-        action,
-        target,
-        target_data,
-        BytePacked::empty(),
-        proof_base.key,
-    );
+//     let proof: Proof<()> = create_proof(
+//         proof_base.application,
+//         proof_base.expires_in,
+//         action,
+//         target,
+//         target_data,
+//         BytePacked::empty(),
+//         proof_base.key,
+//     );
 
-    Encoded::from_encodable(proof)
-}
+//     Encoded::from_encodable(proof)
+// }
 
 pub fn create_read_all_proof(proof_base: ProofBaseView) -> Encoded<Proof<()>> {
-    let action = ActionType::Read;
+    let action = ActionType::ReadUsers;
     let target = Target::All;
 
     let proof: Proof<()> = create_proof(
@@ -98,7 +98,7 @@ pub fn create_read_some_proof(
     proof_base: ProofBaseView,
     selection: Vec<String>,
 ) -> Encoded<Proof<()>> {
-    let action = ActionType::Read;
+    let action = ActionType::ReadUsers;
     let target = Target::Select;
 
     let proof: Proof<()> = create_proof(
@@ -122,7 +122,7 @@ pub fn create_read_range_proof(
         panic!("Range should include exactly two elements!")
     }
 
-    let action = ActionType::Read;
+    let action = ActionType::ReadUsers;
     let target = Target::Range;
 
     let proof: Proof<()> = create_proof(
