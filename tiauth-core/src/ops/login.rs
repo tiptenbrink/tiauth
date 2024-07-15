@@ -101,9 +101,8 @@ pub fn login_session(
 
 #[cfg(feature = "test")]
 pub mod test_util {
-    use std::time::Instant;
 
-    use crate::{data::Claims, ops::register::test_util::*, state::test_util::TestState, Proof};
+    use crate::{data::Claims, ops::register::test_util::*, state::test_util::TestState};
     use opaque_borink::client::{client_login, client_login_finish};
 
     use super::*;
@@ -127,7 +126,10 @@ pub mod test_util {
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
         // println!("server time: {} ms", time_server);
         // let before = Instant::now();
-        let session = login_session(
+
+        // time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
+        // println!("server time: {} ms", time_server);
+        login_session(
             state,
             application,
             &request,
@@ -135,10 +137,7 @@ pub mod test_util {
             &secret,
             session_claims,
         )
-        .unwrap();
-        // time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
-        // println!("server time: {} ms", time_server);
-        session
+        .unwrap()
     }
 }
 
@@ -146,8 +145,6 @@ pub mod test_util {
 mod tests {
     use super::*;
 
-    use crate::data::ByteSerial;
-    use crate::ops::verify::test_util::*;
     use crate::verify::verify_session;
     use crate::{data::Claims, state::test_util::TestState};
 

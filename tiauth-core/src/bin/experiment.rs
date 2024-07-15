@@ -1,5 +1,5 @@
 use std::env::current_dir;
-use std::{fs, process, thread};
+use std::{fs, thread};
 use tempfile::NamedTempFile;
 
 use rand::rngs::StdRng;

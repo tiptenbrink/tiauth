@@ -4,7 +4,6 @@ use base64::{engine::general_purpose as b64, Engine as _};
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
-use rand_chacha::ChaCha20Rng;
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition};
 use rmp_serde::{decode, encode};
 use sha2::{Digest, Sha256};
@@ -215,7 +214,7 @@ fn create_app_secret(
     let mut hasher = Sha256::new();
 
     hasher.update(application.as_bytes());
-    hasher.update(base_secret.clone());
+    hasher.update(*base_secret);
 
     let base_seed: [u8; 32] = hasher.finalize().into();
 
@@ -241,7 +240,7 @@ impl<const SN: usize> GovernorKeyState<SN> for CoreKeyState<SN> {
 
         (
             EphemeralKey::last(
-                app_secret.base_seed.clone(),
+                app_secret.base_seed,
                 now,
                 self.ephemeral_time,
                 app_secret.amount_valid,
@@ -309,7 +308,7 @@ impl<const SN: usize> GovernorKeyState<SN> for CoreKeyState<SN> {
             .unwrap()
             .as_secs();
 
-        EphemeralKey::compute(app_secret.base_seed.clone(), now, self.ephemeral_time)
+        EphemeralKey::compute(app_secret.base_seed, now, self.ephemeral_time)
     }
 }
 
@@ -447,7 +446,7 @@ fn init_key_state<const SN: usize>(
 ) -> Result<KeyInitState<SN>, DbError> {
     let write_txn = db.begin_write()?;
 
-    let (opaque, session_keys, private, ephemeral_secret, ephemeral_time) = {
+    let (opaque, session_keys, _private, ephemeral_secret, ephemeral_time) = {
         let mut table = write_txn.open_table(SERVER)?;
         let setup = table.get("opaque_setup")?.map(|a| a.value());
 
@@ -505,7 +504,7 @@ fn init_key_state<const SN: usize>(
             rng.fill_bytes(&mut ephemeral_secret);
             table.insert(
                 "ephemeral_secret",
-                b64::URL_SAFE_NO_PAD.encode(&ephemeral_secret),
+                b64::URL_SAFE_NO_PAD.encode(ephemeral_secret),
             )?;
             ephemeral_secret
         };
@@ -513,7 +512,7 @@ fn init_key_state<const SN: usize>(
         let ephemeral_time = table.get("ephemeral_time")?.map(|a| a.value());
 
         let ephemeral_time = if let Some(ephemeral_time) = ephemeral_time {
-            (&ephemeral_time).parse().unwrap()
+            ephemeral_time.parse().unwrap()
         } else {
             table.insert("ephemeral_time", now.to_string())?;
             now
@@ -741,7 +740,7 @@ pub mod test_util {
             let mut app_secrets: HashMap<String, AppSecret> = HashMap::new();
 
             for app_name in applications {
-                let (key, app) = create_app(app_name);
+                let (key, _) = create_app(app_name);
 
                 // TODO? check if re-enable
                 //write_app_to_db(&db, &app).unwrap();

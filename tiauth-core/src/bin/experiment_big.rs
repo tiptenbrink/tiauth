@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::env::current_dir;
-use std::{fs, process, thread};
+use std::{fs, thread};
 use tempfile::NamedTempFile;
 
 use rand::rngs::StdRng;
@@ -26,7 +26,7 @@ fn single_threaded(values: &[(u128, &[u8])]) {
     let start = Instant::now();
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     for value in values {
-        let (key, value) = *value;
+        let (key, _) = *value;
         let mut element1 = Vec::new();
         for _ in 0..SIZE {
             let arr: [u8; 32] = rng.gen();
@@ -160,12 +160,12 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
         s.spawn(|| {
             // Ensure that table 1 has been opened at least
             let mut read_tx = db.begin_read().unwrap();
-            let mut i = 0;
+            //let mut i = 0;
             while read_tx.open_table(TABLE1).is_err() {
                 //println!("Doesn't exist! {}", i);
                 thread::sleep(Duration::from_millis(10));
                 read_tx = db.begin_read().unwrap();
-                i += 1;
+                //i += 1;
             }
             let mut i = 0;
             let start = Instant::now();
@@ -198,7 +198,7 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
         let start = Instant::now();
         let j1 = s.spawn(|| {
             let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            for (key, value) in values.iter() {
+            for (key, _) in values.iter() {
                 let mut element = Vec::new();
                 for _ in 0..SIZE {
                     let arr: [u8; 32] = rng.gen();
@@ -214,8 +214,8 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
         });
         let j2 = s.spawn(|| {
             let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            for (key, value) in values.iter() {
-                let mut element = Vec::new();
+            for (key, _) in values.iter() {
+                let mut element: Vec<u8> = Vec::new();
                 for _ in 0..SIZE {
                     let arr: [u8; 32] = rng.gen();
                     element.extend_from_slice(&arr);
@@ -230,7 +230,7 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
         });
         let j3 = s.spawn(|| {
             let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            for (key, value) in values.iter() {
+            for (key, _) in values.iter() {
                 let mut element = Vec::new();
                 for _ in 0..SIZE {
                     let arr: [u8; 32] = rng.gen();
@@ -246,7 +246,7 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
         });
         let j4 = s.spawn(|| {
             let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            for (key, value) in values.iter() {
+            for (key, _) in values.iter() {
                 let mut element = Vec::new();
                 for _ in 0..SIZE {
                     let arr: [u8; 32] = rng.gen();

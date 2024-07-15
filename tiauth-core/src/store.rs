@@ -1,7 +1,5 @@
 use base64::{engine::general_purpose as b64, Engine as _};
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
-use rmp::decode::ValueReadError;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, io::Cursor, marker::PhantomData, path::Path, time::SystemTime};
 use terrors::OneOf;
@@ -14,8 +12,8 @@ use crate::{
     },
     error::WrapErrorOneOf,
     state::State,
-    util::{cursor_slice, rmp_read_bin, rmp_read_str},
-    ActionType, BytePacked, Claims,
+    util::{rmp_read_bin, rmp_read_str},
+    BytePacked, Claims,
 };
 
 pub type TableStore = (String, String, String);
@@ -174,7 +172,7 @@ impl<T: ByteSerial> Ephemeral<T> {
 
     pub fn verify_encoded(
         encoded: &str,
-        verify_keys: &Vec<EphemeralKey>,
+        verify_keys: &[EphemeralKey],
     ) -> Result<Self, VerifyFailed> {
         let mut bytes = b64::URL_SAFE_NO_PAD
             .decode(encoded)
@@ -456,7 +454,7 @@ pub fn login_change_ephemeral<'a, T: ByteSerial>(
         EphemeralType::NewUser => {
             // TODO check if we want AlreadyExists error
             if let Some(old_login_bytes) = old_login_bytes {
-                return Ok(Login::deserialize(&old_login_bytes));
+                return Ok(Login::deserialize(old_login_bytes));
             }
             // if old_login_bytes.is_some() {
             //     return Err(OneOf::new(SetLoginError::AlreadyExists))
@@ -479,7 +477,7 @@ pub fn login_change_ephemeral<'a, T: ByteSerial>(
             let login = Login::deserialize(old_login_bytes);
             let state = entry.eph_type.change_password_state(&login.password_file);
 
-            if &state != entry.state {
+            if state != entry.state {
                 return Err(OneOf::new(SetLoginError::StateMismatch));
             }
 

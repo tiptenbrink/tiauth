@@ -1,14 +1,12 @@
 use crate::data::{
-    AboutVerify, ActionType, ByteOwned, ClaimKeys, InvalidProof, Login, LoginPassword, ModifyClaimError, ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY
+    AboutVerify, ActionType, ClaimKeys, InvalidProof, Login, LoginPassword, ModifyClaimError,
+    ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
 };
 use crate::error::OneOfTo;
 use crate::ops::verify::verify_proof_write;
 use crate::proof::{verify_proof_content, InvalidSession};
 use crate::state::State;
-use crate::store::{
-    get_login, set_login_field_write, Ephemeral, EphemeralEntry, EphemeralType, LoginFieldError, SetLoginOptions
-};
-use crate::util::nonce_384;
+use crate::store::{get_login, Ephemeral, EphemeralType, LoginFieldError};
 use crate::verify::verify_session;
 use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use redb::{Error as DbError, ReadableTable};
@@ -31,7 +29,7 @@ pub fn reset_password(
     proof: &Proof<()>,
 ) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let key = state.app_key(application);
-    let mut proof_content = verify_proof_content(
+    let proof_content = verify_proof_content(
         proof,
         &key,
         AboutVerify::new(application, ActionType::ResetPassword),
@@ -40,11 +38,14 @@ pub fn reset_password(
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
     let about = proof_content.about;
-    let LoginPassword { password_file, .. } = match get_login(state, &about.application, &user_id).to_one_of().map_err(OneOf::broaden)? {
+    let LoginPassword { password_file, .. } = match get_login(state, &about.application, &user_id)
+        .to_one_of()
+        .map_err(OneOf::broaden)?
+    {
         Some(user) => user,
         None => {
             println!("User no longer exists!");
-        return Err(OneOf::new(InvalidProof {}))
+            return Err(OneOf::new(InvalidProof {}));
         }
     };
 
@@ -98,8 +99,15 @@ pub fn reset_password(
     //     .into_one_of::<DbError>()
     //     .map_err(OneOf::broaden)?;
 
-    let state =  EphemeralType::ChangePassword.change_password_state(&password_file);
-    let change_entry = Ephemeral::tagged_encoded(&key, &user_id, &about.application, &state, EphemeralType::ChangePassword, BytePacked::<()>::empty());
+    let state = EphemeralType::ChangePassword.change_password_state(&password_file);
+    let change_entry = Ephemeral::tagged_encoded(
+        &key,
+        &user_id,
+        &about.application,
+        &state,
+        EphemeralType::ChangePassword,
+        BytePacked::<()>::empty(),
+    );
 
     Ok(change_entry)
 }
@@ -107,8 +115,10 @@ pub fn reset_password(
 fn change_password(
     state: &impl State,
     session_encrypted: &Session,
-) -> Result<String, OneOf<(DbError, InvalidSession,)>> {
-    let verified = verify_session(state, session_encrypted).to_one_of().map_err(OneOf::broaden)?;
+) -> Result<String, OneOf<(DbError, InvalidSession)>> {
+    let verified = verify_session(state, session_encrypted)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
     let session = verified.read().to_one_of().map_err(OneOf::broaden)?;
 
     let time = SystemTime::now()
@@ -118,25 +128,36 @@ fn change_password(
 
     if time > session.expires + LEEWAY {
         println!("Session has expired!");
-        return Err(OneOf::new(InvalidSession))
+        return Err(OneOf::new(InvalidSession));
     }
 
     if time > session.issued + CHANGE_AGE {
-        return Err(OneOf::new(InvalidSession))
+        return Err(OneOf::new(InvalidSession));
     }
 
     let key = state.keys().ephemeral_key(&session.application);
-    
-    let LoginPassword { password_file, .. } = match get_login(state, &session.application, &session.user_id).to_one_of().map_err(OneOf::broaden)? {
-        Some(user) => user,
-        None => {
-            println!("User no longer exists!");
-        return Err(OneOf::new(InvalidSession))
-        }
-    };
+
+    let LoginPassword { password_file, .. } =
+        match get_login(state, &session.application, &session.user_id)
+            .to_one_of()
+            .map_err(OneOf::broaden)?
+        {
+            Some(user) => user,
+            None => {
+                println!("User no longer exists!");
+                return Err(OneOf::new(InvalidSession));
+            }
+        };
     // As state we use the password file, this ensures it can be used successfully only once, because any change would change the password file
-    let state =  EphemeralType::ChangePassword.change_password_state(&password_file);
-    let change_entry = Ephemeral::tagged_encoded(&key, &session.user_id, &session.application, &state, EphemeralType::ChangePassword, BytePacked::<()>::empty());
+    let state = EphemeralType::ChangePassword.change_password_state(&password_file);
+    let change_entry = Ephemeral::tagged_encoded(
+        &key,
+        &session.user_id,
+        &session.application,
+        &state,
+        EphemeralType::ChangePassword,
+        BytePacked::<()>::empty(),
+    );
 
     Ok(change_entry)
 }
@@ -258,7 +279,7 @@ pub fn user_new_claims(
             vec![
                 ActionType::MergeClaims,
                 ActionType::AddClaims,
-                ActionType::SetClaims
+                ActionType::SetClaims,
             ],
         ),
     )
@@ -278,20 +299,25 @@ pub fn user_new_claims(
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
 
-        let new_login_bytes ={
+        let new_login_bytes = {
             let login = table
-            .get(user_id.as_str())
-            .into_one_of::<DbError>()
-            .map_err(OneOf::broaden)?;
-            
+                .get(user_id.as_str())
+                .into_one_of::<DbError>()
+                .map_err(OneOf::broaden)?;
+
             if let Some(login_bytes) = login {
                 let login_bytes = login_bytes.value();
                 let (login_password, claims) = Login::deserialize_tuple(login_bytes);
 
-                let proof_claims = proof_content.data.try_deserialize().map_err(|_| OneOf::new(InvalidProof {}))?;
+                let proof_claims = proof_content
+                    .data
+                    .try_deserialize()
+                    .map_err(|_| OneOf::new(InvalidProof {}))?;
 
                 let new_claims = if proof_content.about.action == ActionType::SetClaims {
-                    proof_claims.to_claims_sorted().map_err(|_| OneOf::new(ModifyClaimError::NotSorted))?
+                    proof_claims
+                        .to_claims_sorted()
+                        .map_err(|_| OneOf::new(ModifyClaimError::NotSorted))?
                 } else {
                     let claims = claims.deserialize();
                     let exists_ok = if proof_content.about.action == ActionType::AddClaims {
@@ -302,44 +328,44 @@ pub fn user_new_claims(
                         panic!("Only action merge and add allowed!")
                     };
 
-                    claims.add_claims(proof_claims, exists_ok).to_one_of()
+                    claims
+                        .add_claims(proof_claims, exists_ok)
+                        .to_one_of()
                         .map_err(OneOf::broaden)?
                 };
 
-                login_password.into_login(new_claims.serialize().as_packed()).serialize()
+                login_password
+                    .into_login(new_claims.serialize().as_packed())
+                    .serialize()
             } else {
-                return Err(OneOf::new(ModifyClaimError::UserNotFound))
+                return Err(OneOf::new(ModifyClaimError::UserNotFound));
             }
         };
 
-        table.insert(user_id.as_str(), new_login_bytes.as_slice())
-        .into_one_of::<DbError>()
+        table
+            .insert(user_id.as_str(), new_login_bytes.as_slice())
+            .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
-
     }
 
     Ok(())
 }
 
+#[allow(unused_variables)]
 pub fn user_remove_claims(
     state: &impl State,
     application: &str,
     claims_proof: &Proof<ClaimKeys>,
 ) -> Result<(), OneOf<(InvalidProof, DbError, ModifyClaimError)>> {
-    let key = state.app_key(application);
-    let proof_content = verify_proof_content(
-        claims_proof,
-        &key,
-        AboutVerify::with_allowed(
-            application,
-            vec![
-                ActionType::DeleteClaims,
-            ],
-        ),
-    )
-    .map_err(OneOf::broaden)?;
+    // let key = state.app_key(application);
+    // let proof_content = verify_proof_content(
+    //     claims_proof,
+    //     &key,
+    //     AboutVerify::with_allowed(application, vec![ActionType::DeleteClaims]),
+    // )
+    // .map_err(OneOf::broaden)?;
 
-    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
+    //let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
 
     todo!()
 
@@ -360,7 +386,7 @@ pub fn user_remove_claims(
     //         .get(user_id.as_str())
     //         .into_one_of::<DbError>()
     //         .map_err(OneOf::broaden)?;
-            
+
     //         if let Some(login_bytes) = login {
     //             let login_bytes = login_bytes.value();
     //             let (login_password, claims) = Login::deserialize_tuple(login_bytes);

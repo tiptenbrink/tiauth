@@ -33,9 +33,12 @@ pub fn get_users_bytes(
     proof: &Proof<()>,
 ) -> Result<UserList, OneOf<(DbError, InvalidProof)>> {
     let key = state.app_key(application);
-    let mut proof_content =
-        verify_proof_content(proof, &key, AboutVerify::new(application, ActionType::ReadUsers))
-            .map_err(OneOf::broaden)?;
+    let mut proof_content = verify_proof_content(
+        proof,
+        &key,
+        AboutVerify::new(application, ActionType::ReadUsers),
+    )
+    .map_err(OneOf::broaden)?;
 
     let tables = state.app_tables(application);
 

@@ -7,7 +7,6 @@ use crate::encoded::Encodable;
 use crate::error::OneOfTo;
 use crate::util::combine_encode;
 use crate::{ActionType, Claims, Target, TargetList};
-use base64::DecodeError;
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;

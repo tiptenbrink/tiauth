@@ -72,7 +72,7 @@ pub fn rmp_read_str<'a>(
     let str_len = rmp::decode::read_str_len(&mut cursor)
         .map_err(|_| RmpDeserError::ExpectedStrLen(position))?;
     let position = cursor.position();
-    let str_bytes = try_cursor_slice(bytes, &mut cursor, str_len)?;
+    let str_bytes = try_cursor_slice(bytes, cursor, str_len)?;
     std::str::from_utf8(str_bytes).map_err(|_| RmpDeserError::Utf8Error(position, str_len))
 }
 

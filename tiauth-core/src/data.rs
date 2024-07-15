@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::borrow::Borrow;
 use std::collections::HashSet;
-use std::convert::Infallible;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -17,7 +16,6 @@ use std::str::{self, Utf8Error};
 use std::sync::OnceLock;
 use terrors::OneOf;
 use thiserror::Error;
-use zerovec::maps::MutableZeroVecLike;
 
 use zerovec::vecs::Index32;
 use zerovec::VarZeroVec;
@@ -64,7 +62,7 @@ impl LoginPassword {
         Login {
             user_id: self.user_id,
             password_file: self.password_file,
-            claims
+            claims,
         }
     }
 }
@@ -285,9 +283,9 @@ impl ByteSerial for () {
 
     fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
         if bytes.is_empty() {
-            return Ok(());
+            Ok(())
         } else {
-            return Err(NonEmptyBytes);
+            Err(NonEmptyBytes)
         }
     }
 
@@ -387,8 +385,7 @@ impl ByteSerial for ClaimKeys {
 
     type DeserializeErr = InvalidClaimKeys;
 
-    fn serialize(&self) -> ByteOwned<Self>
-    {
+    fn serialize(&self) -> ByteOwned<Self> {
         let bytes = rmp_serde::to_vec(&self).unwrap();
         ByteOwned::new(bytes)
     }
@@ -397,8 +394,7 @@ impl ByteSerial for ClaimKeys {
         rmp_serde::decode::from_slice(bytes).map_err(|_| InvalidClaimKeys)
     }
 
-    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
-    {
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr> {
         <Self as ByteSerial>::try_deserialize(bytes)
     }
 }
@@ -501,7 +497,7 @@ pub enum ModifyClaimError {
     #[error("Could not modify claims. User does not exist.")]
     UserNotFound,
     #[error("Could not modify claims. Claims are not sorted.")]
-    NotSorted
+    NotSorted,
 }
 
 #[derive(Error, Debug)]
@@ -509,12 +505,17 @@ pub enum ModifyClaimError {
 pub struct ClaimsUnsortedError;
 
 impl<'a> ClaimsView<'a> {
-    pub fn add_claims<'b>(
+    pub fn add_claims(
         &self,
-        claims: ClaimsView<'b>,
+        claims: ClaimsView<'_>,
         exists_ok: bool,
     ) -> Result<Claims, ModifyClaimError> {
-        let Claims { mut keys, mut values } = self.to_claims_sorted().map_err(|_| ModifyClaimError::NotSorted)?;
+        let Claims {
+            mut keys,
+            mut values,
+        } = self
+            .to_claims_sorted()
+            .map_err(|_| ModifyClaimError::NotSorted)?;
         let left_i = 0;
 
         for (claim, value) in claims.keys.iter().zip(claims.values.iter()) {
@@ -523,27 +524,26 @@ impl<'a> ClaimsView<'a> {
             match &keys[left_i..right_i].binary_search(&claim) {
                 Ok(found_i) => {
                     if exists_ok {
-                        values[*found_i+left_i] = value.to_owned();
+                        value.clone_into(&mut values[*found_i + left_i]);
                     } else {
                         return Err(ModifyClaimError::AddExists);
                     }
                 }
                 Err(not_found_i) => {
-                    keys.insert(*not_found_i+left_i, claim);
-                    values.insert(*not_found_i+left_i, value.to_owned())
+                    keys.insert(*not_found_i + left_i, claim);
+                    values.insert(*not_found_i + left_i, value.to_owned())
                 }
             }
         }
 
-        Ok(Claims { keys, values})
+        Ok(Claims { keys, values })
     }
 
-    pub fn remove_claims(
-        &self,
-        claim_keys: &ClaimKeys
-    ) -> Result<Claims, ModifyClaimError> {
-        if claim_keys.0.len() == 0 {
-            return self.to_claims_sorted().map_err(|_| ModifyClaimError::NotSorted)
+    pub fn remove_claims(&self, claim_keys: &ClaimKeys) -> Result<Claims, ModifyClaimError> {
+        if claim_keys.0.is_empty() {
+            return self
+                .to_claims_sorted()
+                .map_err(|_| ModifyClaimError::NotSorted);
         }
 
         let mut keys: Vec<String> = Vec::with_capacity(self.keys.len());
@@ -555,7 +555,7 @@ impl<'a> ClaimsView<'a> {
             if i >= claim_keys.0.len() || claim != current {
                 keys.push(claim.to_owned());
                 values.push(value.to_vec());
-            } else if i < claim_keys.0.len()-1 {
+            } else if i < claim_keys.0.len() - 1 {
                 i += 1;
                 let new_value = &claim_keys.0[i];
                 if current > new_value {
@@ -565,7 +565,7 @@ impl<'a> ClaimsView<'a> {
             }
         }
 
-        Ok(Claims { keys, values})
+        Ok(Claims { keys, values })
     }
 
     /// If k is generally a fraction of n, doing linear search is almost always better. However, when k is a power of n (k = k^C) where C < 1, at some point doing binary search is faster.
@@ -699,9 +699,9 @@ impl<'a> ClaimsView<'a> {
         for i in 0..self.keys.len() {
             let current = &self.keys[i];
             if i != 0 {
-                let prev = &self.keys[i-1];
+                let prev = &self.keys[i - 1];
                 if prev < current {
-                    return Err(ClaimsUnsortedError)
+                    return Err(ClaimsUnsortedError);
                 }
             }
 

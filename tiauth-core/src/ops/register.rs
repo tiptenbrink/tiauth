@@ -2,17 +2,11 @@ use opaque_borink::{server::register_server, Error as OpaqueError};
 
 use crate::crypto::VerifyFailed;
 use crate::data::Claims;
-use crate::data::{AboutVerify, ActionType, InvalidProof};
+use crate::data::InvalidProof;
 use crate::error::{OneOfTo, WrapErrorOneOf};
-use crate::proof::verify_proof_content;
 use crate::state::State;
-use crate::store::{
-    login_change_ephemeral, pop_ephemeral, set_login_field_write, write_ephemeral, Ephemeral,
-    EphemeralEntry, EphemeralType, LoginFieldError, SetLoginError, SetLoginOptions,
-};
-use crate::util::nonce_384;
-use crate::verify::verify_proof_write;
-use crate::{crypto, BytePacked, KeyState, Proof};
+use crate::store::{login_change_ephemeral, Ephemeral, EphemeralType, SetLoginError};
+use crate::{BytePacked, KeyState};
 use opaque_borink::server::register_server_finish;
 use redb::{Error as DbError, ReadableTable};
 use std::str;
@@ -51,21 +45,20 @@ pub fn start_register(
     Ok((response, ephemeral))
 }
 
+type FinishError = OneOf<(
+    DbError,
+    OpaqueError,
+    InvalidProof,
+    SetLoginError,
+    VerifyFailed,
+)>;
+
 pub fn register_finish(
     state: &impl State,
     application: &str,
     request: &str,
     register_flow_nonce: &str,
-) -> Result<
-    (),
-    OneOf<(
-        DbError,
-        OpaqueError,
-        InvalidProof,
-        SetLoginError,
-        VerifyFailed,
-    )>,
-> {
+) -> Result<(), FinishError> {
     let password_file = register_server_finish(request)
         .to_one_of()
         .map_err(OneOf::broaden)?;
@@ -114,7 +107,7 @@ pub fn register_finish(
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
     } else {
-        return Err(OneOf::new(VerifyFailed))
+        return Err(OneOf::new(VerifyFailed));
     }
     // // It can either be an entry from register_start (NewUser), or entry from reset_password (SetPassword), which cleared the password,
     // // or from change_password (ChangePassword)
@@ -202,7 +195,12 @@ pub fn register_finish(
 pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
-    use crate::{data::{Login, LoginPassword}, state::test_util::TestState, store::{get_login, set_login}, ByteSerial};
+    use crate::{
+        data::{Login, LoginPassword},
+        state::test_util::TestState,
+        store::{get_login, set_login},
+        ByteSerial,
+    };
 
     use super::*;
 
@@ -225,20 +223,21 @@ pub mod test_util {
         register_finish(state, application, &request, nonce).unwrap();
 
         if let Some(claims_set) = claims_set {
-            let LoginPassword { user_id, password_file} = get_login(state, application, user_id).unwrap().unwrap();
+            let LoginPassword {
+                user_id,
+                password_file,
+            } = get_login(state, application, user_id).unwrap().unwrap();
 
             let claims = claims_set.serialize();
 
             let claims_login = Login {
                 user_id,
                 password_file,
-                claims: claims.as_packed()
+                claims: claims.as_packed(),
             };
 
             set_login(state, &claims_login, application).unwrap();
         }
-
-        
     }
 }
 

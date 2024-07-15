@@ -169,7 +169,6 @@ impl EphemeralKey {
         amount_valid: usize,
     ) -> Vec<EphemeralKey> {
         (0..(amount_valid as u64))
-            .into_iter()
             .rev()
             .map(|i| Self::compute(base_secret, now - (i * 600), ref_time))
             .collect()
@@ -194,7 +193,7 @@ pub struct VerifyFailed;
 
 pub fn verify_ephemeral(
     ephemeral_data: &[u8],
-    keys: &Vec<EphemeralKey>,
+    keys: &[EphemeralKey],
     code: &[u8],
 ) -> Result<(), VerifyFailed> {
     let mut i = keys.len() - 1;
