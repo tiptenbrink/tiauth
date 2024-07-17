@@ -194,7 +194,7 @@ pub struct VerifyFailed;
 pub fn verify_ephemeral(
     ephemeral_data: &[u8],
     keys: &[EphemeralKey],
-    code: &[u8],
+    code: &[u8; 32],
 ) -> Result<(), VerifyFailed> {
     let mut i = keys.len() - 1;
     loop {

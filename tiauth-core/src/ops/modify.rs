@@ -2,11 +2,12 @@ use crate::data::{
     AboutVerify, ActionType, ClaimKeys, InvalidProof, Login, LoginPassword, ModifyClaimError,
     ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
 };
+use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
 use crate::ops::verify::verify_proof_write;
-use crate::proof::{verify_proof_content, InvalidSession};
+use crate::proof::{verify_proof_content, Ephemeral, EphemeralType, InvalidSession};
 use crate::state::State;
-use crate::store::{get_login, Ephemeral, EphemeralType, LoginFieldError};
+use crate::store::{get_login, LoginFieldError};
 use crate::verify::verify_session;
 use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use redb::{Error as DbError, ReadableTable};
@@ -27,7 +28,7 @@ pub fn reset_password(
     state: &impl State,
     application: &str,
     proof: &Proof<()>,
-) -> Result<String, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
+) -> Result<Ephemeral<()>, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
     let key = state.app_key(application);
     let proof_content = verify_proof_content(
         proof,
@@ -100,7 +101,7 @@ pub fn reset_password(
     //     .map_err(OneOf::broaden)?;
 
     let state = EphemeralType::ChangePassword.change_password_state(&password_file);
-    let change_entry = Ephemeral::tagged_encoded(
+    let change_entry = Ephemeral::create(
         &key,
         &user_id,
         &about.application,
@@ -115,7 +116,7 @@ pub fn reset_password(
 fn change_password(
     state: &impl State,
     session_encrypted: &Session,
-) -> Result<String, OneOf<(DbError, InvalidSession)>> {
+) -> Result<Ephemeral<()>, OneOf<(DbError, InvalidSession)>> {
     let verified = verify_session(state, session_encrypted)
         .to_one_of()
         .map_err(OneOf::broaden)?;
@@ -150,7 +151,7 @@ fn change_password(
         };
     // As state we use the password file, this ensures it can be used successfully only once, because any change would change the password file
     let state = EphemeralType::ChangePassword.change_password_state(&password_file);
-    let change_entry = Ephemeral::tagged_encoded(
+    let change_entry = Ephemeral::create(
         &key,
         &session.user_id,
         &session.application,
@@ -513,7 +514,7 @@ mod tests {
 
         let start_pass = login.password_file;
 
-        register_flow(&state, user_id, app, password, Some(&nonce), None);
+        register_flow(&state, user_id, app, password, Some(nonce), None);
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 
@@ -538,7 +539,7 @@ mod tests {
 
         assert_ne!(initial_pw_file, "");
 
-        register_flow(&state, user_id, app, password, Some(&nonce), None);
+        register_flow(&state, user_id, app, password, Some(nonce), None);
 
         let login = get_login(&state, app, user_id).unwrap().unwrap();
 

@@ -1,20 +1,30 @@
 #![allow(dead_code)]
 
+use crate::data::Login;
 use crate::data::SessionClaims;
 use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
+use crate::error::OneOfTo;
 use crate::error::WrapErrorOneOf;
 use crate::proof::create_session;
+use crate::proof::Ephemeral;
+use crate::proof::EphemeralType;
+use crate::proof::InvalidEphemeral;
 use crate::state::State;
 use crate::store::{
-    get_login, get_login_claims_bytes, pop_ephemeral, write_ephemeral, EphemeralEntry,
-    EphemeralType,
+    get_login, get_login_claims_bytes
 };
 use crate::util::nonce_384;
+use crate::util::nonce_384_bytes;
+use crate::ByteOwned;
+use crate::BytePacked;
+use crate::ByteSerial;
+use crate::KeyState;
 use crate::Session;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
 use redb::Error as DbError;
+use thiserror::Error;
 use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
@@ -26,7 +36,7 @@ pub fn login_start(
     application: &str,
     request: &str,
     user_id: &str,
-) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
+) -> Result<(String, Ephemeral<String>), OneOf<(DbError, OpaqueError)>> {
     let read_login = get_login(state, application, user_id).unwrap().unwrap();
 
     let (response, state_data) = login_server(
@@ -36,61 +46,63 @@ pub fn login_start(
         user_id,
     )
     .to_one_of_twond()?;
+    let key = state.keys().ephemeral_key(application);
 
-    let entropy = nonce_384(&mut state.rng());
+    let entropy = nonce_384_bytes(&mut state.rng());
+    let data = <String as ByteSerial>::serialize(&state_data);
+    let eph = Ephemeral::create(&key, user_id, application, &entropy, EphemeralType::Login, data.as_packed());
 
-    let entry = EphemeralEntry::new(user_id, EphemeralType::Opaque, entropy, None, state_data);
-    let nonce = entry.key();
-
-    write_ephemeral(state, application, entry).to_one_of_two()?;
-
-    Ok((response, nonce))
+    Ok((response, eph))
 }
 
 /// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce, which is the serialized state entry key, which includes an
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
-fn login_finish(
-    state: &impl State,
-    application: &str,
-    request: &str,
-    nonce: &str,
-) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
-    let entry = pop_ephemeral(state, application, nonce, vec![EphemeralType::Opaque])
-        .to_one_of_two()?
-        .unwrap();
+fn login_finish<'a>(
+    state: &'a impl State,
+    application: &'a str,
+    request: &'a str,
+    nonce: &'a Ephemeral<String>,
+) -> Result<(String, &'a str), OneOf<(DbError, OpaqueError, InvalidEphemeral)>> {
+    let (verify_keys, _) = state.keys().eph_veri_keys(application);
+    let entry = nonce.verify(&verify_keys, application).to_one_of().map_err(OneOf::broaden)?;
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let login_state = entry.data.try_deserialize().map_err(|_| OneOf::new(InvalidEphemeral))?;
 
-    if now > entry.expires + LEEWAY {
-        panic!("Login has expired!")
-    }
+    // let entry = pop_ephemeral(state, application, nonce, vec![EphemeralType::Opaque])
+    //     .to_one_of_two()?
+    //     .unwrap();
 
-    let secret = login_server_finish(request, &entry.value.unwrap()).to_one_of_twond()?;
+    // TODO check if OPAQUE login state can be revealed to the client
+    let secret = login_server_finish(request, login_state).to_one_of().map_err(OneOf::broaden)?;
+
+    
 
     Ok((secret, entry.user_id))
+}
+
+#[derive(Error, Debug)]
+pub enum LoginError {
+    #[error("User no longer exists!")]
+    NotFound
 }
 
 pub fn login_session(
     state: &impl State,
     application: &str,
     request: &str,
-    nonce: &str,
+    nonce: &Ephemeral<String>,
     secret: &str,
     requested_claims: SessionClaims,
-) -> Result<Session, OneOf<(DbError, OpaqueError)>> {
-    let (server_secret, user_id) = login_finish(state, application, request, nonce)?;
+) -> Result<Session, OneOf<(DbError, OpaqueError, InvalidEphemeral, LoginError)>> {
+    let (server_secret, user_id) = login_finish(state, application, request, nonce).map_err(OneOf::broaden)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
     }
 
     let claims = get_login_claims_bytes(state, application, &user_id, requested_claims)
-        .to_one_of_two()?
-        .unwrap();
+        .to_one_of().map_err(OneOf::broaden)?.ok_or(OneOf::new(LoginError::NotFound))?;
 
     let key = &state.private().session;
 

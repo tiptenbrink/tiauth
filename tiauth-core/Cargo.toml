@@ -26,6 +26,9 @@ rayon = "1.10"
 hmac = "0.12.1"
 sha2 = "0.10.8"
 rand_chacha = "0.3.1"
+crossbeam = "0.8.4"
+ctrlc = "3.4.4"
+bitflags = "2.6.0"
 
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
@@ -51,4 +54,8 @@ required-features = ["test"]
 
 [[bin]]
 name = "experiment_big"
+required-features = ["test"]
+
+[[bin]]
+name = "multi_db"
 required-features = ["test"]

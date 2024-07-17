@@ -6,14 +6,9 @@ use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    crypto::{self, EphemeralKey, VerifyFailed},
-    data::{
+    crypto::{self, EphemeralKey, VerifyFailed}, data::{
         empty_claim_bytes, ByteOwned, ByteSerial, Login, LoginPassword, SerializedAs, SessionClaims,
-    },
-    error::WrapErrorOneOf,
-    state::State,
-    util::{rmp_read_bin, rmp_read_str},
-    BytePacked, Claims,
+    }, encoded::Encodable, error::WrapErrorOneOf, proof::{EphemeralContent, EphemeralType}, state::State, util::{combine_encode, rmp_read_bin, rmp_read_str}, BytePacked, Claims
 };
 
 pub type TableStore = (String, String, String);
@@ -91,308 +86,130 @@ pub const SERVER: TableDefinition<&str, String> = TableDefinition::new("server")
 /// App identities
 pub const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum EphemeralType {
-    NewUser,
-    ChangePassword,
-    SetPassword,
-    Opaque,
-}
 
-#[derive(Error, Debug)]
-#[error("Invalid EphemeralType.")]
-pub struct InvalidEphemeral;
+// pub struct EphemeralEntry {
+//     pub user_id: String,
+//     pub expires: u64,
+//     entropy: String,
+//     pub eph_type: EphemeralType,
+//     pub value: Option<String>,
+// }
 
-impl EphemeralType {
-    pub fn is(&self) -> impl Fn(&EphemeralType) -> bool + '_ {
-        |t: &EphemeralType| t.key_name() == self.key_name()
-    }
+// impl EphemeralEntry {
+//     // If expires_in is set to None, it will default to 30 minutes
+//     pub fn new(
+//         user_id: &str,
+//         eph_type: EphemeralType,
+//         entropy: String,
+//         expires_in: Option<u64>,
+//         value: String,
+//     ) -> Self {
+//         let now = SystemTime::now()
+//             .duration_since(SystemTime::UNIX_EPOCH)
+//             .unwrap()
+//             .as_secs();
+//         let expires = expires_in.unwrap_or(1800) + now;
 
-    pub fn change_password_state(&self, password_file: &str) -> Vec<u8> {
-        assert_eq!(self, &EphemeralType::ChangePassword);
+//         Self {
+//             user_id: user_id.into(),
+//             entropy,
+//             eph_type,
+//             expires,
+//             value: Some(value),
+//         }
+//     }
 
-        let mut hasher = Sha256::new();
-        hasher.update(password_file.as_bytes());
-        hasher.finalize().to_vec()
-    }
+//     fn without_value(key: &str) -> Self {
+//         let split: Vec<&str> = key.split(':').collect();
 
-    fn key_name(&self) -> &'static str {
-        match self {
-            Self::NewUser => "new_user",
-            Self::ChangePassword => "change_pass",
-            Self::SetPassword => "set_pass",
-            Self::Opaque => "opaque",
-        }
-    }
+//         if split.len() < 4 {
+//             panic!("Entry does not have correct format!")
+//         }
 
-    fn from_key_name(key_name: &str) -> Result<Self, InvalidEphemeral> {
-        let eph_type = match key_name {
-            "new_user" => Self::NewUser,
-            "change_pass" => Self::ChangePassword,
-            "set_pass" => Self::SetPassword,
-            "opaque" => Self::Opaque,
-            _ => return Err(InvalidEphemeral),
-        };
+//         let user_id = split[0..(split.len() - 3)].join(":");
+//         let eph_type = split[split.len() - 3].to_owned();
+//         let entropy = split[split.len() - 2].to_owned();
 
-        Ok(eph_type)
-    }
-}
+//         // 384 bits nonce, i.e. 48 bytes, 64 base64url characters, which are all 1 byte, so 64 bytes
+//         assert_eq!(entropy.len(), 64);
 
-#[derive(Debug)]
-pub struct Ephemeral<T: ByteSerial> {
-    phantom: PhantomData<T>,
-    bytes: Vec<u8>,
-}
+//         let expires: u64 = split[split.len() - 1].parse().unwrap();
 
-impl<T: ByteSerial> Ephemeral<T> {
-    pub fn tagged_encoded(
-        key: &EphemeralKey,
-        user_id: &str,
-        application: &str,
-        state: &[u8],
-        eph_type: EphemeralType,
-        data: &BytePacked<T>,
-    ) -> String {
-        let ephemeral = EphemeralContent {
-            user_id,
-            application,
-            state,
-            eph_type,
-            data,
-        };
+//         Self {
+//             user_id,
+//             expires,
+//             entropy,
+//             eph_type: EphemeralType::from_key_name(&eph_type).unwrap(),
+//             value: None,
+//         }
+//     }
 
-        let mut serialized = ephemeral.serialize();
+//     fn with_value(self, value: &str) -> Self {
+//         Self {
+//             user_id: self.user_id,
+//             expires: self.expires,
+//             entropy: self.entropy,
+//             eph_type: self.eph_type,
+//             value: Some(value.to_owned()),
+//         }
+//     }
 
-        let tag = crypto::ephemeral(&serialized, key);
+//     pub fn key(&self) -> String {
+//         format!(
+//             "{}:{}:{}:{}",
+//             self.user_id,
+//             self.eph_type.key_name(),
+//             self.entropy,
+//             self.expires
+//         )
+//     }
+// }
 
-        serialized.extend(tag);
+// pub fn write_ephemeral(
+//     state: &impl State,
+//     application: &str,
+//     entry: EphemeralEntry,
+// ) -> Result<(), DbError> {
+//     let tables = state.app_tables(application);
 
-        b64::URL_SAFE_NO_PAD.encode(serialized)
-    }
+//     let write_txn = state.db().begin_write()?;
+//     {
+//         let mut table = write_txn.open_table(tables.ephemeral())?;
+//         table.insert(entry.key().as_str(), entry.value.unwrap().as_str())?;
+//     }
+//     write_txn.commit()?;
 
-    pub fn verify_encoded(
-        encoded: &str,
-        verify_keys: &[EphemeralKey],
-    ) -> Result<Self, VerifyFailed> {
-        let mut bytes = b64::URL_SAFE_NO_PAD
-            .decode(encoded)
-            .map_err(|_e| VerifyFailed)?;
-        if bytes.len() < 32 {
-            return Err(VerifyFailed);
-        }
-        let tag = bytes.split_off(bytes.len() - 32);
+//     Ok(())
+// }
 
-        crypto::verify_ephemeral(&bytes, verify_keys, &tag)?;
-        Ok(Self {
-            bytes,
-            phantom: PhantomData,
-        })
-    }
+// /// Reads the provided key, removing it in the process. Should be used only for ephemeral, one-time keys.
+// /// Do not use for keys which are supposed to represent revocations, as they will be removed, voiding the revocation.
+// pub fn pop_ephemeral(
+//     state: &impl State,
+//     application: &str,
+//     key: &str,
+//     allowed_types: Vec<EphemeralType>,
+// ) -> Result<Option<EphemeralEntry>, DbError> {
+//     let empty_entry = EphemeralEntry::without_value(key);
 
-    pub fn content<'a>(
-        &'a self,
-        application: &str,
-    ) -> Result<EphemeralContent<'a, T>, VerifyFailed> {
-        let content = EphemeralContent::deserialize(&self.bytes)?;
+//     if allowed_types.iter().all(|t| *t != empty_entry.eph_type) {
+//         panic!("Types do no match for state!")
+//     }
+//     let tables = state.app_tables(application);
+//     let write_txn = state.db().begin_write()?;
+//     let eph_data = {
+//         let mut table = write_txn.open_table(tables.ephemeral())?;
+//         let access = table.remove(key)?;
+//         access.map(|d| {
+//             let value = d.value();
 
-        if content.application != application {
-            return Err(VerifyFailed);
-        }
+//             empty_entry.with_value(value)
+//         })
+//     };
+//     write_txn.commit()?;
 
-        Ok(content)
-    }
-}
-
-#[derive(Debug)]
-pub struct EphemeralContent<'a, T: ByteSerial> {
-    pub user_id: &'a str,
-    pub application: &'a str,
-    /// This can be used for the either the state itself or a hash of the state (based on the EphemeralType), the Ephemeral is only
-    /// valid if the state is unchanged from when the Ephemeral was handed out
-    pub state: &'a [u8],
-    pub eph_type: EphemeralType,
-    pub data: &'a BytePacked<T>,
-}
-
-impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
-    pub fn new(
-        user_id: &'a str,
-        application: &'a str,
-        state: &'a [u8],
-        eph_type: EphemeralType,
-        data: &'a BytePacked<T>,
-    ) -> Self {
-        Self {
-            user_id,
-            application,
-            state,
-            eph_type,
-            data,
-        }
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = Vec::new();
-
-        rmp::encode::write_array_len(&mut buf, 5).unwrap();
-        rmp::encode::write_str(&mut buf, self.user_id).unwrap();
-        rmp::encode::write_str(&mut buf, self.application).unwrap();
-        rmp::encode::write_bin(&mut buf, self.state).unwrap();
-        let eph_type = self.eph_type.key_name();
-        rmp::encode::write_str(&mut buf, eph_type).unwrap();
-        let data_bytes = self.data.as_bytes();
-        rmp::encode::write_bin(&mut buf, data_bytes).unwrap();
-
-        buf
-    }
-
-    pub fn deserialize(bytes: &'a [u8]) -> Result<Self, VerifyFailed> {
-        let mut cursor = Cursor::new(bytes);
-
-        let len = rmp::decode::read_array_len(&mut cursor).map_err(|_| VerifyFailed)?;
-        if len != 5 {
-            return Err(VerifyFailed);
-        }
-        let user_id = rmp_read_str(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
-        let application = rmp_read_str(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
-        let state = rmp_read_bin(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
-        let eph_type = rmp_read_str(bytes, &mut cursor).unwrap();
-        let eph_type = EphemeralType::from_key_name(eph_type).map_err(|_| VerifyFailed)?;
-        let data = rmp_read_bin(bytes, &mut cursor).map_err(|_| VerifyFailed)?;
-        let data: &BytePacked<T> = BytePacked::new(data);
-        Ok(Self {
-            user_id,
-            application,
-            state,
-            eph_type,
-            data,
-        })
-    }
-}
-
-pub struct EphemeralEntry {
-    pub user_id: String,
-    pub expires: u64,
-    entropy: String,
-    pub eph_type: EphemeralType,
-    pub value: Option<String>,
-}
-
-impl EphemeralEntry {
-    // If expires_in is set to None, it will default to 30 minutes
-    pub fn new(
-        user_id: &str,
-        eph_type: EphemeralType,
-        entropy: String,
-        expires_in: Option<u64>,
-        value: String,
-    ) -> Self {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let expires = expires_in.unwrap_or(1800) + now;
-
-        Self {
-            user_id: user_id.into(),
-            entropy,
-            eph_type,
-            expires,
-            value: Some(value),
-        }
-    }
-
-    fn without_value(key: &str) -> Self {
-        let split: Vec<&str> = key.split(':').collect();
-
-        if split.len() < 4 {
-            panic!("Entry does not have correct format!")
-        }
-
-        let user_id = split[0..(split.len() - 3)].join(":");
-        let eph_type = split[split.len() - 3].to_owned();
-        let entropy = split[split.len() - 2].to_owned();
-
-        // 384 bits nonce, i.e. 48 bytes, 64 base64url characters, which are all 1 byte, so 64 bytes
-        assert_eq!(entropy.len(), 64);
-
-        let expires: u64 = split[split.len() - 1].parse().unwrap();
-
-        Self {
-            user_id,
-            expires,
-            entropy,
-            eph_type: EphemeralType::from_key_name(&eph_type).unwrap(),
-            value: None,
-        }
-    }
-
-    fn with_value(self, value: &str) -> Self {
-        Self {
-            user_id: self.user_id,
-            expires: self.expires,
-            entropy: self.entropy,
-            eph_type: self.eph_type,
-            value: Some(value.to_owned()),
-        }
-    }
-
-    pub fn key(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.user_id,
-            self.eph_type.key_name(),
-            self.entropy,
-            self.expires
-        )
-    }
-}
-
-pub fn write_ephemeral(
-    state: &impl State,
-    application: &str,
-    entry: EphemeralEntry,
-) -> Result<(), DbError> {
-    let tables = state.app_tables(application);
-
-    let write_txn = state.db().begin_write()?;
-    {
-        let mut table = write_txn.open_table(tables.ephemeral())?;
-        table.insert(entry.key().as_str(), entry.value.unwrap().as_str())?;
-    }
-    write_txn.commit()?;
-
-    Ok(())
-}
-
-/// Reads the provided key, removing it in the process. Should be used only for ephemeral, one-time keys.
-/// Do not use for keys which are supposed to represent revocations, as they will be removed, voiding the revocation.
-pub fn pop_ephemeral(
-    state: &impl State,
-    application: &str,
-    key: &str,
-    allowed_types: Vec<EphemeralType>,
-) -> Result<Option<EphemeralEntry>, DbError> {
-    let empty_entry = EphemeralEntry::without_value(key);
-
-    if allowed_types.iter().all(|t| *t != empty_entry.eph_type) {
-        panic!("Types do no match for state!")
-    }
-    let tables = state.app_tables(application);
-    let write_txn = state.db().begin_write()?;
-    let eph_data = {
-        let mut table = write_txn.open_table(tables.ephemeral())?;
-        let access = table.remove(key)?;
-        access.map(|d| {
-            let value = d.value();
-
-            empty_entry.with_value(value)
-        })
-    };
-    write_txn.commit()?;
-
-    Ok(eph_data)
-}
+//     Ok(eph_data)
+// }
 
 pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
     let buf = login.serialize();

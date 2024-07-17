@@ -20,8 +20,7 @@ pub struct PakeResponse {
 pub struct RegisterFinishRequest {
     pub application: String,
     pub opaque_request: String,
-    pub start_nonce: String,
-    pub claims_proof: Option<Encoded<Proof<Claims>>>,
+    pub action_nonce: Encoded<Ephemeral<()>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

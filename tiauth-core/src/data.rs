@@ -913,7 +913,7 @@ where
                 action,
                 target,
             },
-            nonce,
+            nonce: nonce.to_vec(),
             target_data,
             data,
         }

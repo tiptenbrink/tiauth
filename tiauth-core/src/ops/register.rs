@@ -3,9 +3,13 @@ use opaque_borink::{server::register_server, Error as OpaqueError};
 use crate::crypto::VerifyFailed;
 use crate::data::Claims;
 use crate::data::InvalidProof;
+use crate::encoded::Encodable;
 use crate::error::{OneOfTo, WrapErrorOneOf};
+use crate::proof::Ephemeral;
+use crate::proof::EphemeralType;
+use crate::proof::InvalidEphemeral;
 use crate::state::State;
-use crate::store::{login_change_ephemeral, Ephemeral, EphemeralType, SetLoginError};
+use crate::store::{login_change_ephemeral, SetLoginError};
 use crate::{BytePacked, KeyState};
 use opaque_borink::server::register_server_finish;
 use redb::{Error as DbError, ReadableTable};
@@ -20,7 +24,7 @@ pub fn start_register(
     application: &str,
     request: &str,
     user_id: &str,
-) -> Result<(String, String), OneOf<(DbError, OpaqueError)>> {
+) -> Result<(String, Ephemeral<()>), OneOf<(DbError, OpaqueError)>> {
     let response = register_server(&state.private().opaque, request, user_id).to_one_of_twond()?;
 
     // let entropy = nonce_384(&mut state.rng());
@@ -33,7 +37,7 @@ pub fn start_register(
     // );
     let key = state.keys().ephemeral_key(application);
 
-    let ephemeral = Ephemeral::tagged_encoded(
+    let ephemeral = Ephemeral::create(
         &key,
         user_id,
         application,
@@ -50,65 +54,60 @@ type FinishError = OneOf<(
     OpaqueError,
     InvalidProof,
     SetLoginError,
-    VerifyFailed,
+    InvalidEphemeral,
 )>;
 
 pub fn register_finish(
     state: &impl State,
     application: &str,
     request: &str,
-    register_flow_nonce: &str,
+    register_eph: &Ephemeral<()>,
 ) -> Result<(), FinishError> {
     let password_file = register_server_finish(request)
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
     let (verify_keys, _) = state.keys().eph_veri_keys(application);
-    let eph = Ephemeral::<()>::verify_encoded(register_flow_nonce, &verify_keys);
 
-    if let Ok(eph) = eph {
-        let content = eph
-            .content(application)
-            .to_one_of()
-            .map_err(OneOf::broaden)?;
-        let write_txn = state
-            .db()
-            .begin_write()
+    let content = register_eph.verify(&verify_keys, application)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
+
+    let write_txn = state
+        .db()
+        .begin_write()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
+
+    {
+        let mut table = write_txn
+            .open_table(state.app_tables(application).users())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
-
+        let new_login_bytes = if let Some(login_bytes) = table
+            .get(content.user_id)
+            .into_one_of::<DbError>()
+            .map_err(OneOf::broaden)?
         {
-            let mut table = write_txn
-                .open_table(state.app_tables(application).users())
-                .into_one_of::<DbError>()
-                .map_err(OneOf::broaden)?;
-            let new_login_bytes = if let Some(login_bytes) = table
-                .get(content.user_id)
-                .into_one_of::<DbError>()
+            login_change_ephemeral(&content, Some(login_bytes.value()), password_file)
                 .map_err(OneOf::broaden)?
-            {
-                login_change_ephemeral(&content, Some(login_bytes.value()), password_file)
-                    .map_err(OneOf::broaden)?
-                    .serialize()
-            } else {
-                login_change_ephemeral(&content, None, password_file)
-                    .map_err(OneOf::broaden)?
-                    .serialize()
-            };
-
-            table
-                .insert(content.user_id, new_login_bytes.as_slice())
-                .into_one_of::<DbError>()
-                .map_err(OneOf::broaden)?;
+                .serialize()
+        } else {
+            login_change_ephemeral(&content, None, password_file)
+                .map_err(OneOf::broaden)?
+                .serialize()
         };
 
-        write_txn
-            .commit()
+        table
+            .insert(content.user_id, new_login_bytes.as_slice())
             .into_one_of::<DbError>()
             .map_err(OneOf::broaden)?;
-    } else {
-        return Err(OneOf::new(VerifyFailed));
-    }
+    };
+
+    write_txn
+        .commit()
+        .into_one_of::<DbError>()
+        .map_err(OneOf::broaden)?;
     // // It can either be an entry from register_start (NewUser), or entry from reset_password (SetPassword), which cleared the password,
     // // or from change_password (ChangePassword)
     // else if let Some(entry) = pop_ephemeral(
@@ -196,10 +195,7 @@ pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
     use crate::{
-        data::{Login, LoginPassword},
-        state::test_util::TestState,
-        store::{get_login, set_login},
-        ByteSerial,
+        data::{Login, LoginPassword}, encoded::Encoded, state::test_util::TestState, store::{get_login, set_login}, ByteSerial
     };
 
     use super::*;
@@ -209,18 +205,17 @@ pub mod test_util {
         user_id: &str,
         application: &str,
         password: &str,
-        alt_nonce: Option<&str>,
+        alt_eph: Option<Ephemeral<()>>,
         claims_set: Option<Claims>,
     ) {
         let (request, client_state) = client_register(password).unwrap();
         let (server_response, nonce) =
             start_register(state, application, &request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
-
         // Use alternative if provided
-        let nonce = alt_nonce.unwrap_or(&nonce);
+        let nonce = alt_eph.unwrap_or(nonce);
 
-        register_finish(state, application, &request, nonce).unwrap();
+        register_finish(state, application, &request, &nonce).unwrap();
 
         if let Some(claims_set) = claims_set {
             let LoginPassword {

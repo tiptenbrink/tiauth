@@ -23,7 +23,7 @@ use crate::crypto::{
 use crate::data::Application;
 use crate::store::{open_db, AppTable, TableStore, APPS, SERVER};
 
-pub trait GovernorState {
+pub trait GovernorState: State {
     type Readonly;
 
     fn add_app_to_state(&mut self, application: &Application);
@@ -50,15 +50,15 @@ pub trait GovernorState {
         Ok(())
     }
 
-    fn app_tables(&self, application: &str) -> AppTable;
+    // fn app_tables(&self, application: &str) -> AppTable;
 
-    fn app_key(&self, application: &str) -> PublicKey;
+    // fn app_key(&self, application: &str) -> PublicKey;
 
-    fn apps(&self) -> Vec<&String>;
+    // fn apps(&self) -> Vec<&String>;
 
-    fn db(&self) -> &Database;
+    // fn db(&self) -> &Database;
 
-    fn keys(&self) -> &impl GovernorKeyState<2>;
+    // fn keys(&self) -> &impl GovernorKeyState<2>;
 
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2>;
 
@@ -66,7 +66,7 @@ pub trait GovernorState {
         StdRng::from_entropy()
     }
 
-    fn private(&self) -> &PrivateState;
+    // fn private(&self) -> &PrivateState;
 
     fn from_init(init_state: InitState<2>) -> Self;
 
@@ -104,31 +104,31 @@ pub trait State {
     }
 }
 
-impl<T: GovernorState> State for T {
-    fn app_tables(&self, application: &str) -> AppTable {
-        self.app_tables(application)
-    }
+// impl<T: GovernorState> State for T {
+//     fn app_tables(&self, application: &str) -> AppTable {
+//         self.app_tables(application)
+//     }
 
-    fn app_key(&self, application: &str) -> PublicKey {
-        self.app_key(application)
-    }
+//     fn app_key(&self, application: &str) -> PublicKey {
+//         self.app_key(application)
+//     }
 
-    fn db(&self) -> &Database {
-        self.db()
-    }
+//     fn db(&self) -> &Database {
+//         self.db()
+//     }
 
-    fn private(&self) -> &PrivateState {
-        self.private()
-    }
+//     fn private(&self) -> &PrivateState {
+//         self.private()
+//     }
 
-    fn apps(&self) -> Vec<&String> {
-        self.apps()
-    }
+//     fn apps(&self) -> Vec<&String> {
+//         self.apps()
+//     }
 
-    fn keys(&self) -> &impl KeyState<2> {
-        self.keys()
-    }
-}
+//     fn keys(&self) -> &impl KeyState<2> {
+//         self.keys()
+//     }
+// }
 
 impl<const SN: usize, T: GovernorKeyState<SN>> KeyState<SN> for T {
     fn opaque(&self) -> &str {
@@ -351,16 +351,7 @@ fn register_application_tables(map: &mut HashMap<String, TableStore>, applicatio
     );
 }
 
-impl GovernorState for CoreState {
-    type Readonly = CoreState;
-
-    fn add_app_to_state(&mut self, application: &Application) {
-        register_application_tables(&mut self.tables, &application.name);
-
-        self.app_keys
-            .insert(application.name.clone(), application.public_key());
-    }
-
+impl State for CoreState {
     fn app_tables(&self, application: &str) -> AppTable {
         let store = self.tables.get(application).unwrap();
         AppTable::new(store)
@@ -374,6 +365,38 @@ impl GovernorState for CoreState {
         &self.private
     }
 
+    fn app_key(&self, application: &str) -> PublicKey {
+        self.app_keys.get(application).unwrap().clone()
+    }
+
+
+
+    fn apps(&self) -> Vec<&String> {
+        self.tables.keys().collect()
+    }
+
+    fn keys(&self) -> &impl KeyState<2> {
+        &self.key_state
+    }
+
+}
+
+impl GovernorState for CoreState {
+    type Readonly = CoreState;
+
+    fn add_app_to_state(&mut self, application: &Application) {
+        register_application_tables(&mut self.tables, &application.name);
+
+        self.app_keys
+            .insert(application.name.clone(), application.public_key());
+    }
+
+    fn remove_app_from_state(&mut self, application: &str) {
+        self.app_keys.remove(application);
+        self.tables.remove(application);
+    }
+
+
     fn from_init(init_state: InitState<2>) -> Self {
         Self {
             tables: HashMap::new(),
@@ -384,22 +407,7 @@ impl GovernorState for CoreState {
         }
     }
 
-    fn app_key(&self, application: &str) -> PublicKey {
-        self.app_keys.get(application).unwrap().clone()
-    }
 
-    fn remove_app_from_state(&mut self, application: &str) {
-        self.app_keys.remove(application);
-        self.tables.remove(application);
-    }
-
-    fn apps(&self) -> Vec<&String> {
-        self.tables.keys().collect()
-    }
-
-    fn keys(&self) -> &impl GovernorKeyState<2> {
-        &self.key_state
-    }
 
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
         &mut self.key_state
@@ -778,13 +786,7 @@ pub mod test_util {
         }
     }
 
-    impl GovernorState for TestState {
-        type Readonly = TestState;
-
-        fn add_app_to_state(&mut self, _: &Application) {
-            unimplemented!("Do not use this function for TestState. Register through `setup_test`.")
-        }
-
+    impl State for TestState {
         fn app_tables(&self, application: &str) -> AppTable {
             let store = self.tables.get(application).unwrap();
             AppTable::new(store)
@@ -798,13 +800,31 @@ pub mod test_util {
             &self.private
         }
 
+        fn app_key(&self, application: &str) -> PublicKey {
+            self.app_public_keys.get(application).unwrap().clone()
+        }
+
+        fn apps(&self) -> Vec<&String> {
+            self.tables.keys().collect()
+        }
+
+        fn keys(&self) -> &impl KeyState<2> {
+            &self.key_state
+        }
+    }
+
+    impl GovernorState for TestState {
+        type Readonly = TestState;
+
+        fn add_app_to_state(&mut self, _: &Application) {
+            unimplemented!("Do not use this function for TestState. Register through `setup_test`.")
+        }
+
         fn from_init(_: InitState<2>) -> Self {
             unimplemented!("Do not use this function for TestState! Use `setup_test`.")
         }
 
-        fn app_key(&self, application: &str) -> PublicKey {
-            self.app_public_keys.get(application).unwrap().clone()
-        }
+
 
         fn setup<P: AsRef<Path>>(_: P, _: u64) -> Result<Self, DbError>
         where
@@ -817,13 +837,7 @@ pub mod test_util {
             unimplemented!("Do not use this function for TestState!")
         }
 
-        fn apps(&self) -> Vec<&String> {
-            self.tables.keys().collect()
-        }
 
-        fn keys(&self) -> &impl GovernorKeyState<2> {
-            &self.key_state
-        }
 
         fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
             &mut self.key_state
