@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose as b64, Engine as _};
 use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, io::Cursor, marker::PhantomData, path::Path, time::SystemTime};
+use std::{collections::HashMap, fmt::{write, Display}, io::Cursor, marker::PhantomData, path::Path, sync::Arc, time::SystemTime};
 use terrors::OneOf;
 use thiserror::Error;
 
@@ -11,72 +11,72 @@ use crate::{
     }, encoded::Encodable, error::WrapErrorOneOf, proof::{EphemeralContent, EphemeralType}, state::State, util::{combine_encode, rmp_read_bin, rmp_read_str}, BytePacked, Claims
 };
 
-pub type TableStore = (String, String, String);
+// pub type TableStore = (String, String, String);
 
-pub struct AppTable<'a> {
-    store: &'a TableStore,
-}
+// pub struct AppTable<'a> {
+//     store: &'a TableStore,
+// }
 
-impl<'a> AppTable<'a> {
-    pub fn new(store: &'a TableStore) -> Self {
-        Self { store }
-    }
+// impl<'a> AppTable<'a> {
+//     pub fn new(store: &'a TableStore) -> Self {
+//         Self { store }
+//     }
 
-    pub fn sessions(&self) -> TableDefinition<'_, &'static [u8], &'static str> {
-        let table_name = &self.store.0;
+//     pub fn sessions(&self) -> TableDefinition<'_, &'static [u8], &'static str> {
+//         let table_name = &self.store.0;
 
-        TableDefinition::new(table_name)
-    }
+//         TableDefinition::new(table_name)
+//     }
 
-    pub fn users(&self) -> TableDefinition<'_, &'static str, &'static [u8]> {
-        let table_name = &self.store.1;
+//     pub fn users(&self) -> TableDefinition<'_, &'static str, &'static [u8]> {
+//         let table_name = &self.store.1;
 
-        TableDefinition::new(table_name)
-    }
+//         TableDefinition::new(table_name)
+//     }
 
-    pub fn ephemeral(&self) -> TableDefinition<'_, &'static str, &'static str> {
-        let table_name = &self.store.2;
+//     pub fn ephemeral(&self) -> TableDefinition<'_, &'static str, &'static str> {
+//         let table_name = &self.store.2;
 
-        TableDefinition::new(table_name)
-    }
+//         TableDefinition::new(table_name)
+//     }
 
-    pub fn all(&self) -> Vec<String> {
-        let store = self.store.clone();
-        vec![store.0, store.1, store.2]
-    }
-}
+//     pub fn all(&self) -> Vec<String> {
+//         let store = self.store.clone();
+//         vec![store.0, store.1, store.2]
+//     }
+// }
 
-pub trait Tables {
-    fn app(&self, application: &str) -> AppTable;
-}
+// pub trait Tables {
+//     fn app(&self, application: &str) -> AppTable;
+// }
 
-#[derive(Debug, Clone)]
-pub struct MapTables {
-    tables: HashMap<String, TableStore>,
-}
+// #[derive(Debug, Clone)]
+// pub struct MapTables {
+//     tables: HashMap<String, TableStore>,
+// }
 
-impl Default for MapTables {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for MapTables {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
-impl MapTables {
-    pub fn new() -> Self {
-        Self {
-            tables: HashMap::new(),
-        }
-    }
-}
+// impl MapTables {
+//     pub fn new() -> Self {
+//         Self {
+//             tables: HashMap::new(),
+//         }
+//     }
+// }
 
-impl Tables for MapTables {
-    fn app(&self, application: &str) -> AppTable {
-        let store = self.tables.get(application).unwrap();
-        AppTable::new(store)
-    }
-}
+// impl Tables for MapTables {
+//     fn app(&self, application: &str) -> AppTable {
+//         let store = self.tables.get(application).unwrap();
+//         AppTable::new(store)
+//     }
+// }
 
-pub fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, DbError> {
+fn open_db<P: AsRef<Path>>(path: P) -> Result<Database, DbError> {
     Ok(Database::create(path)?)
 }
 
@@ -85,6 +85,64 @@ pub const SERVER: TableDefinition<&str, String> = TableDefinition::new("server")
 
 /// App identities
 pub const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
+
+
+#[derive(Debug)]
+struct LoadErrorContext {
+    address: String,
+    inner: String
+}
+
+
+#[derive(Error, Debug)]
+pub enum StoreError {
+    #[error("Failed to load database at address {} due to underlying error: {}", .0.address, .0.inner)]
+    LoadError(Box<LoadErrorContext>),
+}
+
+#[derive(Clone)]
+pub struct Store {
+    database: Arc<Database>
+}
+
+impl Store {
+    pub fn load(address: StoreAddress) -> Result<Self, StoreError> {
+        let db = open_db(&address.0)
+            .map_err(|e| {
+                StoreError::LoadError(Box::new(LoadErrorContext { address: address.to_string(), inner: e.to_string() }))
+            })?;
+
+        Ok(Self {
+            database: Arc::new(db)
+        })
+    }
+}
+
+pub struct StoreAddress(String);
+
+impl Display for StoreAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub const KEYS: TableDefinition<&str, &[u8]> = TableDefinition::new("keys");
+
+struct Write {
+    
+}
+
+
+fn get_or_create_string() {
+
+}
+
+
+trait KeyStore {
+    fn get_opaque_or_create() {
+
+    }
+}
 
 
 // pub struct EphemeralEntry {

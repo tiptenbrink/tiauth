@@ -59,3 +59,7 @@ required-features = ["test"]
 [[bin]]
 name = "multi_db"
 required-features = ["test"]
+
+[[bin]]
+name = "shared_counter"
+required-features = ["test"]

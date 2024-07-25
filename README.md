@@ -215,6 +215,14 @@ Opaque,
 
 
 
+
+
+
+For ephemeral login we need:
+- durable version counter that is incremented on each login
+
+
+
 ### Subset algo results
 
 ```
