@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose as b64, Engine as _};
-use redb::{Database, Error as DbError, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{Database, Error as DbError, Key, ReadTransaction, ReadableTable, Table, TableDefinition, TransactionError, WriteTransaction};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fmt::{write, Display}, io::Cursor, marker::PhantomData, path::Path, sync::Arc, time::SystemTime};
 use terrors::OneOf;
@@ -93,11 +93,26 @@ struct LoadErrorContext {
     inner: String
 }
 
+#[derive(Debug)]
+struct InnerStringContext {
+    inner: String
+}
+
+type StringContext = Box<InnerStringContext>;
+
 
 #[derive(Error, Debug)]
 pub enum StoreError {
     #[error("Failed to load database at address {} due to underlying error: {}", .0.address, .0.inner)]
     LoadError(Box<LoadErrorContext>),
+    #[error("Failed to open transaction due to underlying error: {}", .0.inner)]
+    OpenTransactionError(StringContext)
+}
+
+impl From<TransactionError> for StoreError {
+    fn from(value: TransactionError) -> Self {
+        Self::OpenTransactionError(Box::new(InnerStringContext { inner: value.to_string() }))
+    }
 }
 
 #[derive(Clone)]
@@ -116,6 +131,16 @@ impl Store {
             database: Arc::new(db)
         })
     }
+
+    pub fn open_tx(&self) -> Result<WriteTx, StoreError> {
+        let tx = self.database.begin_write()?;
+    
+        Ok(WriteTx {
+            tx,
+            // token: TxToken::new(),
+            // tables: TxTables::default()
+        })
+    }
 }
 
 pub struct StoreAddress(String);
@@ -126,15 +151,87 @@ impl Display for StoreAddress {
     }
 }
 
-pub const KEYS: TableDefinition<&str, &[u8]> = TableDefinition::new("keys");
+type KeysK = &'static str;
+type KeysV = &'static [u8];
+pub const KEYS: TableDefinition<KeysK, KeysV> = TableDefinition::new("keys");
 
-struct Write {
+
+use tx::{TxToken, WriteTx};
+
+mod tx {
+    use std::marker::PhantomData;
+
+    struct TxGuard;
+
+    pub struct TxToken<'tx> {
+        phantom: PhantomData<&'tx TxGuard>
+    }
+    
+    impl<'tx> TxToken<'tx> {
+        fn new() -> Self {
+            Self {
+                phantom: PhantomData
+            }
+        }
+    }
+
+    pub struct WriteTx {
+        pub(super) tx: WriteTransaction,
+        // token: TxToken<'tx>,
+        // tables: TxTables<'tx>
+    }
+    
+    use redb::WriteTransaction;
+
+    use super::TxTables;
+    
+    impl WriteTx {
+        pub(super) fn token<'tx>(&'tx self) -> TxToken<'tx> {
+            TxToken::new()
+        }
+
+        pub(super) fn tables<'tx>(&'tx self) -> TxTables<'tx> {
+            TxTables { tx: &self, keys: None }
+        }
+    }
+}
+
+struct TxTables<'tx> {
+    tx: &'tx WriteTx,
+    keys: Option<Table<'tx, KeysK, KeysV>>
+}
+
+trait TableKey {
     
 }
 
+impl Key for TableKey {
+    
+}
 
-fn get_or_create_string() {
+struct TxTable<'tx, K, V> {
+    table: Table<'tx, K, V>
+}
 
+impl<'tx> TxTables<'tx> {
+    fn keys(&mut self) -> &mut Table<'tx, KeysK, KeysV> {
+        let tx = &self.tx.tx;
+        let table = self.keys.get_or_insert_with(|| {
+            let table = tx.open_table(KEYS).unwrap();
+
+            table
+        });
+
+        table
+
+    }
+}
+
+
+fn get_or_create(table: &mut ) {
+    let mut tables = tx.tables();
+
+    let keys = tables.keys();
 }
 
 
@@ -269,19 +366,19 @@ trait KeyStore {
 //     Ok(eph_data)
 // }
 
-pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
-    let buf = login.serialize();
-    let user_id = login.user_id.as_str();
-    let tables = state.app_tables(application);
-    let write_txn = state.db().begin_write()?;
-    {
-        let mut table = write_txn.open_table(tables.users())?;
-        table.insert(user_id, buf.as_slice())?;
-    }
-    write_txn.commit()?;
+// pub fn set_login(state: &impl State, login: &Login, application: &str) -> Result<(), DbError> {
+//     let buf = login.serialize();
+//     let user_id = login.user_id.as_str();
+//     let tables = state.app_tables(application);
+//     let write_txn = state.db().begin_write()?;
+//     {
+//         let mut table = write_txn.open_table(tables.users())?;
+//         table.insert(user_id, buf.as_slice())?;
+//     }
+//     write_txn.commit()?;
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 #[derive(Error, Debug)]
 pub enum LoginFieldError {
@@ -370,172 +467,172 @@ pub fn login_change_ephemeral<'a, T: ByteSerial>(
     Ok(login)
 }
 
-/// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
-/// If `create_user` is set to true, it will create a user when the user does not exist. Otherwise, it
-/// will return a [LoginFieldError::AlreadyExists]. When set to false, it will instead return [LoginFieldError::NotFound]
-/// when the user does not exist.
-pub fn set_login_field_write(
-    write_txn: &WriteTransaction,
-    state: &impl State,
-    application: &str,
-    user_id: &str,
-    password_file: Option<String>,
-    claims: Option<impl SerializedAs<Claims>>,
-    options: SetLoginOptions,
-) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
-    // One of the two must be set
-    assert!(password_file.is_some() || claims.is_some());
+// /// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
+// /// If `create_user` is set to true, it will create a user when the user does not exist. Otherwise, it
+// /// will return a [LoginFieldError::AlreadyExists]. When set to false, it will instead return [LoginFieldError::NotFound]
+// /// when the user does not exist.
+// pub fn set_login_field_write(
+//     write_txn: &WriteTransaction,
+//     state: &impl State,
+//     application: &str,
+//     user_id: &str,
+//     password_file: Option<String>,
+//     claims: Option<impl SerializedAs<Claims>>,
+//     options: SetLoginOptions,
+// ) -> Result<(), OneOf<(DbError, LoginFieldError)>> {
+//     // One of the two must be set
+//     assert!(password_file.is_some() || claims.is_some());
 
-    let tables = state.app_tables(application);
-    let mut table = write_txn.open_table(tables.users()).to_one_of_two()?;
+//     let tables = state.app_tables(application);
+//     let mut table = write_txn.open_table(tables.users()).to_one_of_two()?;
 
-    let user_bytes = {
-        let access = table.get(user_id).to_one_of_two()?;
+//     let user_bytes = {
+//         let access = table.get(user_id).to_one_of_two()?;
 
-        if let Some(access) = access {
-            let user_bytes = access.value();
-            let mut user: Login = Login::deserialize(user_bytes);
-            if options.create_user {
-                return Err(OneOf::new(LoginFieldError::AlreadyExists(
-                    user_id.to_owned(),
-                )));
-            }
-            if options.require_unset_password && !user.password_file.is_empty() {
-                return Err(OneOf::new(LoginFieldError::PasswordSet(user_id.to_owned())));
-            }
+//         if let Some(access) = access {
+//             let user_bytes = access.value();
+//             let mut user: Login = Login::deserialize(user_bytes);
+//             if options.create_user {
+//                 return Err(OneOf::new(LoginFieldError::AlreadyExists(
+//                     user_id.to_owned(),
+//                 )));
+//             }
+//             if options.require_unset_password && !user.password_file.is_empty() {
+//                 return Err(OneOf::new(LoginFieldError::PasswordSet(user_id.to_owned())));
+//             }
 
-            if let Some(password_file) = password_file {
-                user.password_file = password_file;
-            }
-            if let Some(claims) = claims {
-                user.claims = claims.serialized();
-                user.serialize()
-            } else {
-                user.serialize()
-            }
-        } else if options.create_user {
-            // Password file must contain value when creating user!
-            assert!(password_file.is_some());
-            if let Some(claims) = claims {
-                let login = Login {
-                    user_id: user_id.to_owned(),
-                    password_file: password_file.unwrap(),
-                    claims: claims.serialized(),
-                };
+//             if let Some(password_file) = password_file {
+//                 user.password_file = password_file;
+//             }
+//             if let Some(claims) = claims {
+//                 user.claims = claims.serialized();
+//                 user.serialize()
+//             } else {
+//                 user.serialize()
+//             }
+//         } else if options.create_user {
+//             // Password file must contain value when creating user!
+//             assert!(password_file.is_some());
+//             if let Some(claims) = claims {
+//                 let login = Login {
+//                     user_id: user_id.to_owned(),
+//                     password_file: password_file.unwrap(),
+//                     claims: claims.serialized(),
+//                 };
 
-                login.serialize()
-            } else {
-                let claims = Claims::empty().serialize();
-                let login = Login {
-                    user_id: user_id.to_owned(),
-                    password_file: password_file.unwrap(),
-                    claims: claims.as_packed(),
-                };
+//                 login.serialize()
+//             } else {
+//                 let claims = Claims::empty().serialize();
+//                 let login = Login {
+//                     user_id: user_id.to_owned(),
+//                     password_file: password_file.unwrap(),
+//                     claims: claims.as_packed(),
+//                 };
 
-                login.serialize()
-            }
-        } else {
-            return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
-        }
-    };
+//                 login.serialize()
+//             }
+//         } else {
+//             return Err(OneOf::new(LoginFieldError::NotFound(user_id.to_owned())));
+//         }
+//     };
 
-    table
-        .insert(user_id, user_bytes.as_slice())
-        .to_one_of_two()?;
+//     table
+//         .insert(user_id, user_bytes.as_slice())
+//         .to_one_of_two()?;
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-pub fn get_login(
-    state: &impl State,
-    application: &str,
-    user_id: &str,
-) -> Result<Option<LoginPassword>, DbError> {
-    let read_txn = state.db().begin_read()?;
-    let tables = state.app_tables(application);
+// pub fn get_login(
+//     state: &impl State,
+//     application: &str,
+//     user_id: &str,
+// ) -> Result<Option<LoginPassword>, DbError> {
+//     let read_txn = state.db().begin_read()?;
+//     let tables = state.app_tables(application);
 
-    let table = read_txn.open_table(tables.users())?;
+//     let table = read_txn.open_table(tables.users())?;
 
-    let access = table.get(user_id)?;
+//     let access = table.get(user_id)?;
 
-    if let Some(access) = access {
-        let login_bytes = access.value();
+//     if let Some(access) = access {
+//         let login_bytes = access.value();
 
-        Ok(Some(LoginPassword::deserialize_from_login(login_bytes)))
-    } else {
-        Ok(None)
-    }
-}
+//         Ok(Some(LoginPassword::deserialize_from_login(login_bytes)))
+//     } else {
+//         Ok(None)
+//     }
+// }
 
-pub fn get_login_claims_bytes(
-    state: &impl State,
-    application: &str,
-    user_id: &str,
-    requested_claims: SessionClaims,
-) -> Result<Option<ByteOwned<Claims>>, DbError> {
-    let read_txn = state.db().begin_read()?;
-    let tables = state.app_tables(application);
+// pub fn get_login_claims_bytes(
+//     state: &impl State,
+//     application: &str,
+//     user_id: &str,
+//     requested_claims: SessionClaims,
+// ) -> Result<Option<ByteOwned<Claims>>, DbError> {
+//     let read_txn = state.db().begin_read()?;
+//     let tables = state.app_tables(application);
 
-    let table = read_txn.open_table(tables.users())?;
+//     let table = read_txn.open_table(tables.users())?;
 
-    let access = table.get(user_id)?;
+//     let access = table.get(user_id)?;
 
-    if let Some(access) = access {
-        let login_bytes = access.value();
+//     if let Some(access) = access {
+//         let login_bytes = access.value();
 
-        let login = Login::deserialize(login_bytes);
+//         let login = Login::deserialize(login_bytes);
 
-        let claim_bytes = if let SessionClaims::Some(subset) = requested_claims {
-            // This is very cheap since it's a zero-copy deserialization
-            let claim_view = login.claims.deserialize();
-            println!("claim_view: {:?}", claim_view);
-            claim_view.subset_serialize(&subset)
-        } else {
-            // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function
-            login.claims.to_owned()
-        };
+//         let claim_bytes = if let SessionClaims::Some(subset) = requested_claims {
+//             // This is very cheap since it's a zero-copy deserialization
+//             let claim_view = login.claims.deserialize();
+//             println!("claim_view: {:?}", claim_view);
+//             claim_view.subset_serialize(&subset)
+//         } else {
+//             // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function
+//             login.claims.to_owned()
+//         };
 
-        Ok(Some(claim_bytes))
-    } else {
-        Ok(None)
-    }
-}
+//         Ok(Some(claim_bytes))
+//     } else {
+//         Ok(None)
+//     }
+// }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::Login;
-    use crate::state::test_util::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::data::Login;
+//     use crate::state::test_util::*;
 
-    #[test]
-    fn login_set_read() {
-        let claims_bytes = Claims::new(vec![
-            ("claim1", "is_this"),
-            ("claim2", "is_that"),
-            ("claim3", "is_thatd"),
-        ])
-        .serialize();
-        let value = Login {
-            user_id: "hi".to_owned(),
-            password_file: "pw".to_owned(),
-            claims: claims_bytes.as_packed(),
-        };
+//     #[test]
+//     fn login_set_read() {
+//         let claims_bytes = Claims::new(vec![
+//             ("claim1", "is_this"),
+//             ("claim2", "is_that"),
+//             ("claim3", "is_thatd"),
+//         ])
+//         .serialize();
+//         let value = Login {
+//             user_id: "hi".to_owned(),
+//             password_file: "pw".to_owned(),
+//             claims: claims_bytes.as_packed(),
+//         };
 
-        let app = "abc";
+//         let app = "abc";
 
-        let state = TestState::setup_test(vec![app]);
+//         let state = TestState::setup_test(vec![app]);
 
-        set_login(&state, &value, app).unwrap();
+//         set_login(&state, &value, app).unwrap();
 
-        let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
+//         let read_login = get_login(&state, app, &value.user_id).unwrap().unwrap();
 
-        assert_eq!(value.user_id, read_login.user_id);
-        assert_eq!(value.password_file, read_login.password_file);
+//         assert_eq!(value.user_id, read_login.user_id);
+//         assert_eq!(value.password_file, read_login.password_file);
 
-        let read_login = get_login_claims_bytes(&state, app, &value.user_id, SessionClaims::All)
-            .unwrap()
-            .unwrap();
+//         let read_login = get_login_claims_bytes(&state, app, &value.user_id, SessionClaims::All)
+//             .unwrap()
+//             .unwrap();
 
-        assert_eq!(claims_bytes, read_login);
-    }
-}
+//         assert_eq!(claims_bytes, read_login);
+//     }
+// }

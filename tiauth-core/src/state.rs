@@ -22,7 +22,7 @@ use crate::crypto::{
     EphemeralKey, Key, PublicKey, SessionKey,
 };
 use crate::data::Application;
-use crate::store::{open_db, Store, StoreAddress};
+use crate::store::{open_db, Store, StoreAddress, StoreError};
 
 // pub trait GovernorState: State {
 //     type Readonly;
@@ -444,10 +444,11 @@ pub struct AppStateImpl {
     pub key_state: KeyStateImpl<2>,
 }
 
-fn load_app_state(address: StoreAddress) {
-    let store = Store::load(address).unwrap();
+fn load_app_state(address: StoreAddress) -> Result<impl AppState, StoreError> {
+    let store = Store::load(address)?;
 
 
+    Ok(())
 }
 
 // fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
@@ -519,12 +520,7 @@ impl AppState for AppStateImpl {
 //     }
 // }
 
-// pub struct KeyInitState<const SN: usize> {
-//     pub opaque: String,
-//     pub ephemeral_secret: [u8; 32],
-//     pub session_keys: [SessionKey; SN],
-//     pub ephemeral_time: u64,
-// }
+
 
 // pub struct InitState<const SN: usize> {
 //     pub db: Database,
@@ -559,11 +555,18 @@ impl AppState for AppStateImpl {
 //     res
 // }
 
-fn init_key_state<const SN: usize>(
-    db: &Database,
+pub struct AppInitState<const SN: usize> {
+    pub opaque: String,
+    pub ephemeral_secret: [u8; 32],
+    pub session_keys: [SessionKey; SN],
+    pub ephemeral_time: u64,
+}
+
+fn init_app_state<const SN: usize>(
+    db: &Store,
     rng: &mut StdRng,
     now: u64,
-) -> Result<KeyInitState<SN>, DbError> {
+) -> Result<AppInitState<SN>, DbError> {
     let write_txn = db.begin_write()?;
 
     let (opaque, session_keys, _private, ephemeral_secret, ephemeral_time) = {
