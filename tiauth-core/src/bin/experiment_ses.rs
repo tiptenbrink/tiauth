@@ -5,7 +5,7 @@ use tiauth_core::test::TestState;
 use tiauth_core::SessionClaims;
 
 fn main() {
-    let state = TestState::setup_test(vec!["app"]);
+    let state = TestState::setup_test("app");
     let now = Instant::now();
     let session = login_create_session(&state, "user", "app", "pass", None, SessionClaims::All);
     let after = Instant::now();

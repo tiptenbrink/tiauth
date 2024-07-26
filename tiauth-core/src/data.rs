@@ -24,84 +24,82 @@ use zerovec::VarZeroVec;
 struct ClaimsBytes(ByteBuf);
 
 #[derive(Debug, PartialEq)]
-pub struct Login<'a> {
+pub struct UserClaims<'a> {
     pub user_id: String,
-    pub password_file: String,
     pub claims: &'a BytePacked<Claims>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct LoginPassword {
+pub struct UserPassword {
     pub user_id: String,
     pub password_file: String,
 }
 
-fn deserialize_login_password(bytes: &[u8], cursor: &mut Cursor<&[u8]>) -> LoginPassword {
-    let user_id_len = rmp::decode::read_str_len(cursor).unwrap();
-    let user_id_bytes = cursor_slice(bytes, cursor, user_id_len);
-    let user_id = std::str::from_utf8(user_id_bytes).unwrap().to_owned();
 
-    let pw_len = rmp::decode::read_str_len(cursor).unwrap();
-    let pw_bytes = cursor_slice(bytes, cursor, pw_len);
-    let password_file = std::str::from_utf8(pw_bytes).unwrap().to_owned();
 
-    LoginPassword {
-        user_id,
-        password_file,
-    }
-}
-
-impl LoginPassword {
-    pub fn deserialize_from_login(bytes: &[u8]) -> Self {
+impl UserPassword {
+    pub fn deserialize(bytes: &[u8]) -> UserPassword {
         let mut cursor = Cursor::new(bytes);
-        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
-        deserialize_login_password(bytes, &mut cursor)
-    }
-
-    pub fn into_login(self, claims: &BytePacked<Claims>) -> Login {
-        Login {
-            user_id: self.user_id,
-            password_file: self.password_file,
-            claims,
+        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 2);
+        let user_id_len = rmp::decode::read_str_len(&mut cursor).unwrap();
+        let user_id_bytes = cursor_slice(bytes, &mut cursor, user_id_len);
+        let user_id = std::str::from_utf8(user_id_bytes).unwrap().to_owned();
+    
+        let pw_len = rmp::decode::read_str_len(&mut cursor).unwrap();
+        let pw_bytes = cursor_slice(bytes, &mut cursor, pw_len);
+        let password_file = std::str::from_utf8(pw_bytes).unwrap().to_owned();
+    
+        UserPassword {
+            user_id,
+            password_file,
         }
     }
-}
 
-impl<'a> Login<'a> {
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        rmp::encode::write_array_len(&mut buf, 3).unwrap();
+        rmp::encode::write_array_len(&mut buf, 2).unwrap();
         rmp::encode::write_str(&mut buf, &self.user_id).unwrap();
         rmp::encode::write_str(&mut buf, &self.password_file).unwrap();
+
+        buf
+    }
+
+    // pub fn deserialize_from_login(bytes: &[u8]) -> Self {
+    //     let mut cursor = Cursor::new(bytes);
+    //     assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
+    //     deserialize_login_password(bytes, &mut cursor)
+    // }
+
+    // pub fn into_login(self, claims: &BytePacked<Claims>) -> Login {
+    //     Login {
+    //         user_id: self.user_id,
+    //         password_file: self.password_file,
+    //         claims,
+    //     }
+    // }
+}
+
+impl<'a> UserClaims<'a> {
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        rmp::encode::write_array_len(&mut buf, 2).unwrap();
+        rmp::encode::write_str(&mut buf, &self.user_id).unwrap();
         rmp::encode::write_bin(&mut buf, self.claims.as_bytes()).unwrap();
 
         buf
     }
 
-    pub fn deserialize_tuple(bytes: &'a [u8]) -> (LoginPassword, &BytePacked<Claims>) {
+    pub fn deserialize(bytes: &'a [u8]) -> Self {
         let mut cursor = Cursor::new(bytes);
-        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 3);
-        let login_password = deserialize_login_password(bytes, &mut cursor);
+        assert_eq!(rmp::decode::read_array_len(&mut cursor).unwrap(), 2);
+        let user_id = rmp_read_str(bytes, &mut cursor).unwrap();
 
         let claims_len = rmp::decode::read_bin_len(&mut cursor).unwrap();
         let claims_bytes = cursor_slice(bytes, &mut cursor, claims_len);
 
-        (login_password, BytePacked::new(claims_bytes))
-    }
-
-    pub fn deserialize(bytes: &'a [u8]) -> Self {
-        let (
-            LoginPassword {
-                user_id,
-                password_file,
-            },
-            claims,
-        ) = Self::deserialize_tuple(bytes);
-
         Self {
-            user_id,
-            password_file,
-            claims,
+            user_id: user_id.to_owned(),
+            claims: BytePacked::new(claims_bytes),
         }
     }
 }
@@ -558,7 +556,7 @@ impl<'a> ClaimsView<'a> {
             } else if i < claim_keys.0.len() - 1 {
                 i += 1;
                 let new_value = &claim_keys.0[i];
-                if current > new_value {
+                if current > new_value.as_str() {
                     return Err(ModifyClaimError::NotSorted);
                 }
                 current = new_value;
@@ -1055,19 +1053,34 @@ mod test {
 
     #[test]
     fn serialize_login() {
-        let claims = Claims::empty().serialize();
+        let claims = Claims::new(vec![("my_claim", "other_claim")]);
 
-        let login = Login {
+        let login = UserPassword {
             user_id: "some_name".to_owned(),
             password_file: "pw".to_owned(),
-            claims: claims.as_packed(),
         };
 
         let login_serial = login.serialize();
 
-        let login_deser = Login::deserialize(&login_serial);
+        let login_deser = UserPassword::deserialize(&login_serial);
 
         assert_eq!(login, login_deser);
+
+        let claims_serial = claims.serialize();
+        let user_claims = UserClaims {
+            user_id: "some_name".to_owned(),
+            claims: claims_serial.as_packed(),
+        };
+
+        let user_claims_serial = user_claims.serialize();
+
+        let user_claims_deser = UserClaims::deserialize(&user_claims_serial);
+
+        assert_eq!(user_claims, user_claims_deser);
+
+        let claims_deser = user_claims_deser.claims.deserialize().to_claims_sorted().unwrap();
+
+        assert_eq!(claims, claims_deser);
     }
 
     fn create_claims_subset() -> (Claims, Vec<String>) {

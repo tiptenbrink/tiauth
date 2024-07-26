@@ -2,63 +2,67 @@ use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent};
 use crate::error::WrapErrorOneOf;
 use crate::proof::{verify_proof_content, verify_session_bytes, InvalidSession, VerifiedSession};
 use crate::state::State;
-use crate::{Proof, Session};
+use crate::store::StoreError;
+use crate::{AppState, Proof, Session};
 use base64::{engine::general_purpose as b64, Engine as _};
-use redb::{Error as DbError, ReadableTable, WriteTransaction};
 use terrors::OneOf;
 
-pub fn verify_proof_write<T: ByteSerial>(
-    state: &impl State,
-    write_txn: &WriteTransaction,
-    content: &mut ProofContent<T>,
-) -> Result<(), OneOf<(DbError, InvalidProof)>> {
-    let tables = state.app_tables(&content.about.application);
-    let nonce = b64::URL_SAFE_NO_PAD.encode(&content.nonce);
-    let mut eph_table = write_txn.open_table(tables.ephemeral()).to_one_of_two()?;
-    {
-        // TODO clean up nonces every so often (after expiry)
+// pub fn verify_proof_write<T: ByteSerial>(
+//     state: &impl State,
+//     write_txn: &WriteTransaction,
+//     content: &mut ProofContent<T>,
+// ) -> Result<(), OneOf<(DbError, InvalidProof)>> {
+//     let tables = state.app_tables(&content.about.application);
+//     let nonce = b64::URL_SAFE_NO_PAD.encode(&content.nonce);
+//     let mut eph_table = write_txn.open_table(tables.ephemeral()).to_one_of_two()?;
+//     {
+//         // TODO clean up nonces every so often (after expiry)
 
-        let nonce_exists = eph_table.get(nonce.as_str()).to_one_of_two()?;
+//         let nonce_exists = eph_table.get(nonce.as_str()).to_one_of_two()?;
 
-        if nonce_exists.is_some() {
-            return Err(OneOf::new(InvalidProof {}));
-        }
-    }
+//         if nonce_exists.is_some() {
+//             return Err(OneOf::new(InvalidProof {}));
+//         }
+//     }
 
-    let proof_expires = format!("{}", content.about.expires);
-    eph_table
-        .insert(nonce.as_str(), proof_expires.as_str())
-        .to_one_of_two()?;
+//     let proof_expires = format!("{}", content.about.expires);
+//     eph_table
+//         .insert(nonce.as_str(), proof_expires.as_str())
+//         .to_one_of_two()?;
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 pub fn verify_proof<'a, T: ByteSerial>(
-    state: &impl State,
+    state: &impl AppState,
     proof: &'a Proof<T>,
     verify: AboutVerify,
-) -> Result<ProofContent<'a, T>, OneOf<(DbError, InvalidProof)>>
+) -> Result<ProofContent<'a, T>, OneOf<(StoreError, InvalidProof)>>
 where
 {
-    let key = state.app_key(&verify.application);
-    let mut proof_content = verify_proof_content(proof, &key, verify).map_err(OneOf::broaden)?;
+    let key = state.public_key();
+    let proof_content = verify_proof_content(proof, key, verify).map_err(OneOf::broaden)?;
 
-    let write_txn = state.db().begin_write().to_one_of_two()?;
+    // TODO ensure proofs cannot be re-used
+    // let write_txn = state.db().begin_write().to_one_of_two()?;
 
-    verify_proof_write(state, &write_txn, &mut proof_content)?;
+    // verify_proof_write(state, &write_txn, &mut proof_content)?;
 
-    write_txn.commit().to_one_of_two()?;
+    // write_txn.commit().to_one_of_two()?;
 
     Ok(proof_content)
 }
 
 pub fn verify_session(
-    state: &impl State,
+    state: &impl AppState,
     session_encrypted: &Session,
 ) -> Result<VerifiedSession, InvalidSession> {
-    let key = &state.private().session;
+    // let key = &state.private().session;
 
-    verify_session_bytes(session_encrypted, key)
+    // verify_session_bytes(session_encrypted, key)
+
+    // Ensure 
+    todo!()
 }
 
 #[cfg(feature = "test")]
@@ -78,7 +82,7 @@ pub mod test_util {
         claims: impl SerializedAs<Claims>,
     ) -> Proof<Claims> {
         let expires_in = expires_in.unwrap_or(1800);
-        let key = state.proof_key(application);
+        let key = state.private_key();
 
         create_proof(
             application,
@@ -97,48 +101,48 @@ mod tests {
     use crate::{
         data::{ActionType, Claims, EXPIRE_TIME},
         proof::create_session,
-        state::test_util::*,
+        state::test_util::*, KeyState,
     };
 
     use test_util::*;
 
     use super::*;
 
-    #[test]
-    fn test_session_verify() {
-        let user_id = "hi";
-        let app = "abc";
+    // #[test]
+    // fn test_session_verify() {
+    //     let user_id = "hi";
+    //     let app = "abc";
 
-        let state = TestState::setup_test(vec![app]);
+    //     let state = TestState::setup_test(&app);
 
-        let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
+    //     let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
 
-        let session = create_session(
-            user_id,
-            app,
-            EXPIRE_TIME,
-            claims.serialize(),
-            &state.private().session,
-        );
+    //     let session = create_session(
+    //         user_id,
+    //         app,
+    //         EXPIRE_TIME,
+    //         claims.serialize(),
+    //         &state.keys().session_key(),
+    //     );
 
-        let session = verify_session(&state, &session).unwrap();
+    //     let session = verify_session(&state.state, &session).unwrap();
 
-        let session_read = session.read().unwrap();
-        let session_claims = session_read.session_claims.deserialize();
-        assert!(claims.eq_view(&session_claims));
-    }
+    //     let session_read = session.read().unwrap();
+    //     let session_claims = session_read.session_claims.deserialize();
+    //     assert!(claims.eq_view(&session_claims));
+    // }
 
     #[test]
     fn test_proof_verify() {
         let user_id = "hi";
         let app = "abc";
 
-        let state = TestState::setup_test(vec![app]);
+        let state = TestState::setup_test(&app);
         let claims = Claims::new(vec![("email", "hi@abc.nl"), ("other_claim", "other_value")]);
         let proof = create_proof_claims(&state, app, user_id, None, claims.serialize());
 
         let proof_content =
-            verify_proof(&state, &proof, AboutVerify::new(app, ActionType::SetClaims)).unwrap();
+            verify_proof(&state.state, &proof, AboutVerify::new(app, ActionType::SetClaims)).unwrap();
 
         let deser_claims = proof_content.data.deserialize();
 

@@ -55,19 +55,25 @@ pub fn save_private_key(key: &Key) -> String {
 }
 
 #[derive(Error, Debug)]
-#[error("Failed to parse PEM file as Ed25519 key.")]
-pub struct KeyError;
+pub enum KeyError {
+    #[error("Failed to parse string as PKCS8-PEM-encoded Ed25519 private key.")]
+    Ed25519Private,
+    #[error("Failed to parse string as SubjectPublicKeyInfo-PEM-encoded Ed25519 public key.")]
+    Ed25519Public,
+    #[error("Failed to parse bytes as 256-bit session key.")]
+    SessionBytes
+}
 
 pub fn load_key(private_key_pem: &str) -> Result<Key, KeyError> {
     // The PEM file contains only the seed, so public key is recomputed and we don't have to validate it
-    let sk = ed::SecretKey::from_pem(private_key_pem).map_err(|_| KeyError)?;
+    let sk = ed::SecretKey::from_pem(private_key_pem).map_err(|_| KeyError::Ed25519Private)?;
     let pk = sk.public_key();
     let kp = ed::KeyPair { pk, sk };
     Ok(Key { kp })
 }
 
 pub fn load_public_key(public_key_pem: &str) -> Result<PublicKey, KeyError> {
-    let pk = ed::PublicKey::from_pem(public_key_pem).map_err(|_| KeyError)?;
+    let pk = ed::PublicKey::from_pem(public_key_pem).map_err(|_| KeyError::Ed25519Public)?;
     Ok(PublicKey { pk })
 }
 
@@ -94,32 +100,50 @@ pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct SessionKey {
     key_256: aead::Key<aead::Aes256GcmSiv>,
+}
+
+impl SessionKey {
+    pub fn into_saved_bytes(self) -> Vec<u8> {
+        self.key_256.to_vec()
+    }
+
+    pub fn from_saved_bytes(bytes: Vec<u8>) -> Result<Self, KeyError> {
+        Ok(SessionKey {
+            key_256: aead::Key::<aead::Aes256GcmSiv>::from_exact_iter(bytes).ok_or(KeyError::SessionBytes)?,
+        })
+    }
 }
 
 pub struct SavedSessionKey {
     pub session: String,
 }
 
-pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
-    let session = b64::URL_SAFE_NO_PAD.encode(key.key_256);
+// pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
+//     let session = b64::URL_SAFE_NO_PAD.encode(key.key_256);
 
-    SavedSessionKey { session }
-}
+//     SavedSessionKey { session }
+// }
 
-pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
-    let mut key_256_raw = [0u8; 32];
+// pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
+//     let session = b64::URL_SAFE_NO_PAD.encode(key.key_256);
 
-    let bytes_written = b64::URL_SAFE_NO_PAD
-        .decode_slice(session_key_encoded, &mut key_256_raw)
-        .unwrap();
-    assert_eq!(bytes_written, 32);
-    SessionKey {
-        key_256: aead::Key::<aead::Aes256GcmSiv>::from_slice(&key_256_raw).to_owned(),
-    }
-}
+//     SavedSessionKey { session }
+// }
+
+// pub fn load_session_key(session_key_encoded: &str) -> SessionKey {
+//     let mut key_256_raw = [0u8; 32];
+
+//     let bytes_written = b64::URL_SAFE_NO_PAD
+//         .decode_slice(session_key_encoded, &mut key_256_raw)
+//         .unwrap();
+//     assert_eq!(bytes_written, 32);
+//     SessionKey {
+//         key_256: aead::Key::<aead::Aes256GcmSiv>::from_slice(&key_256_raw).to_owned(),
+//     }
+// }
 
 pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
     let cipher = aead::Aes256GcmSiv::new(&key.key_256);
@@ -166,7 +190,7 @@ impl EphemeralKey {
         base_secret: [u8; 32],
         now: u64,
         ref_time: u64,
-        amount_valid: usize,
+        amount_valid: u32,
     ) -> Vec<EphemeralKey> {
         (0..(amount_valid as u64))
             .rev()

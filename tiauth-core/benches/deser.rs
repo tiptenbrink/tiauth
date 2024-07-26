@@ -6,7 +6,7 @@ use tiauth_core::test::TestState;
 // use tiauth_core::test::{big_claims, test_lazy_claims, test_zero_vec, TestState};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    let state = TestState::setup_test(vec!["app"]);
+    let state = TestState::setup_test("app");
     // let (zmap_vec, claims) = big_claims();
 
     // c.bench_function("test_zero_vec", |b| {
