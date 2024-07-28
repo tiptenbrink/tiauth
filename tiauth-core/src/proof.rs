@@ -223,6 +223,7 @@ impl EphemeralType {
         |t: &EphemeralType| t.key_name() == self.key_name()
     }
 
+    // The canonical Ephemeral state that is generated in case of change password. If the state is equal to the Ephemeral's actual state, then the Ephemeral has not been used.
     pub fn change_password_state(&self, password_file: &str) -> Vec<u8> {
         assert_eq!(self, &EphemeralType::ChangePassword);
 
@@ -337,6 +338,7 @@ impl<T: ByteSerial> Ephemeral<T> {
         }
     }
 
+    /// Checks if the content of the Ephemeral was indeed created using one of the verify keys. It does not check for re-use.
     pub fn verify<'a>(
         &'a self,
         verify_keys: &[EphemeralKey],

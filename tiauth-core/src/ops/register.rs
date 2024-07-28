@@ -32,16 +32,9 @@ pub fn start_register(
 ) -> Result<(String, Ephemeral<()>), OneOf<(OpaqueError,)>> {
     let response = register_server(state.keys().opaque(), request, user_id).to_one_of()?;
 
-    // let entropy = nonce_384(&mut state.rng());
-    // let entry = EphemeralEntry::new(
-    //     user_id,
-    //     EphemeralType::NewUser,
-    //     entropy,
-    //     None,
-    //     "".to_owned(),
-    // );
     let key = state.keys().ephemeral_key();
 
+    // For NewUser there is no real "state" to check against, it's just the state of there being no user
     let ephemeral = Ephemeral::create(
         &key,
         user_id,
@@ -57,7 +50,7 @@ pub fn start_register(
 #[derive(Error, Debug)]
 pub enum SetLoginError {
     #[error(
-        "Could not set login as Ephemeral does not match expected state. Was it already used?"
+        "Could not set login as Ephemeral does not match expected state. Was it already used or did password change?"
     )]
     StateMismatch,
     // #[error("Could not set login with NewUser ephemeral: user already exists.")]
@@ -88,6 +81,8 @@ fn user_change_ephemeral<T: ByteSerial>(
             // if old_login_bytes.is_some() {
             //     return Err(OneOf::new(SetLoginError::AlreadyExists))
             // }
+            // Note that the content is verified, so the state and data are not user-determined
+            // It's a programming error if they are non-empty
             assert!(entry.state.is_empty());
             assert!(entry.data.as_bytes().is_empty());
 
@@ -104,11 +99,11 @@ fn user_change_ephemeral<T: ByteSerial>(
             };
             let login = UserPassword::deserialize(old_login_bytes);
             let state = entry.eph_type.change_password_state(&login.password_file);
-
+            // If the states are not identical, the password must have been changed already and this ephemeral is no longer valid
             if state != entry.state {
                 return Err(OneOf::new(SetLoginError::StateMismatch));
             }
-
+            // Some programming error must have occurred if this happens
             assert_eq!(login.user_id, entry.user_id);
 
             UserPassword {
@@ -140,24 +135,31 @@ pub fn register_finish(
 
     let store = state.store();
     let tx = store.open_write().to_one_of().map_err(OneOf::broaden)?;
-
     {
         let mut table = tx.user_table()
             .to_one_of().map_err(OneOf::broaden)?;
 
 
-        let new_login_bytes = if let Some(login_bytes) = table.get(content.user_id)
-            .to_one_of()
-            .map_err(OneOf::broaden)?
-        {
-            user_change_ephemeral(&content, Some(login_bytes.value()), password_file)
-                .map_err(OneOf::broaden)?
-                .serialize()
-        } else {
-            user_change_ephemeral(&content, None, password_file)
+        let new_login_bytes = {
+            let guarded_option = table.get(content.user_id)
+                .to_one_of()
+                .map_err(OneOf::broaden)?;
+            // The `as_ref` here allows us to make this work
+            let option_bytes = guarded_option.as_ref().map(|g| g.value());
+            user_change_ephemeral(&content, option_bytes, password_file)
                 .map_err(OneOf::broaden)?
                 .serialize()
         };
+        // if let Some(login_bytes) = table.get(content.user_id)
+        //     .to_one_of()
+        //     .map_err(OneOf::broaden)?
+        // {
+            
+        // } else {
+        //     user_change_ephemeral(&content, None, password_file)
+        //         .map_err(OneOf::broaden)?
+        //         .serialize()
+        // };
 
         table
             .insert(content.user_id, new_login_bytes.as_slice())
