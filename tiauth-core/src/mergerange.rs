@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Expiry {
@@ -77,7 +77,7 @@ impl<const N: usize> Range<N> {
 //     }
 // }
 
-fn add_num_ranges<const N: usize>(ranges: &mut Vec<Range<N>>, num: u64) -> (usize, bool) {
+fn add_num_ranges<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64) -> (usize, bool) {
     let n_i = match ranges.binary_search_by(|r| {
         match r.min.cmp(&num) {
             Ordering::Equal => Ordering::Less,
@@ -102,7 +102,7 @@ fn add_num_ranges<const N: usize>(ranges: &mut Vec<Range<N>>, num: u64) -> (usiz
         while num > max {
             let new_range = Range::<N>::new(max);
             max = new_range.max;
-            ranges.push(new_range);
+            ranges.push_back(new_range);
         }
         
         return (ranges.len()-1, false);
@@ -182,7 +182,7 @@ fn add_num_ranges<const N: usize>(ranges: &mut Vec<Range<N>>, num: u64) -> (usiz
     (target_i, false)
 } 
 
-fn add_num<const N: usize>(ranges: &mut Vec<Range<N>>, num: u64, expires: u64) -> bool {
+fn add_num<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64, expires: u64) -> bool {
     let (target_i, contains) = add_num_ranges(ranges, num);
 
     let exp_i = expired_search(ranges, expires);
@@ -194,7 +194,7 @@ fn add_num<const N: usize>(ranges: &mut Vec<Range<N>>, num: u64, expires: u64) -
     contains
 }
 
-fn expired_search<const N: usize>(ranges: &[Range<N>], time: u64) -> usize {
+fn expired_search<const N: usize>(ranges: &VecDeque<Range<N>>, time: u64) -> usize {
     match ranges.binary_search_by(|r| {
         match r.expires {
             Expiry::At(at) => match at.cmp(&time) {
@@ -209,44 +209,61 @@ fn expired_search<const N: usize>(ranges: &[Range<N>], time: u64) -> usize {
     }
 }
 
-fn check_expired<const N: usize>(ranges: Vec<Range<N>>, time: u64) -> Vec<Range<N>> {
-    let exp_i = expired_search(&ranges, time);
+fn check_expired<const N: usize>(ranges: &mut VecDeque<Range<N>>, time: u64) {
+    let exp_i = expired_search(ranges, time);
     let first_min = ranges[0].min;
 
     if exp_i == 0 {
-        return ranges
+        return
     }
 
     let last_max = ranges[exp_i-1].max;
     let new_range = Range::full(first_min, last_max, Expiry::At(0));
 
-    let mut new_vec = Vec::with_capacity(ranges.len()-exp_i+1);
-
-    new_vec.push(new_range);
-    new_vec.extend_from_slice(&ranges[exp_i..ranges.len()]);
-
-    new_vec
+    ranges.rotate_left(exp_i);
+    ranges.truncate(ranges.len()-exp_i);
+    ranges.push_front(new_range);
 }
+
+// fn check_expired<const N: usize>(ranges: VecDeque<Range<N>>, time: u64) -> VecDeque<Range<N>> {
+//     let exp_i = expired_search(&ranges, time);
+//     let first_min = ranges[0].min;
+
+//     if exp_i == 0 {
+//         return ranges
+//     }
+
+//     let last_max = ranges[exp_i-1].max;
+//     let new_range = Range::full(first_min, last_max, Expiry::At(0));
+
+//     let mut new_vec = Vec::with_capacity(ranges.len()-exp_i+1);
+
+//     new_vec.push(new_range);
+//     new_vec.extend_from_slice(&ranges[exp_i..ranges.len()]);
+
+//     new_vec
+// }
 
 #[cfg(test)]
 mod test {
     use std::{collections::{BTreeMap, BTreeSet, HashMap, HashSet}, time::Instant};
 
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+    use rayon::collections::vec_deque;
 
     use super::*;
     const RANGE_SIZE: usize = 2;
 
     #[test]
     fn create() {
-        let mut ranges = Vec::new();
+        let mut ranges = VecDeque::new();
 
         for i in 1..10 {
             let mut range = Range::<RANGE_SIZE>::new(i*(RANGE_SIZE as u64));
             if i < 7 {
                 range.expires = Expiry::At(i*100);
             }
-            ranges.push(range)
+            ranges.push_back(range)
         }
 
         let exists = add_num(&mut ranges, 8, 150);
@@ -277,28 +294,28 @@ mod test {
         assert_eq!(ranges[0].min, 2);
         assert_eq!(ranges[0].max, 9);
 
-        ranges = check_expired(ranges, 600);
+        check_expired(&mut ranges, 600);
         assert!(ranges[0].members.is_none());
         assert_eq!(ranges[0].min, 2);
         assert_eq!(ranges[0].max, 13);
 
-        ranges.pop();
-        ranges.pop();
-        ranges.pop();
+        ranges.pop_back();
+        ranges.pop_back();
+        ranges.pop_back();
 
-        ranges = check_expired(ranges, 600);
+        check_expired(&mut ranges, 600);
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].members.is_none());
         assert_eq!(ranges[0].min, 2);
         assert_eq!(ranges[0].max, 13);
 
-        ranges.push(Range::new(14));
-        ranges.push(Range::new(14+(RANGE_SIZE as u64)));
+        ranges.push_back(Range::new(14));
+        ranges.push_back(Range::new(14+(RANGE_SIZE as u64)));
 
         add_num(&mut ranges, 16, 800);
 
-        ranges.pop();
-        ranges = check_expired(ranges, 800);
+        ranges.pop_back();
+        check_expired(&mut ranges, 800);
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].members.is_none());
         assert_eq!(ranges[0].min, 2);
@@ -348,7 +365,8 @@ mod test {
             
             lightly_shuffle(&mut values, size/1000);
 
-            let mut ranges: Vec<Range<ROUTINE_SIZE>> = vec![Range::new(1)];
+            let mut ranges: VecDeque<Range<ROUTINE_SIZE>> = VecDeque::new();
+            ranges.push_back(Range::new(1));
 
             let mut max_space = 0;
 
@@ -362,7 +380,9 @@ mod test {
                 add_time += now.elapsed().as_secs_f64();
                 max_space = max_space.max(ranges.len());
                 let now_again = Instant::now();
-                ranges = check_expired(ranges, time);
+                if i % 5 == 0 {
+                    check_expired(&mut ranges, time);
+                }
                 check_time += now_again.elapsed().as_secs_f64();
                 max_space = max_space.max(ranges.len());
             }
