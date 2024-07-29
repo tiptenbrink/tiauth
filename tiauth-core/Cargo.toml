@@ -49,22 +49,25 @@ tiauth-core = { path = ".", features = ["test", "action", "app"] }
 name = "deser"
 harness = false
 
-[[bin]]
-name = "experiment"
-required-features = ["test"]
+# [[bin]]
+# name = "experiment"
+# required-features = ["test"]
 
-[[bin]]
-name = "experiment_big"
-required-features = ["test"]
+# [[bin]]
+# name = "experiment_big"
+# required-features = ["test"]
 
-[[bin]]
-name = "experiment_ses"
-required-features = ["test"]
+# [[bin]]
+# name = "experiment_ses"
+# required-features = ["test"]
 
-[[bin]]
-name = "multi_db"
-required-features = ["test"]
+# [[bin]]
+# name = "multi_db"
+# required-features = ["test"]
 
-[[bin]]
-name = "shared_counter"
-required-features = ["test"]
+# [[bin]]
+# name = "shared_counter"
+# required-features = ["test"]
+
+# [profile.release]
+# debug = true
