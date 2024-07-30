@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{atomic, LazyLock, OnceLock};
 use base64::{engine::general_purpose as b64, Engine as _};
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
@@ -17,10 +17,11 @@ use std::time::UNIX_EPOCH;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
 
+use crate::counter::{CompactSet, Counter};
 use crate::crypto::{
     create_key, create_session_key, load_key, load_public_key, save_private_key, save_public_key, EphemeralKey, Key, PublicKey, SessionKey
 };
-use crate::data::Application;
+use crate::data::{Application, EPHEMERAL_INTERVAL};
 use crate::store::{keys, DataDeserializationErrorSource, Store, StoreAddress, StoreError, WrapDeserializationError, WrapVecTryFromError};
 
 // pub trait GovernorState: State {
@@ -125,10 +126,27 @@ pub trait GovernorAppState: AppState {
     // }
 }
 
-pub trait State {
-    fn app(&self, application: &str) -> &impl AppState;
+// pub trait State {
+//     fn app(&self, application: &str) -> &impl AppState;
 
-    fn apps(&self) -> Vec<&String>;
+//     fn apps(&self) -> Vec<&String>;
+// }
+
+pub trait State: DriverState + AppState + CounterState {
+
+}
+
+pub trait DriverState {
+    // Seconds since the epoch
+    fn time(&self) -> u64;
+
+    fn drive_time(&self, time: u64);
+}
+
+pub trait CounterState {
+    fn counter_next(&self, key: &str, expires: u64) -> u64;
+
+    fn counter_used(&self, key: &str, num: u64, expires: u64, time: u64) -> bool;
 }
 
 pub trait AppState {
@@ -138,7 +156,7 @@ pub trait AppState {
 
     fn store(&self) -> &Store;
 
-    fn session_counter(&self, user_id: &str) -> u64;
+    
 
     // fn private(&self) -> &PrivateState;
 
@@ -195,7 +213,7 @@ pub trait GovernorKeyState<const SN: usize>: KeyState<SN> {
     // Moves all keys from the invalidated key to the end one place left, and puts the new key at the end. If the key does not exist, it must call rotate_session_keys.
     fn invalidate_session_key(&mut self, key_to_invalidate: &SessionKey, new_key: SessionKey);
 
-    fn update_ephemeral_time(&mut self);
+    fn update_ephemeral_time(&mut self, time: u64);
 
     fn rotate_opaque(&mut self) {
         todo!()
@@ -211,9 +229,9 @@ pub trait KeyState<const SN: usize> {
         self.sess_veri_keys().last().unwrap()
     }
 
-    fn eph_veri_keys(&self) -> Vec<EphemeralKey>;
+    fn eph_veri_keys(&self, time: u64) -> Vec<EphemeralKey>;
 
-    fn ephemeral_key(&self) -> EphemeralKey;
+    fn ephemeral_key(&self, time: u64) -> EphemeralKey;
 }
 
 #[derive(Clone)]
@@ -237,13 +255,8 @@ impl<const SN: usize> KeyState<SN> for KeyStateImpl<SN> {
         &self.opaque
     }
 
-    fn eph_veri_keys(&self) -> Vec<EphemeralKey> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        EphemeralKey::last(
+    fn eph_veri_keys(&self, now: u64) -> Vec<EphemeralKey> {
+        EphemeralKey::last::<EPHEMERAL_INTERVAL>(
             self.ephemeral_secret,
             now,
             self.ephemeral_time,
@@ -255,13 +268,8 @@ impl<const SN: usize> KeyState<SN> for KeyStateImpl<SN> {
         &self.valid_session_keys
     }
 
-    fn ephemeral_key(&self) -> EphemeralKey {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        EphemeralKey::compute(self.ephemeral_secret, now, self.ephemeral_time)
+    fn ephemeral_key(&self, now: u64) -> EphemeralKey {
+        EphemeralKey::compute::<EPHEMERAL_INTERVAL>(self.ephemeral_secret, now, self.ephemeral_time)
     }
 }
 
@@ -307,12 +315,7 @@ impl<const SN: usize> GovernorKeyState<SN> for KeyStateImpl<SN> {
         }
     }
 
-    fn update_ephemeral_time(&mut self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+    fn update_ephemeral_time(&mut self, now: u64) {
         self.ephemeral_time = now;
     }
 }
@@ -331,11 +334,13 @@ pub struct AppStateImpl {
     // Public key used to verify proof signatures
     pub public_key: PublicKey,
     // Counter used to ensure ephemeral validity
-    pub counter: Arc<AtomicU64>,
+    pub counter: Counter,
+    pub compact_set: CompactSet,
     // Persistent database
     pub store: Arc<Store>,
     // Keys and secrets
     pub key_state: KeyStateImpl<2>,
+    pub time: Arc<AtomicU64>
 }
 
 fn load_app_state(application: &str, address: StoreAddress, public_key: Option<PublicKey>, now: u64) -> Result<AppStateImpl, StoreError> {
@@ -351,14 +356,18 @@ fn load_app_state(application: &str, address: StoreAddress, public_key: Option<P
         ephemeral_time
     };
 
-    let counter = Arc::new(AtomicU64::new(0));
+    let counter = Counter::new();
+    let compact_set = CompactSet::new();
+    let time = Arc::new(AtomicU64::new(now));
 
     let app_state = AppStateImpl {
         application: application.to_owned(),
         public_key,
         counter,
+        compact_set,
         store: Arc::new(store),
-        key_state
+        key_state,
+        time
     };
 
     Ok(app_state)
@@ -390,10 +399,6 @@ impl AppState for AppStateImpl {
         &self.key_state
     }
     
-    fn session_counter(&self, _user_id: &str) -> u64 {
-        todo!()
-    }
-    
     fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
@@ -401,6 +406,31 @@ impl AppState for AppStateImpl {
     fn application(&self) -> &str {
         &self.application
     }
+
+}
+
+impl CounterState for AppStateImpl {
+    fn counter_next(&self, _: &str, _expires: u64) -> u64 {
+        // It should be possible to in the future make this counter be per-user, or to store the fact that the counter has been given out
+        self.counter.increment()
+    }
+    
+    fn counter_used(&self, _: &str, num: u64, expires: u64, time: u64) -> bool {
+        self.compact_set.num_exists(num, expires, Some(time))
+    }
+}
+
+impl DriverState for AppStateImpl {
+    fn time(&self) -> u64 {
+        self.time.load(atomic::Ordering::Relaxed)
+    }
+    
+    fn drive_time(&self, time: u64) {
+        self.time.store(time, atomic::Ordering::Relaxed)
+    }
+}
+
+impl State for AppStateImpl {
 
 }
 
@@ -637,7 +667,7 @@ fn init_app_state<const SN: usize>(
 
 #[cfg(feature = "test")]
 pub mod test_util {
-    use std::ops::Deref;
+    use std::{cell::RefCell, ops::Deref};
 
     use camino::Utf8Path;
 
@@ -657,15 +687,50 @@ pub mod test_util {
     /// TestState also contains application private keys for easier testing.
     pub struct TestState {
         pub state: AppStateImpl,
+        pub time: RefCell<u64>,
         key: Key,
     }
 
-    impl Deref for TestState {
-        type Target = AppStateImpl;
-    
-        fn deref(&self) -> &Self::Target {
-            &self.state
+    impl AppState for TestState {
+        fn application(&self) -> &str {
+            self.state.application()
         }
+    
+        fn public_key(&self) -> &PublicKey {
+            self.state.public_key()
+        }
+    
+        fn store(&self) -> &Store {
+            self.state.store()
+        }
+    
+        fn keys(&self) -> &impl KeyState<2> {
+            self.state.keys()
+        }
+    }
+
+    impl CounterState for TestState {
+        fn counter_next(&self, key: &str, expires: u64) -> u64 {
+            self.state.counter_next(key, expires)
+         }
+     
+         fn counter_used(&self, key: &str, num: u64, expires: u64, time: u64) -> bool {
+             self.state.counter_used(key, num, expires, time)
+         }
+    }
+
+    impl DriverState for TestState {
+        fn time(&self) -> u64 {
+            *(self.time.borrow())
+        }
+    
+        fn drive_time(&self, time: u64) {
+            self.time.replace(time);
+        }
+    }
+
+    impl State for TestState {
+
     }
 
     impl TestState {
@@ -689,7 +754,8 @@ pub mod test_util {
 
             Self {
                 state,
-                key
+                key,
+                time: RefCell::new(now)
             }
         }
     }

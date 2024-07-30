@@ -8,7 +8,10 @@ use crate::data::UserPassword;
 use crate::encoded::Encodable;
 use crate::error::{OneOfTo, WrapErrorOneOf};
 use crate::proof::Ephemeral;
+use crate::proof::EphemeralChangePasswordState;
 use crate::proof::EphemeralContent;
+use crate::proof::EphemeralEmptyState;
+use crate::proof::EphemeralStateType;
 use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
 use crate::state::State;
@@ -26,20 +29,20 @@ use terrors::OneOf;
 /// While it uses the user_id given by the client (which should adhere to some limits), this is checked at a later stage.
 /// It is important to rate-limit this, because the `register_server` function is not cheap to compute.
 pub fn start_register(
-    state: &impl AppState,
+    state: &impl State,
     request: &str,
     user_id: &str,
 ) -> Result<(String, Ephemeral<()>), OneOf<(OpaqueError,)>> {
     let response = register_server(state.keys().opaque(), request, user_id).to_one_of()?;
-
-    let key = state.keys().ephemeral_key();
+    let time = state.time();
+    let key = state.keys().ephemeral_key(time);
 
     // For NewUser there is no real "state" to check against, it's just the state of there being no user
     let ephemeral = Ephemeral::create(
         &key,
         user_id,
         state.application(),
-        &[],
+        EphemeralEmptyState,
         EphemeralType::NewUser,
         BytePacked::<()>::empty(),
     );
@@ -83,8 +86,7 @@ fn user_change_ephemeral<T: ByteSerial>(
             // }
             // Note that the content is verified, so the state and data are not user-determined
             // It's a programming error if they are non-empty
-            assert!(entry.state.is_empty());
-            assert!(entry.data.as_bytes().is_empty());
+            entry.verify_state_equal::<EphemeralEmptyState>(EphemeralEmptyState).unwrap();
 
             UserPassword {
                 user_id: entry.user_id.to_owned(),
@@ -98,11 +100,9 @@ fn user_change_ephemeral<T: ByteSerial>(
                 return Err(OneOf::new(SetLoginError::NotFound));
             };
             let login = UserPassword::deserialize(old_login_bytes);
-            let state = entry.eph_type.change_password_state(&login.password_file);
-            // If the states are not identical, the password must have been changed already and this ephemeral is no longer valid
-            if state != entry.state {
-                return Err(OneOf::new(SetLoginError::StateMismatch));
-            }
+            entry.verify_state_equal::<EphemeralChangePasswordState>(EphemeralChangePasswordState { password_file: login.password_file.to_owned() })
+            .map_err(|_| OneOf::new(SetLoginError::StateMismatch))?;
+
             // Some programming error must have occurred if this happens
             assert_eq!(login.user_id, entry.user_id);
 
@@ -118,7 +118,7 @@ fn user_change_ephemeral<T: ByteSerial>(
 }
 
 pub fn register_finish(
-    state: &impl AppState,
+    state: &impl State,
     application: &str,
     request: &str,
     register_eph: &Ephemeral<()>,
@@ -127,7 +127,8 @@ pub fn register_finish(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-    let verify_keys = state.keys().eph_veri_keys();
+    let time = state.time();
+    let verify_keys = state.keys().eph_veri_keys(time);
 
     let content = register_eph.verify(&verify_keys, application)
         .to_one_of()
@@ -195,12 +196,12 @@ pub mod test_util {
     ) {
         let (request, client_state) = client_register(password).unwrap();
         let (server_response, nonce) =
-            start_register(&state.state, &request, user_id).unwrap();
+            start_register(state, &request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
         // Use alternative if provided
         let nonce = alt_eph.unwrap_or(nonce);
 
-        register_finish(&state.state, application, &request, &nonce).unwrap();
+        register_finish(state, application, &request, &nonce).unwrap();
 
         if let Some(claims_set) = claims_set {
             let claims = claims_set.serialize();

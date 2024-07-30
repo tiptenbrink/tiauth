@@ -3,7 +3,7 @@
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
 use crate::encoded::Encoded;
-use crate::proof::create_proof;
+use crate::proof::{create_proof, Ephemeral};
 use crate::{ActionType, Target, TargetList};
 use crate::{Claims, Proof};
 
@@ -22,15 +22,19 @@ pub fn public_from_private_key_pem(private_key_pem: &str) -> Result<String, KeyE
 pub struct ProofBaseView<'a> {
     pub application: &'a str,
     pub expires_in: u64,
+    pub now: u64,
+    pub nonce: &'a BytePacked<Ephemeral<()>>,
     pub key: &'a Key,
 }
 
 impl<'a> ProofBaseView<'a> {
-    pub fn new(application: &'a str, key: &'a Key) -> Self {
+    pub fn new(application: &'a str, key: &'a Key, now: u64, nonce: &'a BytePacked<Ephemeral<()>>) -> Self {
         Self {
             application,
             expires_in: 1800,
             key,
+            now,
+            nonce
         }
     }
 }
@@ -50,8 +54,10 @@ pub fn create_set_claims_proof(
         action,
         target,
         TargetList::from_vec(target_data),
+        proof_base.nonce,
         claims,
         proof_base.key,
+        proof_base.now
     );
 
     Encoded::from_encodable(proof)
@@ -85,8 +91,10 @@ pub fn create_read_all_proof(proof_base: ProofBaseView) -> Encoded<Proof<()>> {
         action,
         target,
         TargetList::empty(),
+        proof_base.nonce,
         BytePacked::new(&[]),
         proof_base.key,
+        proof_base.now
     );
 
     Encoded::from_encodable(proof)
@@ -106,8 +114,10 @@ pub fn create_read_some_proof(
         action,
         target,
         TargetList::from_vec(selection),
+        proof_base.nonce,
         BytePacked::new(&[]),
         proof_base.key,
+        proof_base.now
     );
 
     Encoded::from_encodable(proof)
@@ -130,8 +140,10 @@ pub fn create_read_range_proof(
         action,
         target,
         TargetList::from_vec(selection),
+        proof_base.nonce,
         BytePacked::new(&[]),
         proof_base.key,
+        proof_base.now
     );
 
     Encoded::from_encodable(proof)

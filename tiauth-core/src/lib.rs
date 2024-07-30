@@ -6,7 +6,7 @@ pub mod encoded;
 pub mod error;
 mod proof;
 mod util;
-mod compactset;
+mod counter;
 
 #[cfg(feature = "action")]
 mod ops;

@@ -21,3 +21,4 @@ For medium claims (~10 kB): 340 us (siging is still the largest portion here). A
 For large claims (~100 kB): 2.7 ms (the overhead of sending to Rust becomes significant here).
 
 For very large claims (~1 MB): ~38 ms (the overhead of sending to Rust now dominates). Deserialization is also a significant factor at this point, so encoding the claims as bytes beforehand can be a 1.5-2x speedup. If 
+

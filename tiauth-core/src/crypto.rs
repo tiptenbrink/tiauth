@@ -162,9 +162,11 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u
     ciphertext
 }
 
-// HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
+/// An EphemeralKey is an HMAC key used to sign `tiauth` data that can be passed to applications/clients and then returned in the next step.
+/// Because EphemeralKeys change frequently, they are not stored. Instead they are computed on demand.
 #[derive(Debug)]
 pub struct EphemeralKey {
+    // HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
     bytes: [u8; 32],
 }
 
@@ -173,28 +175,30 @@ impl EphemeralKey {
         Self { bytes }
     }
 
-    pub fn compute(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
+    pub fn compute<const INTERVAL: u64>(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
         let passed = now - ref_time;
 
         let mut rng = ChaCha20Rng::from_seed(base_secret);
-        let ten_minute_intervals_passed = passed / 1200;
+        let intervals_passed = passed / INTERVAL;
 
-        rng.set_stream(ten_minute_intervals_passed);
+        rng.set_stream(intervals_passed);
         let mut new_key = [0u8; 32];
         rng.fill_bytes(&mut new_key);
 
         Self { bytes: new_key }
     }
 
-    pub fn last(
+    pub fn last<const INTERVAL: u64>(
         base_secret: [u8; 32],
         now: u64,
         ref_time: u64,
         amount_valid: u32,
     ) -> Vec<EphemeralKey> {
-        (0..(amount_valid as u64))
+        let key_amount = (amount_valid as u64).min((now - ref_time)/INTERVAL + 1);
+
+        (0..(key_amount))
             .rev()
-            .map(|i| Self::compute(base_secret, now - (i * 600), ref_time))
+            .map(|i| Self::compute::<INTERVAL>(base_secret, now - (i * INTERVAL), ref_time))
             .collect()
     }
 }

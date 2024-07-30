@@ -1,16 +1,14 @@
 use crate::data::{
-    AboutVerify, ActionType, ClaimKeys, InvalidProof, Login, LoginPassword, ModifyClaimError,
-    ProofContent, CHANGE_AGE, DELETE_AGE, LEEWAY,
+    AboutVerify, ActionType, ClaimKeys, InvalidProof, ModifyClaimError, ProofContent, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
-use crate::ops::verify::verify_proof_write;
+// use crate::ops::verify::verify_proof_write;
 use crate::proof::{verify_proof_content, Ephemeral, EphemeralType, InvalidSession};
 use crate::state::State;
-use crate::store::{get_login, LoginFieldError};
-use crate::verify::verify_session;
+use crate::store::{users, LoginFieldError, StoreError};
+// use crate::verify::verify_session;
 use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
-use redb::{Error as DbError, ReadableTable};
 use std::time::SystemTime;
 use terrors::OneOf;
 
@@ -28,18 +26,20 @@ pub fn reset_password(
     state: &impl State,
     application: &str,
     proof: &Proof<()>,
-) -> Result<Ephemeral<()>, OneOf<(DbError, InvalidProof, LoginFieldError)>> {
-    let key = state.app_key(application);
+) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidProof, LoginFieldError)>> {
+    let key = state.public_key();
+    let time = state.time();
     let proof_content = verify_proof_content(
         proof,
         &key,
         AboutVerify::new(application, ActionType::ResetPassword),
+        time
     )
     .map_err(OneOf::broaden)?;
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
     let about = proof_content.about;
-    let LoginPassword { password_file, .. } = match get_login(state, &about.application, &user_id)
+    let UserPassword { password_file, user_id } = match users::get_login(state.store(),  &user_id)
         .to_one_of()
         .map_err(OneOf::broaden)?
     {
@@ -49,8 +49,10 @@ pub fn reset_password(
             return Err(OneOf::new(InvalidProof {}));
         }
     };
-
-    let key = state.keys().ephemeral_key(&about.application);
+    // We check time again because we did a (potentially blocking) database access before.
+    let time = state.time();
+    
+    let key = state.keys().ephemeral_key(time);
 
     // let entropy = nonce_384(&mut state.rng());
     // let set_entry = EphemeralEntry::new(
@@ -122,10 +124,7 @@ fn change_password(
         .map_err(OneOf::broaden)?;
     let session = verified.read().to_one_of().map_err(OneOf::broaden)?;
 
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let time = state.time();
 
     if time > session.expires + LEEWAY {
         println!("Session has expired!");
@@ -170,10 +169,7 @@ fn session_delete_user(
     let verified = verify_session(state, session_encrypted).unwrap();
     let session = verified.read().unwrap();
 
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let time = state.time();
 
     if time > session.expires + LEEWAY {
         panic!("Session has expired!");

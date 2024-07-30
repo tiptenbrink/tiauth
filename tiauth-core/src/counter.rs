@@ -1,4 +1,45 @@
-use std::{cmp::Ordering, collections::VecDeque, ops::DerefMut, path::Display, sync::{Arc, Mutex}, time::Instant};
+use std::{cmp::Ordering, collections::VecDeque, io::Cursor, ops::DerefMut, path::Display, sync::{atomic::{self, AtomicU64}, Arc, Mutex}, time::Instant};
+
+use crate::util::rmp_read_bin;
+
+#[derive(Clone)]
+/// A simple counter with concurrent access. 
+pub struct Counter {
+    counter: Arc<AtomicU64>
+}
+
+impl Counter {
+    // Initialize the counter. No expectation should be set for the initial value. The only guarantee is that the initial value will work with CompactSet.
+    pub fn new() -> Self {
+        Self {
+            // Since we use zero as "empty" in CompactSet, the first value must be 1
+            counter: Arc::new(AtomicU64::new(1))
+        }
+    }
+
+    pub fn increment(&self) -> u64 {
+        self.counter.fetch_add(1, atomic::Ordering::Relaxed)
+    }
+
+    pub fn to_saved_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        
+        let counter_bytes = self.counter.load(atomic::Ordering::Relaxed).to_le_bytes();
+
+        buf.extend_from_slice(&counter_bytes);
+
+        buf
+    }
+
+    pub fn from_saved_bytes(bytes: &[u8]) -> Self {
+        let bytes: [u8; 8] = bytes.try_into().unwrap();
+        let value = u64::from_le_bytes(bytes);
+
+        Self {
+            counter: Arc::new(AtomicU64::new(value))
+        }
+    }
+}
 
 #[derive(Clone)]
 /// A data structure that tracks whether it has already seen a u64 value with as little space as possible. 
@@ -33,6 +74,35 @@ impl CompactSet {
         }
 
         exists
+    }
+
+    pub fn to_saved_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let ranges = self.ranges.lock().unwrap();
+
+        rmp::encode::write_array_len(&mut buf, ranges.len() as u32);
+        for r in ranges.iter() {
+            rmp::encode::write_bin(&mut buf, &r.serialize()).unwrap();
+        }
+
+        buf
+    }
+
+    pub fn from_saved_bytes(bytes: &[u8]) -> Self {
+        let mut cursor = Cursor::new(bytes);
+
+        let range_len = rmp::decode::read_array_len(&mut cursor).unwrap();
+        let mut ranges = VecDeque::with_capacity(range_len as usize);
+
+        for _ in 0..range_len {
+            let range_bytes = rmp_read_bin(bytes, &mut cursor).unwrap();
+            let range = Range::<64>::deserialize(range_bytes);
+            ranges.push_back(range);
+        }
+
+        Self {
+            ranges: Arc::new(Mutex::new(ranges))
+        }
     }
 }
 
@@ -100,6 +170,63 @@ impl<const N: usize> Range<N> {
 
             panic!("Should be space for number!")
         })
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+
+        match self.members {
+            Some(members) => {
+                rmp::encode::write_bin(&mut buf, &[244]).unwrap();
+                rmp::encode::write_bin(&mut buf, &members).unwrap();
+            },
+            None => {
+                rmp::encode::write_bin(&mut buf, &[133]).unwrap();
+            },
+        }
+        rmp::encode::write_u64(&mut buf, self.min).unwrap();
+        rmp::encode::write_u64(&mut buf, self.max).unwrap();
+        match self.expires {
+            Expiry::At(at) => {
+                rmp::encode::write_bin(&mut buf, &[66]).unwrap();
+                rmp::encode::write_u64(&mut buf, at).unwrap();
+            },
+            Expiry::Unknown => {
+                rmp::encode::write_bin(&mut buf, &[55]).unwrap();
+            },
+        }
+
+        buf
+    }
+
+    fn deserialize(bytes: &[u8]) -> Self {
+        let mut cursor = Cursor::new(bytes);
+
+        let members_byte = rmp_read_bin(bytes, &mut cursor).unwrap();
+        let members: Option<[u8; N]> = if members_byte == &[244] {
+            Some(rmp_read_bin(bytes, &mut cursor).unwrap().try_into().unwrap())
+        } else if members_byte == &[133] {
+            None
+        } else {
+            panic!("Expected byte indicating option: 244 or 133!")
+        };
+        let min = rmp::decode::read_u64(&mut cursor).unwrap();
+        let max = rmp::decode::read_u64(&mut cursor).unwrap();
+        let expires_byte =  rmp_read_bin(bytes, &mut cursor).unwrap();
+        let expires: Expiry = if expires_byte == &[66] {
+            Expiry::At(rmp::decode::read_u64(&mut cursor).unwrap())
+        } else if expires_byte == &[55] {
+            Expiry::Unknown
+        } else {
+            panic!("Expected byte indicating expiry: 366 or 55!");
+        };
+
+        Self {
+            members,
+            min,
+            max,
+            expires
+        }
     }
 }
 
@@ -505,8 +632,8 @@ mod test {
         // For better benchmark do 500k and 50 amount
         // There it can reach 20M ops/secs
         // `cargo test --package tiauth-core --lib --release --all-features -- compactset::test::routine --exact --show-output`
-        let size = 500000;
-        let amnt = 50;
+        let size = 10000;
+        let amnt = 10;
         let ops = amnt*size;
         let mut add_time = 0f64;
         let mut check_time = 0f64;

@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 
 use crate::data::SessionClaims;
+use crate::data::COUNTER_EXPIRES;
 use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
 use crate::error::OneOfTo;
 use crate::error::WrapErrorOneOf;
 use crate::proof::create_session;
 use crate::proof::Ephemeral;
+use crate::proof::EphemeralCounterState;
 use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
 use crate::state::State;
@@ -35,7 +37,7 @@ use terrors::OneOf;
 
 // TODO implement fake credential, also if password file is empty
 pub fn login_start(
-    state: &impl AppState,
+    state: &impl State,
     request: &str,
     user_id: &str,
 ) -> Result<(String, Ephemeral<String>), OneOf<(StoreError, OpaqueError)>> {
@@ -54,11 +56,16 @@ pub fn login_start(
         user_id,
     )
     .to_one_of().map_err(OneOf::broaden)?;
-    let key = state.keys().ephemeral_key();
 
-    let entropy = nonce_384_bytes(&mut StdRng::from_entropy());
+    let time = state.time();
+
+    let key = state.keys().ephemeral_key(time);
+
+    let eph_type = EphemeralType::Login;
+    let expires = time + COUNTER_EXPIRES;
+    let state_input = EphemeralCounterState { expires, count: state.counter_next(user_id, expires) };
     let data = <String as ByteSerial>::serialize(&state_data);
-    let eph = Ephemeral::create(&key, user_id, state.application(), &entropy, EphemeralType::Login, data.as_packed());
+    let eph = Ephemeral::create(&key, user_id, state.application(), state_input, eph_type, data.as_packed());
 
     Ok((response, eph))
 }
@@ -67,23 +74,25 @@ pub fn login_start(
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
 fn login_finish<'a>(
-    state: &'a impl AppState,
+    state: &'a impl State,
     request: &'a str,
     nonce: &'a Ephemeral<String>,
 ) -> Result<(String, &'a str), OneOf<(OpaqueError, InvalidEphemeral)>> {
-    let verify_keys = state.keys().eph_veri_keys();
+
+    let time = state.time();
+    let verify_keys = state.keys().eph_veri_keys(time);
     let entry = nonce.verify(&verify_keys, state.application()).to_one_of().map_err(OneOf::broaden)?;
 
-    let login_state = entry.data.try_deserialize().map_err(|_| OneOf::new(InvalidEphemeral))?;
+    let opaque_state = entry.verify_state::<EphemeralCounterState, _>(|e| {
+        if state.counter_used(entry.user_id, e.count, e.expires, time) {
+            return Err(InvalidEphemeral)
+        }
 
-    // let entry = pop_ephemeral(state, application, nonce, vec![EphemeralType::Opaque])
-    //     .to_one_of_two()?
-    //     .unwrap();
+        Ok(())
+    }).to_one_of().map_err(OneOf::broaden)?;
 
     // TODO check if OPAQUE login state can be revealed to the client
-    let secret = login_server_finish(request, login_state).to_one_of().map_err(OneOf::broaden)?;
-
-    
+    let secret = login_server_finish(request, opaque_state).to_one_of().map_err(OneOf::broaden)?;
 
     Ok((secret, entry.user_id))
 }
@@ -95,7 +104,7 @@ pub enum LoginError {
 }
 
 pub fn login_session(
-    state: &impl AppState,
+    state: &impl State,
     application: &str,
     request: &str,
     nonce: &Ephemeral<String>,
@@ -113,7 +122,8 @@ pub fn login_session(
 
     let key = state.keys().session_key();
 
-    let session = create_session(application, &user_id, EXPIRE_TIME, claims.borrow(), key);
+    let time = state.time();
+    let session = create_session(application, &user_id, EXPIRE_TIME, claims.borrow(), key, time);
 
     Ok(session)
 }
@@ -140,7 +150,7 @@ pub mod test_util {
         let (request, client_state) = client_login(password).unwrap();
         //let mut time_server = 0f64;
         //let before = Instant::now();
-        let (response, nonce) = login_start(&state.state, &request, user_id).unwrap();
+        let (response, nonce) = login_start(state, &request, user_id).unwrap();
         //time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
         // println!("server time: {} ms", time_server);
@@ -149,7 +159,7 @@ pub mod test_util {
         // time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
         // println!("server time: {} ms", time_server);
         login_session(
-            &state.state,
+            state,
             application,
             &request,
             &nonce,
@@ -182,11 +192,11 @@ mod tests {
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&state.state, &request, user_id).unwrap();
+        let (response, nonce) = login_start(&state, &request, user_id).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let (secret_server, login_user_id) = login_finish(&state.state, &request, &nonce).unwrap();
+        let (secret_server, login_user_id) = login_finish(&state, &request, &nonce).unwrap();
 
         assert_eq!(secret, secret_server);
         assert_eq!(user_id, login_user_id);
@@ -207,12 +217,12 @@ mod tests {
 
         let (request, client_state) = client_login(password).unwrap();
 
-        let (response, nonce) = login_start(&state.state, &request, user_id).unwrap();
+        let (response, nonce) = login_start(&state, &request, user_id).unwrap();
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
         let session = login_session(
-            &state.state,
+            &state,
             app,
             &request,
             &nonce,

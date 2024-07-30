@@ -6,7 +6,7 @@ use crate::data::{
 use crate::encoded::Encodable;
 use crate::error::OneOfTo;
 use crate::util::{combine_encode, rmp_read_bin, rmp_read_str};
-use crate::{ActionType, BytePacked, Claims, Target, TargetList};
+use crate::{ActionType, ByteOwned, BytePacked, Claims, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -14,14 +14,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use std::io::Cursor;
 use std::marker::PhantomData;
-#[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
-use std::time::SystemTime;
-/// This is necessary because SystemTime is not implemented on the WASM target. The web_time crate calls Date.now() instead.
 use terrors::OneOf;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-use web_time::SystemTime;
 
 #[derive(Debug)]
+/// A proof is issued by the application using their private key and verified using the public key stored inside `tiauth`. 
 pub struct Proof<T> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
@@ -81,13 +77,11 @@ pub fn create_proof<T: ByteSerial>(
     action: ActionType,
     target: Target,
     target_data: TargetList,
+    nonce: impl SerializedAs<Ephemeral<()>>,
     data: impl SerializedAs<T>,
     key: &Key,
+    now: u64
 ) -> Proof<T> {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let expires = expires_in + now;
     let content = ProofContent::new(
         application,
@@ -95,6 +89,7 @@ pub fn create_proof<T: ByteSerial>(
         action,
         target,
         target_data,
+        nonce.serialized(),
         data.serialized(),
     );
 
@@ -116,6 +111,7 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
     proof_bytes: &'a Proof<T>,
     public_key: &PublicKey,
     verify: AboutVerify,
+    time: u64,
 ) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
     let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content)
         .to_one_of()
@@ -125,11 +121,6 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
         println!("bad action");
         return Err(OneOf::new(InvalidProof {}));
     }
-
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
 
     if time > proof_input.about.expires + LEEWAY {
         println!("expired");
@@ -165,16 +156,13 @@ pub fn create_session(
     expires_in: u64,
     session_claims: impl SerializedAs<Claims>,
     key: &SessionKey,
+    time: u64,
 ) -> Session {
-    let issued = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let expires = expires_in + issued;
+    let expires = expires_in + time;
     let content = SessionContent::new(
         application,
         user_id,
-        issued,
+        time,
         expires,
         session_claims.serialized(),
     );
@@ -212,24 +200,117 @@ pub enum EphemeralType {
     ChangePassword,
     SetPassword,
     Login,
+    ProofToken
 }
 
 #[derive(Error, Debug)]
 #[error("Invalid EphemeralType.")]
 pub struct InvalidEphemeral;
 
+
+
+
+pub trait EphemeralStateType {
+    type VerifyType<'a>;
+
+    fn valid_type(eph_type: &EphemeralType) -> Result<(), InvalidEphemeral> {
+        if !Self::is_valid_type(eph_type) {
+            return Err(InvalidEphemeral)
+        }
+
+        Ok(())
+    }
+
+    fn is_valid_type(eph_type: &EphemeralType) -> bool;
+
+    /// Return the state in a form that is necessary for the comparison. This can also be bytes.
+    fn get_state<'a>(state: &'a [u8]) -> Self::VerifyType<'a>;
+
+    /// Create a binary representation of the state that should be compared when verifying the Ephemeral.
+    fn create_state(self) -> impl AsRef<[u8]>;
+}
+
+pub struct EphemeralCounterState {
+    pub count: u64,
+    pub expires: u64
+}
+
+pub struct EphemeralChangePasswordState {
+    pub password_file: String
+}
+
+pub struct EphemeralEmptyState;
+
+impl EphemeralStateType for EphemeralEmptyState {
+    type VerifyType<'a> = ();
+
+    fn is_valid_type(eph_type: &EphemeralType) -> bool {
+        eph_type == &EphemeralType::NewUser
+    }
+
+    fn get_state<'a>(_: &'a [u8]) -> Self::VerifyType<'a> {
+        ()
+    }
+
+    fn create_state(self) -> impl AsRef<[u8]> {
+        []
+    }
+}
+
+impl EphemeralStateType for EphemeralCounterState {
+    fn is_valid_type(eph_type: &EphemeralType) -> bool {
+        eph_type == &EphemeralType::ProofToken || eph_type == &EphemeralType::Login
+    }
+
+    /// This function panics if the state is not exactly 16 bytes.
+    fn get_state(state: &[u8]) -> Self {
+        assert_eq!(state.len(), 16);
+        let counter_bytes: [u8; 8] = state[0..8].try_into().unwrap();
+        let expires_bytes: [u8; 8] = state[8..16].try_into().unwrap();
+
+        Self { count: u64::from_le_bytes(counter_bytes), expires: u64::from_le_bytes(expires_bytes) }
+    }
+    
+    fn create_state(self) -> impl AsRef<[u8]> {
+        let mut state_bytes = [0u8; 16];
+        state_bytes[0..8].copy_from_slice(&self.count.to_le_bytes());
+        state_bytes[8..16].copy_from_slice(&self.expires.to_le_bytes());
+
+        state_bytes
+    }
+    
+    type VerifyType<'a> = Self;
+    
+}
+
+impl EphemeralStateType for EphemeralChangePasswordState {
+    fn is_valid_type(eph_type: &EphemeralType) -> bool {
+        eph_type == &EphemeralType::ChangePassword
+    }
+    
+    type VerifyType<'a> = &'a [u8];
+    
+    fn get_state<'a>(state: &'a [u8]) -> Self::VerifyType<'a> {
+        state
+    }
+    
+    fn create_state(self) -> impl AsRef<[u8]> {
+        let mut hasher = Sha256::new();
+        hasher.update(self.password_file.as_bytes());
+        hasher.finalize()
+    }
+
+}
+
 impl EphemeralType {
     pub fn is(&self) -> impl Fn(&EphemeralType) -> bool + '_ {
         |t: &EphemeralType| t.key_name() == self.key_name()
     }
 
-    // The canonical Ephemeral state that is generated in case of change password. If the state is equal to the Ephemeral's actual state, then the Ephemeral has not been used.
-    pub fn change_password_state(&self, password_file: &str) -> Vec<u8> {
-        assert_eq!(self, &EphemeralType::ChangePassword);
+    fn try_get_state<'a, S: EphemeralStateType>(&self, state: &'a [u8]) -> Result<S::VerifyType<'a>, InvalidEphemeral> {
+        S::valid_type(&self)?;
 
-        let mut hasher = Sha256::new();
-        hasher.update(password_file.as_bytes());
-        hasher.finalize().to_vec()
+        Ok(S::get_state(state))
     }
 
     fn key_name(&self) -> &'static str {
@@ -238,6 +319,7 @@ impl EphemeralType {
             Self::ChangePassword => "change_pass",
             Self::SetPassword => "set_pass",
             Self::Login => "login",
+            Self::ProofToken => "proof_token"
         }
     }
 
@@ -247,6 +329,7 @@ impl EphemeralType {
             "change_pass" => Self::ChangePassword,
             "set_pass" => Self::SetPassword,
             "login" => Self::Login,
+            "proof_token" => Self::ProofToken,
             _ => return Err(InvalidEphemeral),
         };
 
@@ -259,6 +342,67 @@ pub struct Ephemeral<T: ByteSerial> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
     tag: [u8; 32]
+}
+
+pub struct EphemeralView<'a, T: ByteSerial> {
+    phantom: PhantomData<T>,
+    content: &'a [u8],
+    tag: &'a [u8; 32]
+}
+
+impl<'a, T: ByteSerial> EphemeralView<'a, T> {
+    pub fn verify(
+        &self,
+        verify_keys: &[EphemeralKey],
+        application: &str,
+    ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
+        let Self { tag, content, .. } = self;
+
+        Ephemeral::verify_components(tag, content, verify_keys, application)
+    }
+}
+
+impl<T: ByteSerial + 'static> ByteSerial for Ephemeral<T> {
+    type Deserialized<'a> = EphemeralView<'a, T>;
+
+    type DeserializeErr = InvalidEphemeral;
+
+    fn serialize(&self) -> crate::ByteOwned<Self>
+    where
+        Self: Sized {
+        let mut bytes = self.content.clone();
+        bytes.extend_from_slice(&self.tag);
+        ByteOwned::new(bytes)
+    }
+
+    fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
+        if bytes.len() < 32 {
+            return Err(InvalidEphemeral)
+        }
+
+        let (content, tag) = bytes.split_at(bytes.len()-32);
+        let tag: &[u8; 32] = tag.try_into().unwrap();
+
+        Ok(Self::Deserialized {
+            phantom: PhantomData,
+            content,
+            tag
+        })
+    }
+
+    fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
+    where
+        Self: Sized {
+        if bytes.len() < 32 {
+            return Err(InvalidEphemeral)
+        }
+
+        let (content, tag) = bytes.split_at(bytes.len()-32);
+        let tag: [u8; 32] = tag.try_into().unwrap();
+
+        Ok(Self { phantom: PhantomData, content: content.to_vec(), tag })
+
+    }
 }
 
 impl<T: ByteSerial> Encodable for Ephemeral<T> {
@@ -311,18 +455,20 @@ impl<T: ByteSerial> Encodable for Ephemeral<T> {
 }
 
 impl<T: ByteSerial> Ephemeral<T> {
-    pub fn create(
+    pub fn create<S: EphemeralStateType>(
         key: &EphemeralKey,
         user_id: &str,
         application: &str,
-        state: &[u8],
+        state: S,
         eph_type: EphemeralType,
         data: &BytePacked<T>,
     ) -> Self {
+        assert!(S::is_valid_type(&eph_type));
+        let state = state.create_state();
         let ephemeral = EphemeralContent {
             user_id,
             application,
-            state,
+            state: state.as_ref(),
             eph_type,
             data,
         };
@@ -338,6 +484,23 @@ impl<T: ByteSerial> Ephemeral<T> {
         }
     }
 
+    fn verify_components<'a, 'tag>(
+        tag: &'tag [u8; 32],
+        content: &'a [u8],
+        verify_keys: &[EphemeralKey],
+        application: &str,
+    ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
+        crypto::verify_ephemeral(content, verify_keys, tag).map_err(|_| InvalidEphemeral)?;
+
+        let content = EphemeralContent::deserialize(content)?;
+
+        if content.application != application {
+            return Err(InvalidEphemeral);
+        }
+
+        Ok(content)
+    }
+
     /// Checks if the content of the Ephemeral was indeed created using one of the verify keys. It does not check for re-use.
     pub fn verify<'a>(
         &'a self,
@@ -346,28 +509,26 @@ impl<T: ByteSerial> Ephemeral<T> {
     ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
         let Self { tag, content, .. } = &self;
 
-        crypto::verify_ephemeral(content.as_slice(), verify_keys, tag).map_err(|_| InvalidEphemeral)?;
-
-        let content = EphemeralContent::deserialize(content.as_slice())?;
-
-        if content.application != application {
-            return Err(InvalidEphemeral);
-        }
-
-        Ok(content)
+        Self::verify_components(tag, content, verify_keys, application)
     }
 }
 
 #[derive(Debug)]
 pub struct EphemeralContent<'a, T: ByteSerial> {
+    /// Allowed to be empty
     pub user_id: &'a str,
     pub application: &'a str,
     /// This can be used for the either the state itself or a hash of the state (based on the EphemeralType), the Ephemeral is only
     /// valid if the state is unchanged from when the Ephemeral was handed out
-    pub state: &'a [u8],
+    state: &'a [u8],
     pub eph_type: EphemeralType,
-    pub data: &'a BytePacked<T>,
+    data: &'a BytePacked<T>,
 }
+
+// struct EphemeralVerify<'a> {
+//     eph_type: EphemeralType,
+
+// }
 
 impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
     pub fn new(
@@ -384,6 +545,27 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
             eph_type,
             data,
         }
+    }
+
+    pub fn verify_state<S: EphemeralStateType, F: FnOnce(S::VerifyType<'a>) -> Result<(), InvalidEphemeral>>(&self, verify: F) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+        // This also checks if the eph_type is valid       
+        let s: S::VerifyType<'a> = self.eph_type.try_get_state::<S>(&self.state)?;
+
+        verify(s)?;
+
+        Ok(self.data.deserialize())
+    }
+
+    pub fn verify_state_equal<S: EphemeralStateType>(&self, current_state_input: S) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+        S::valid_type(&self.eph_type)?;
+        
+        let current_state = current_state_input.create_state();
+
+        if current_state.as_ref() != self.state {
+            return Err(InvalidEphemeral)
+        }
+
+        Ok(self.data.deserialize())
     }
 
     fn serialize(&self) -> Vec<u8> {

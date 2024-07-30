@@ -215,12 +215,24 @@ Opaque,
 
 
 
-
+TODO DRIVE time only from state, no calls in application code to SystemTime
 
 
 For ephemeral login we need:
 - durable version counter that is incremented on each login
 
+
+Ephemeral:
+
+When logging, two rounds of computation are necessary due to the use of the OPAQUE protocol:
+
+- `login_start` computes an OPAQUE message for the user as well as some state that must be used in the second step. We want to avoid any database writes,
+so we HMAC this state (together with the user_id and some other information), creating an Ephemeral. This is passed to the user.
+- `login_finish` takes the user OPAQUE message and the Ephemeral from the previous step. It verifies the ephemeral and uses the state stored in it to finish the OPAQUE protocol.
+
+This protocol has a problem. The Ephemeral from the first time can be reused as often as a user wishes, as we store no state. This can be partially alleviated by setting an expiry time, after which the server will deny it being used again, but we wish to deny it being used even twice, to ensure the OPAQUE protocol is always executed in the way it was intended. So some kind of state must be remembered. Specifically, an Ephemeral has some kind of id/count associated with it. This id must be checked to see if it has been used.
+
+Furthermore, the key used to sign the HMAC is known only to the server, so it must be stored somewhere. 
 
 
 ### Subset algo results

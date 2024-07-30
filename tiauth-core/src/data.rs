@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::crypto::{load_public_key, PublicKey, SavedPublicKey};
+use crate::proof::Ephemeral;
 use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -803,6 +804,12 @@ impl Application {
     }
 }
 
+// This means an Ephemeral is valid up to 10 and 20 minutes
+pub const EPHEMERAL_INTERVAL: u64 = 10 * 60;
+
+// 1 minute
+pub const COUNTER_EXPIRES: u64 = 60;
+
 // 1 month
 pub const EXPIRE_TIME: u64 = 30 * 24 * 60 * 60;
 
@@ -885,7 +892,7 @@ where
     T: ByteSerial,
 {
     pub about: ProofAbout,
-    pub nonce: Vec<u8>,
+    pub nonce: &'a BytePacked<Ephemeral<()>>,
     pub target_data: TargetList,
     pub data: &'a BytePacked<T>,
 }
@@ -900,10 +907,9 @@ where
         action: ActionType,
         target: Target,
         target_data: TargetList,
+        eph: &'a BytePacked<Ephemeral<()>>,
         data: &'a BytePacked<T>,
     ) -> Self {
-        let nonce = nonce_384_bytes(&mut StdRng::from_entropy());
-
         Self {
             about: ProofAbout {
                 application: application.to_owned(),
@@ -911,7 +917,7 @@ where
                 action,
                 target,
             },
-            nonce: nonce.to_vec(),
+            nonce: eph,
             target_data,
             data,
         }
@@ -922,7 +928,7 @@ where
 
         let about_bytes = rmp_serde::to_vec(&self.about).unwrap();
         rmp::encode::write_bin(&mut buf, &about_bytes).unwrap();
-        rmp::encode::write_bin(&mut buf, &self.nonce).unwrap();
+        rmp::encode::write_bin(&mut buf, self.nonce.as_bytes()).unwrap();
         rmp::encode::write_array_len(&mut buf, self.target_data.0.len() as u32).unwrap();
         for t in &self.target_data.0 {
             rmp::encode::write_str(&mut buf, t).unwrap();
@@ -953,7 +959,7 @@ where
 
         Ok(Self {
             about,
-            nonce: nonce.to_owned(),
+            nonce: BytePacked::new(nonce),
             target_data: TargetList(targets),
             data,
         })
