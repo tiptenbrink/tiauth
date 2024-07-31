@@ -9,6 +9,7 @@ use crate::error::WrapErrorOneOf;
 use crate::proof::create_session;
 use crate::proof::Ephemeral;
 use crate::proof::EphemeralCounterState;
+use crate::proof::EphemeralLoginState;
 use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
 use crate::state::State;
@@ -63,7 +64,7 @@ pub fn login_start(
 
     let eph_type = EphemeralType::Login;
     let expires = time + COUNTER_EXPIRES;
-    let state_input = EphemeralCounterState { expires, count: state.counter_next(user_id, expires) };
+    let state_input = EphemeralLoginState { expires, count: state.counter_next(user_id, expires), password_file: read_login.password_file };
     let data = <String as ByteSerial>::serialize(&state_data);
     let eph = Ephemeral::create(&key, user_id, state.application(), state_input, eph_type, data.as_packed());
 
@@ -73,18 +74,31 @@ pub fn login_start(
 /// This performs the final login step in the OPAQUE protocol. We retrieve the state using the nonce, which is the serialized state entry key, which includes an
 /// expiry and the user_id, which ensures they are the same values as in the first step. The server generates a secret based on the client request and stored state.
 /// If the secret is the same as the client's, we are certain that login succeeded.
-fn login_finish<'a>(
-    state: &'a impl State,
-    request: &'a str,
-    nonce: &'a Ephemeral<String>,
-) -> Result<(String, &'a str), OneOf<(OpaqueError, InvalidEphemeral)>> {
+fn login_finish(
+    state: &impl State,
+    request: &str,
+    nonce: &Ephemeral<String>,
+) -> Result<(String, String, [u8; 32]), OneOf<(OpaqueError, InvalidEphemeral, StoreError)>> {
 
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
-    let entry = nonce.verify(&verify_keys, state.application()).to_one_of().map_err(OneOf::broaden)?;
+    let eph_decrypted = nonce.decrypt(&verify_keys).to_one_of().map_err(OneOf::broaden)?;
+    let entry = eph_decrypted.read();
 
-    let opaque_state = entry.verify_state::<EphemeralCounterState, _>(|e| {
-        if state.counter_used(entry.user_id, e.count, e.expires, time) {
+    let read_login = users::get_login(state.store(), entry.user_id).to_one_of().map_err(OneOf::broaden)?;
+
+    let read_login = if let Some(read_login) = read_login {
+        read_login
+    } else {
+        todo!()
+    };
+
+    let new_pw_file_hash = EphemeralLoginState::hash_password(&read_login.password_file);
+
+    let time = state.time();
+
+    let opaque_state = entry.verify_state::<EphemeralLoginState, _>(|(count, expires, pw_file_hash)| {
+        if state.counter_used(entry.user_id, count, expires, time) || new_pw_file_hash != pw_file_hash {
             return Err(InvalidEphemeral)
         }
 
@@ -94,7 +108,7 @@ fn login_finish<'a>(
     // TODO check if OPAQUE login state can be revealed to the client
     let secret = login_server_finish(request, opaque_state).to_one_of().map_err(OneOf::broaden)?;
 
-    Ok((secret, entry.user_id))
+    Ok((secret, entry.user_id.to_owned(), new_pw_file_hash))
 }
 
 #[derive(Error, Debug)]
@@ -111,7 +125,7 @@ pub fn login_session(
     secret: &str,
     requested_claims: SessionClaims,
 ) -> Result<Session, OneOf<(StoreError, OpaqueError, InvalidEphemeral, LoginError)>> {
-    let (server_secret, user_id) = login_finish(state, request, nonce).map_err(OneOf::broaden)?;
+    let (server_secret, user_id, pw_file_hash) = login_finish(state, request, nonce).map_err(OneOf::broaden)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
@@ -123,7 +137,7 @@ pub fn login_session(
     let key = state.keys().session_key();
 
     let time = state.time();
-    let session = create_session(application, &user_id, EXPIRE_TIME, claims.borrow(), key, time);
+    let session = create_session(application, &user_id, EXPIRE_TIME, pw_file_hash, claims.borrow(), key, time);
 
     Ok(session)
 }
@@ -196,7 +210,7 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let (secret_server, login_user_id) = login_finish(&state, &request, &nonce).unwrap();
+        let (secret_server, login_user_id, pw_file_hash) = login_finish(&state, &request, &nonce).unwrap();
 
         assert_eq!(secret, secret_server);
         assert_eq!(user_id, login_user_id);

@@ -1,5 +1,5 @@
-use crate::crypto::{self, sign_data, verify_signature, EphemeralKey, Key, PublicKey, SessionKey};
-use crate::data::LEEWAY;
+use crate::crypto::{self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey};
+use crate::data::{SessionKey, LEEWAY};
 use crate::data::{
     AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
 };
@@ -109,6 +109,7 @@ fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Pro
 
 pub fn verify_proof_content<'a, T: ByteSerial>(
     proof_bytes: &'a Proof<T>,
+    application: &str,
     public_key: &PublicKey,
     verify: AboutVerify,
     time: u64,
@@ -117,7 +118,7 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-    if verify.verify(&proof_input.about).is_err() {
+    if verify.verify(&proof_input.about, application).is_err() {
         println!("bad action");
         return Err(OneOf::new(InvalidProof {}));
     }
@@ -137,23 +138,33 @@ pub fn verify_proof_content<'a, T: ByteSerial>(
 
 #[derive(Debug, PartialEq)]
 pub struct Session {
-    encrypted_bytes: Vec<u8>,
+    encrypted: Vec<u8>,
 }
 
 impl Session {
-    pub fn into_encoded(&self) -> String {
-        b64::URL_SAFE_NO_PAD.encode(&self.encrypted_bytes)
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.encrypted
     }
 
-    pub fn raw_bytes(&self) -> &[u8] {
-        &self.encrypted_bytes
+    pub fn decrypt(&self, keys: &[SessionKey]) -> Result<DecryptedSession, InvalidSession> {
+        let decrypted = crypto::symmetric_decrypt(&self.encrypted, keys)
+            .map_err(|_e| InvalidSession {})?;
+
+        Ok(DecryptedSession {
+            decrypted
+        })
     }
+}
+
+pub struct DecryptedSession {
+    decrypted: Vec<u8>
 }
 
 pub fn create_session(
     application: &str,
     user_id: &str,
     expires_in: u64,
+    pw_file_hash: [u8; 32],
     session_claims: impl SerializedAs<Claims>,
     key: &SessionKey,
     time: u64,
@@ -164,35 +175,75 @@ pub fn create_session(
         user_id,
         time,
         expires,
+        pw_file_hash,
         session_claims.serialized(),
     );
 
     Session {
-        encrypted_bytes: crypto::session(&content.to_bytes(), key, &mut StdRng::from_entropy()),
+        encrypted: crypto::symmetric_encrypt(&content.to_bytes(), key, &mut StdRng::from_entropy()),
     }
 }
 
-pub struct VerifiedSession(Vec<u8>);
 
-impl VerifiedSession {
-    pub fn read(&self) -> Result<SessionContent, InvalidSession> {
-        Ok(SessionContent::from_bytes(&self.0))
-    }
+
+impl DecryptedSession {
+    // pub fn read(&self, time: u64) -> Result<SessionContent, InvalidSession> {
+    //     let content = SessionContent::from_bytes(&self.decrypted);
+
+    //     if content.expires + LEEWAY <= time {
+    //         return Err(InvalidSession)
+    //     }
+
+    //     Ok(content)
+    // }
 }
 
 #[derive(Debug)]
 pub struct InvalidSession;
 
-pub fn verify_session_bytes(
-    session_encrypted: &Session,
-    key: &SessionKey,
-) -> Result<VerifiedSession, InvalidSession> {
-    let session_decrypted = crypto::session_decrypt(&session_encrypted.encrypted_bytes, key)
-        .map_err(|_e| InvalidSession {})?;
+// pub fn verify_session_bytes(
+//     session_encrypted: &Session,
+//     keys: &[SessionKey],
+// ) -> Result<VerifiedSession, InvalidSession> {
+//     let session_decrypted = crypto::symmetric_decrypt(&session_encrypted.encrypted_bytes, keys)
+//         .map_err(|_e| InvalidSession {})?;
 
-    Ok(VerifiedSession(session_decrypted))
+//     Ok(VerifiedSession(session_decrypted))
+// }
+
+pub struct EphemeralKey(SymmetricKey);
+
+impl AsSymmetricKey for EphemeralKey {
+    fn as_symmetric_key(&self) -> &SymmetricKey {
+        &self.0
+    }
 }
 
+impl EphemeralKey {
+    pub fn compute<const INTERVAL: u64>(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
+        let passed = now - ref_time;
+
+        let intervals_passed = passed / INTERVAL;
+
+        let symmetric_key = SymmetricKey::derive_key(base_secret, intervals_passed);
+
+        Self(symmetric_key)
+    }
+
+    pub fn last<const INTERVAL: u64>(
+        base_secret: [u8; 32],
+        now: u64,
+        ref_time: u64,
+        amount_valid: u32,
+    ) -> Vec<Self> {
+        let key_amount = (amount_valid as u64).min((now - ref_time)/INTERVAL + 1);
+
+        (0..(key_amount))
+            .rev()
+            .map(|i| Self::compute::<INTERVAL>(base_secret, now - (i * INTERVAL), ref_time))
+            .collect()
+    }
+}
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum EphemeralType {
@@ -206,9 +257,6 @@ pub enum EphemeralType {
 #[derive(Error, Debug)]
 #[error("Invalid EphemeralType.")]
 pub struct InvalidEphemeral;
-
-
-
 
 pub trait EphemeralStateType {
     type VerifyType<'a>;
@@ -228,6 +276,12 @@ pub trait EphemeralStateType {
 
     /// Create a binary representation of the state that should be compared when verifying the Ephemeral.
     fn create_state(self) -> impl AsRef<[u8]>;
+}
+
+pub struct EphemeralLoginState {
+    pub count: u64,
+    pub expires: u64,
+    pub password_file: String
 }
 
 pub struct EphemeralCounterState {
@@ -255,6 +309,45 @@ impl EphemeralStateType for EphemeralEmptyState {
     fn create_state(self) -> impl AsRef<[u8]> {
         []
     }
+}
+
+impl EphemeralLoginState {
+    pub fn hash_password(password_file: &str) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(password_file.as_bytes());
+        hasher.finalize().into()
+    }
+}
+
+impl EphemeralStateType for EphemeralLoginState {
+    fn is_valid_type(eph_type: &EphemeralType) -> bool {
+        eph_type == &EphemeralType::Login
+    }
+
+    /// This function panics if the state is not exactly 48 bytes.
+    fn get_state(state: &[u8]) -> Self::VerifyType<'_> {
+        assert_eq!(state.len(), 48);
+        let counter_bytes: [u8; 8] = state[0..8].try_into().unwrap();
+        let expires_bytes: [u8; 8] = state[8..16].try_into().unwrap();
+        let pw_file_hash: [u8; 32] = state[16..].try_into().unwrap();
+
+        (u64::from_le_bytes(counter_bytes), u64::from_le_bytes(expires_bytes), pw_file_hash)
+    }
+    
+    fn create_state(self) -> impl AsRef<[u8]> {
+        let mut state_bytes = [0u8; 48];
+
+        state_bytes[0..8].copy_from_slice(&self.count.to_le_bytes());
+        state_bytes[8..16].copy_from_slice(&self.expires.to_le_bytes());
+        
+        let pw_file_hash = Self::hash_password(&self.password_file);
+        state_bytes[16..].copy_from_slice(&pw_file_hash);
+
+        state_bytes
+    }
+    
+    type VerifyType<'a> = (u64, u64, [u8; 32]);
+    
 }
 
 impl EphemeralStateType for EphemeralCounterState {
@@ -340,25 +433,24 @@ impl EphemeralType {
 #[derive(Debug)]
 pub struct Ephemeral<T: ByteSerial> {
     phantom: PhantomData<T>,
-    content: Vec<u8>,
-    tag: [u8; 32]
+    encrypted: Vec<u8>,
 }
 
 pub struct EphemeralView<'a, T: ByteSerial> {
-    phantom: PhantomData<T>,
-    content: &'a [u8],
-    tag: &'a [u8; 32]
+    encrypted: &'a [u8],
+    phantom: PhantomData<T>
 }
 
-impl<'a, T: ByteSerial> EphemeralView<'a, T> {
-    pub fn verify(
-        &self,
-        verify_keys: &[EphemeralKey],
-        application: &str,
-    ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
-        let Self { tag, content, .. } = self;
 
-        Ephemeral::verify_components(tag, content, verify_keys, application)
+impl<'a, T: ByteSerial> EphemeralView<'a, T> {
+    pub fn decrypt(
+        &self,
+        keys: &[EphemeralKey],
+    ) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
+        Ephemeral::decrypt_bytes(&self.encrypted, keys)
+        // let Self { encrypted, .. } = self;
+
+        // Ephemeral::verify_components(encrypted, verify_keys, application)
     }
 }
 
@@ -370,37 +462,36 @@ impl<T: ByteSerial + 'static> ByteSerial for Ephemeral<T> {
     fn serialize(&self) -> crate::ByteOwned<Self>
     where
         Self: Sized {
-        let mut bytes = self.content.clone();
-        bytes.extend_from_slice(&self.tag);
-        ByteOwned::new(bytes)
+        // let mut bytes = self.content.clone();
+        // bytes.extend_from_slice(&self.tag);
+        ByteOwned::new(self.encrypted.clone())
     }
 
     fn try_deserialize(bytes: &[u8]) -> Result<Self::Deserialized<'_>, Self::DeserializeErr> {
-        if bytes.len() < 32 {
-            return Err(InvalidEphemeral)
-        }
+        // if bytes.len() < 32 {
+        //     return Err(InvalidEphemeral)
+        // }
 
-        let (content, tag) = bytes.split_at(bytes.len()-32);
-        let tag: &[u8; 32] = tag.try_into().unwrap();
+        // let (content, tag) = bytes.split_at(bytes.len()-32);
+        // let tag: &[u8; 32] = tag.try_into().unwrap();
 
         Ok(Self::Deserialized {
             phantom: PhantomData,
-            content,
-            tag
+            encrypted: bytes
         })
     }
 
     fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
     where
         Self: Sized {
-        if bytes.len() < 32 {
-            return Err(InvalidEphemeral)
-        }
+        // if bytes.len() < 32 {
+        //     return Err(InvalidEphemeral)
+        // }
 
-        let (content, tag) = bytes.split_at(bytes.len()-32);
-        let tag: [u8; 32] = tag.try_into().unwrap();
+        // let (content, tag) = bytes.split_at(bytes.len()-32);
+        // let tag: [u8; 32] = tag.try_into().unwrap();
 
-        Ok(Self { phantom: PhantomData, content: content.to_vec(), tag })
+        Ok(Self { phantom: PhantomData, encrypted: bytes.to_vec() })
 
     }
 }
@@ -410,47 +501,47 @@ impl<T: ByteSerial> Encodable for Ephemeral<T> {
 
     fn decode(encoded: &str) -> Result<Self, Self::Error>
     {
-        let mut bytes = match b64::URL_SAFE_NO_PAD.decode(encoded) {
+        let bytes = match b64::URL_SAFE_NO_PAD.decode(encoded) {
             Ok(bytes) => bytes,
             Err(_) => {
                 println!("invalid decode");
                 return Err(InvalidEphemeral);
             }
         };
-        let total_len = bytes.len();
-        if total_len < 4 {
-            println!("shorter than 4 bytes, no content length.");
-            return Err(InvalidEphemeral);
-        }
-        let ln = &bytes[(total_len - 4)..total_len];
-        let content_length = u32::from_le_bytes([ln[0], ln[1], ln[2], ln[3]]) as usize;
-        if total_len < 4 + 32 + content_length {
-            println!("Not long enough for content and valid tag.");
-            return Err(InvalidEphemeral);
-        }
-        // After this the original contains only the content
-        let tag_vec = bytes.split_off(content_length);
-        if tag_vec.len() + 4 != 36 {
-            println!("Incorrect length for content length and tag.");
-            return Err(InvalidEphemeral);
-        }
-        let tag: [u8; 32] = (&tag_vec[0..32]).try_into().unwrap();
+        // let total_len = bytes.len();
+        // if total_len < 4 {
+        //     println!("shorter than 4 bytes, no content length.");
+        //     return Err(InvalidEphemeral);
+        // }
+        // let ln = &bytes[(total_len - 4)..total_len];
+        // let content_length = u32::from_le_bytes([ln[0], ln[1], ln[2], ln[3]]) as usize;
+        // if total_len < 4 + 32 + content_length {
+        //     println!("Not long enough for content and valid tag.");
+        //     return Err(InvalidEphemeral);
+        // }
+        // // After this the original contains only the content
+        // let tag_vec = bytes.split_off(content_length);
+        // if tag_vec.len() + 4 != 36 {
+        //     println!("Incorrect length for content length and tag.");
+        //     return Err(InvalidEphemeral);
+        // }
+        // let tag: [u8; 32] = (&tag_vec[0..32]).try_into().unwrap();
 
         Ok(Self {
             phantom: PhantomData,
-            content: bytes,
-            tag,
+            encrypted: bytes
         })
     }
 
     fn encode(&self) -> String {
-        let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
-        let total_len = content_length.len() + self.content.len() + self.tag.len();
+        b64::URL_SAFE_NO_PAD.encode(&self.encrypted)
+        // let content_length: [u8; 4] = (self.content.len() as u32).to_le_bytes();
+        // let total_len = content_length.len() + self.content.len() + self.tag.len();
 
-        combine_encode(
-            &[&self.content, &self.tag, &content_length],
-            total_len,
-        )
+        // combine_encode(
+        //     &[&self.content, &self.tag, &content_length],
+        //     total_len,
+        // )
     }
 }
 
@@ -467,7 +558,6 @@ impl<T: ByteSerial> Ephemeral<T> {
         let state = state.create_state();
         let ephemeral = EphemeralContent {
             user_id,
-            application,
             state: state.as_ref(),
             eph_type,
             data,
@@ -475,53 +565,79 @@ impl<T: ByteSerial> Ephemeral<T> {
 
         let serialized = ephemeral.serialize();
 
-        let tag = crypto::ephemeral(&serialized, key);
+        let encrypted = crypto::symmetric_encrypt(&serialized, key, &mut StdRng::from_entropy());
 
         Self {
             phantom: PhantomData,
-            content: serialized,
-            tag
+            encrypted
         }
     }
 
-    fn verify_components<'a, 'tag>(
-        tag: &'tag [u8; 32],
-        content: &'a [u8],
-        verify_keys: &[EphemeralKey],
-        application: &str,
-    ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
-        crypto::verify_ephemeral(content, verify_keys, tag).map_err(|_| InvalidEphemeral)?;
+    // fn verify_components<'a, 'tag>(
+    //     encrypted: &'a [u8],
+    //     verify_keys: &[EphemeralKey],
+    //     application: &str,
+    // ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
+    //     crypto::symmetric_decrypt(content, verify_keys, tag).map_err(|_| InvalidEphemeral)?;
 
-        let content = EphemeralContent::deserialize(content)?;
+    //     let content = EphemeralContent::deserialize(content)?;
 
-        if content.application != application {
-            return Err(InvalidEphemeral);
-        }
+    //     if content.application != application {
+    //         return Err(InvalidEphemeral);
+    //     }
 
-        Ok(content)
+    //     Ok(content)
+    // }
+
+    fn decrypt_bytes(bytes: &[u8], keys: &[EphemeralKey]) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
+        let decrypted = crypto::symmetric_decrypt(bytes, keys)
+            .map_err(|_| InvalidEphemeral)?;
+
+        Ok(DecryptedEphemeral {
+            decrypted,
+            phantom: PhantomData
+        })
     }
 
-    /// Checks if the content of the Ephemeral was indeed created using one of the verify keys. It does not check for re-use.
-    pub fn verify<'a>(
-        &'a self,
-        verify_keys: &[EphemeralKey],
-        application: &str,
-    ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
-        let Self { tag, content, .. } = &self;
-
-        Self::verify_components(tag, content, verify_keys, application)
+    pub fn decrypt(&self, keys: &[EphemeralKey]) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
+        Self::decrypt_bytes(&self.encrypted, keys)
     }
+
+    // Checks if the content of the Ephemeral was indeed created using one of the verify keys. It does not check for re-use.
+    // pub fn verify<'a>(
+    //     &'a self,
+    //     verify_keys: &[EphemeralKey],
+    //     application: &str,
+    // ) -> Result<EphemeralContent<'a, T>, InvalidEphemeral> {
+    //     let Self { tag, content, .. } = &self;
+
+    //     Self::verify_components(tag, content, verify_keys, application)
+    // }
+}
+
+pub struct DecryptedEphemeral<T> {
+    decrypted: Vec<u8>,
+    phantom: PhantomData<T>
+}
+
+impl<T: ByteSerial> DecryptedEphemeral<T> {
+    
+    pub fn read<'a>(&'a self) -> EphemeralContent<'a, T> {
+        // Since it's encrypted, we know the structure must be correct so we just unwrap here
+        EphemeralContent::deserialize(&self.decrypted).unwrap()
+    } 
 }
 
 #[derive(Debug)]
 pub struct EphemeralContent<'a, T: ByteSerial> {
-    /// Allowed to be empty
+    /// Allowed to be empty for ProofToken
     pub user_id: &'a str,
-    pub application: &'a str,
+    // Note that we do not need an application here because keys are application-specific
     /// This can be used for the either the state itself or a hash of the state (based on the EphemeralType), the Ephemeral is only
     /// valid if the state is unchanged from when the Ephemeral was handed out
     state: &'a [u8],
     pub eph_type: EphemeralType,
+    /// Access to the data is only given after verifying the content
     data: &'a BytePacked<T>,
 }
 
@@ -531,16 +647,14 @@ pub struct EphemeralContent<'a, T: ByteSerial> {
 // }
 
 impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
-    pub fn new(
+    fn new(
         user_id: &'a str,
-        application: &'a str,
         state: &'a [u8],
         eph_type: EphemeralType,
         data: &'a BytePacked<T>,
     ) -> Self {
         Self {
             user_id,
-            application,
             state,
             eph_type,
             data,
@@ -573,7 +687,6 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
 
         rmp::encode::write_array_len(&mut buf, 5).unwrap();
         rmp::encode::write_str(&mut buf, self.user_id).unwrap();
-        rmp::encode::write_str(&mut buf, self.application).unwrap();
         rmp::encode::write_bin(&mut buf, self.state).unwrap();
         let eph_type = self.eph_type.key_name();
         rmp::encode::write_str(&mut buf, eph_type).unwrap();
@@ -583,7 +696,7 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         buf
     }
 
-    pub fn deserialize(bytes: &'a [u8]) -> Result<Self, InvalidEphemeral> {
+    fn deserialize(bytes: &'a [u8]) -> Result<Self, InvalidEphemeral> {
         let mut cursor = Cursor::new(bytes);
 
         let len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidEphemeral)?;
@@ -591,7 +704,6 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
             return Err(InvalidEphemeral);
         }
         let user_id = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidEphemeral)?;
-        let application = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidEphemeral)?;
         let state = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidEphemeral)?;
         let eph_type = rmp_read_str(bytes, &mut cursor).unwrap();
         let eph_type = EphemeralType::from_key_name(eph_type).map_err(|_| InvalidEphemeral)?;
@@ -599,7 +711,6 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         let data: &BytePacked<T> = BytePacked::new(data);
         Ok(Self {
             user_id,
-            application,
             state,
             eph_type,
             data,

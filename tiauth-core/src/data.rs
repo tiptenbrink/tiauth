@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 
-use crate::crypto::{load_public_key, PublicKey, SavedPublicKey};
-use crate::proof::Ephemeral;
+use crate::crypto::{create_symmetric_key, load_public_key, AsSymmetricKey, KeyError, PublicKey, SavedPublicKey, SymmetricKey};
+use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession};
 use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
+use sha2::{Digest, Sha256};
 use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -711,12 +712,69 @@ impl<'a> ClaimsView<'a> {
     }
 }
 
+pub struct SessionStatus {
+    // if it's untracked, by default it is valid
+    tracked: bool,
+    // value of zero is meaningless
+    status: u8,
+    // value of zero is meaningless
+    pub expires: u64
+}
+
+impl SessionStatus {
+    pub fn untracked() -> Self {
+        Self { tracked: false, status: 0, expires: 0 }
+    }
+
+    pub fn from_raw_status(status: u8, expires: u64) -> Self {
+        Self { tracked: true, status, expires }
+    }
+
+    pub fn valid(&self, time: u64) -> Result<(), InvalidSession> {
+        if !self.tracked {
+            return Ok(())
+        }
+
+        if time < self.expires + LEEWAY && self.status == 1 {
+            return Ok(())
+        }
+
+        Err(InvalidSession)
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct SessionKey(SymmetricKey);
+
+impl AsSymmetricKey for SessionKey {
+    fn as_symmetric_key(&self) -> &SymmetricKey {
+        &self.0
+    }
+}
+
+impl SessionKey {
+    pub fn create(rng: &mut StdRng) -> Self {
+        Self(create_symmetric_key(rng))
+    }
+
+    pub fn to_saved_bytes(&self) -> &[u8] {
+        self.0.raw_bytes()
+    }
+
+    pub fn from_saved_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
+        let symmetric_key = SymmetricKey::from_raw_bytes(bytes)?;
+
+        Ok(Self(symmetric_key))
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct SessionContent<'a> {
     pub user_id: String,
     pub application: String,
     pub issued: u64,
     pub expires: u64,
+    pw_file_hash: [u8; 32],
     /// These are a subset of the "login claims"
     pub session_claims: &'a BytePacked<Claims>,
 }
@@ -735,6 +793,7 @@ impl<'a> SessionContent<'a> {
         user_id: &str,
         issued: u64,
         expires: u64,
+        pw_file_hash: [u8; 32],
         session_claims: &'a BytePacked<Claims>,
     ) -> Self {
         Self {
@@ -742,6 +801,7 @@ impl<'a> SessionContent<'a> {
             application: application.to_owned(),
             issued,
             expires,
+            pw_file_hash,
             session_claims,
         }
     }
@@ -756,6 +816,7 @@ impl<'a> SessionContent<'a> {
         };
         let about_bytes = rmp_serde::encode::to_vec(&about).unwrap();
         rmp::encode::write_bin(&mut buf, &about_bytes).unwrap();
+        rmp::encode::write_bin(&mut buf, &self.pw_file_hash).unwrap();
         rmp::encode::write_bin(&mut buf, self.session_claims.as_bytes()).unwrap();
 
         buf
@@ -768,6 +829,8 @@ impl<'a> SessionContent<'a> {
         let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
         let about = cursor_slice(bytes, &mut cursor, len);
 
+        let pw_file_hash: [u8; 32] = rmp_read_bin(bytes, &mut cursor).unwrap().try_into().unwrap();
+
         let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
         let claims = cursor_slice(bytes, &mut cursor, len);
 
@@ -778,6 +841,7 @@ impl<'a> SessionContent<'a> {
             application: about.application.to_owned(),
             issued: about.issued,
             expires: about.expires,
+            pw_file_hash,
             session_claims: BytePacked::new(claims),
         }
     }
@@ -1007,21 +1071,18 @@ impl TargetList {
 }
 
 pub struct AboutVerify {
-    pub application: String,
     allowed_actions: HashSet<ActionType>,
 }
 
 impl AboutVerify {
-    pub fn new(application: &str, action: ActionType) -> Self {
+    pub fn new(action: ActionType) -> Self {
         Self {
-            application: application.to_owned(),
             allowed_actions: HashSet::from_iter(vec![action]),
         }
     }
 
-    pub fn with_allowed(application: &str, allowed: Vec<ActionType>) -> Self {
+    pub fn with_allowed(allowed: Vec<ActionType>) -> Self {
         Self {
-            application: application.to_owned(),
             allowed_actions: HashSet::from_iter(allowed),
         }
     }
@@ -1038,8 +1099,8 @@ impl AboutVerify {
     //     )
     // }
 
-    pub fn verify(&self, about: &ProofAbout) -> Result<(), InvalidProof> {
-        if !self.allowed_actions.contains(&about.action) || self.application != about.application {
+    pub fn verify(&self, about: &ProofAbout, application: &str) -> Result<(), InvalidProof> {
+        if !self.allowed_actions.contains(&about.action) || application != about.application {
             return Err(InvalidProof {});
         }
 

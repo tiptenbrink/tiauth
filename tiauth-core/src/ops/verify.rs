@@ -1,16 +1,28 @@
-use crate::crypto::{EphemeralKey, PublicKey};
-use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent};
+use crate::crypto::{PublicKey};
+use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent, SessionContent};
 use crate::error::{OneOfTo, WrapErrorOneOf};
-use crate::proof::{verify_proof_content, verify_session_bytes, EphemeralCounterState, InvalidEphemeral, InvalidSession, VerifiedSession};
+use crate::proof::{verify_proof_content, EphemeralCounterState, InvalidEphemeral, InvalidSession};
 use crate::state::{CounterState, State};
-use crate::store::StoreError;
-use crate::{AppState, Proof, Session};
+use crate::store::{sessions, StoreError};
+use crate::{AppState, KeyState, Proof, Session};
 use base64::{engine::general_purpose as b64, Engine as _};
 use terrors::OneOf;
 
 pub fn proof_token() {
 
 }
+
+// TODO ensure pw_hash matches!
+// pub fn verify_session<'a>(state: &impl State, session: &'a Session, time: u64) -> Result<VerifiedSession, OneOf<(StoreError, InvalidSession)>>{
+//     let session_status = sessions::session_status(state.store(), session).to_one_of().map_err(OneOf::broaden)?;
+
+//     session_status.valid(time).to_one_of().map_err(OneOf::broaden)?;
+
+//     let session_keys = state.keys().sess_veri_keys();
+//     let session = verify_session_bytes(session, session_keys).to_one_of().map_err(OneOf::broaden)?;
+
+//     Ok(session)
+// }
 
 // pub fn verify_proof_write<T: ByteSerial>(
 //     state: &impl State,
@@ -38,33 +50,35 @@ pub fn proof_token() {
 //     Ok(())
 // }
 
-pub fn verify_proof<'a, T: ByteSerial>(
-    state: &impl CounterState,
-    proof: &'a Proof<T>,
-    verify: AboutVerify,
-    application: &str,
-    public_key: &PublicKey,
-    eph_keys: &[EphemeralKey],
-    time: u64
-) -> Result<ProofContent<'a, T>, OneOf<(StoreError, InvalidProof)>>
-where
-{
-    let proof_content = verify_proof_content(proof, public_key, verify, time).map_err(OneOf::broaden)?;
+// pub fn verify_proof<'a, T: ByteSerial>(
+//     state: &impl State,
+//     proof: &'a Proof<T>,
+//     verify: AboutVerify,
+//     time: u64
+// ) -> Result<ProofContent<'a, T>, OneOf<(StoreError, InvalidProof)>>
+// where
+// {
+//     let public_key = state.public_key();
+//     let application = state.application();
+//     let proof_content = verify_proof_content(proof, application, public_key, verify, time).map_err(OneOf::broaden)?;
     
-    let proof_eph = proof_content.nonce.try_deserialize()
-        .and_then(|v| v.verify(eph_keys, application))
-        .map_err(|_| OneOf::new(InvalidProof {}))?;
+//     let eph_keys = state.keys().eph_veri_keys(time);
+    
 
-    proof_eph.verify_state::<EphemeralCounterState, _>(|EphemeralCounterState { count, expires }| {
-        if state.counter_used(proof_eph.user_id, count, expires, time) {
-            return Err(InvalidEphemeral)
-        }
+//     let proof_eph = proof_content.nonce.try_deserialize()
+//         .and_then(|v| v.verify(&eph_keys, application))
+//         .map_err(|_| OneOf::new(InvalidProof {}))?;
+
+//     proof_eph.verify_state::<EphemeralCounterState, _>(|EphemeralCounterState { count, expires }| {
+//         if state.counter_used(proof_eph.user_id, count, expires, time) {
+//             return Err(InvalidEphemeral)
+//         }
         
-        Ok(())
-    }).map_err(|_| OneOf::new(InvalidProof {}))?;
+//         Ok(())
+//     }).map_err(|_| OneOf::new(InvalidProof {}))?;
 
-    Ok(proof_content)
-}
+//     Ok(proof_content)
+// }
 
 #[cfg(feature = "test")]
 pub mod test_util {

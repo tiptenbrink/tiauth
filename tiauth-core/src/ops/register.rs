@@ -1,7 +1,6 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 use thiserror::Error;
 
-use crate::crypto::VerifyFailed;
 use crate::data::Claims;
 use crate::data::InvalidProof;
 use crate::data::UserPassword;
@@ -74,7 +73,7 @@ fn user_change_ephemeral<T: ByteSerial>(
     entry: &EphemeralContent<T>,
     old_login_bytes: Option<&[u8]>,
     password_file: String,
-) -> Result<UserPassword, OneOf<(SetLoginError,)>> {
+) -> Result<UserPassword, OneOf<(SetLoginError, InvalidEphemeral,)>> {
     let login = match entry.eph_type {
         EphemeralType::NewUser => {
             // TODO check if we want AlreadyExists error
@@ -85,7 +84,7 @@ fn user_change_ephemeral<T: ByteSerial>(
             //     return Err(OneOf::new(SetLoginError::AlreadyExists))
             // }
             // Note that the content is verified, so the state and data are not user-determined
-            // It's a programming error if they are non-empty
+            // It's a programming error if they are non-empty for the NewUser type
             entry.verify_state_equal::<EphemeralEmptyState>(EphemeralEmptyState).unwrap();
 
             UserPassword {
@@ -110,8 +109,9 @@ fn user_change_ephemeral<T: ByteSerial>(
                 user_id: entry.user_id.to_owned(),
                 password_file,
             }
-        }
-        _ => panic!("Only NewUser|ChangePassword ephemeral allowed for set login!"),
+        },
+        // Incorrect type
+        _ => return Err(OneOf::new(InvalidEphemeral)),
     };
 
     Ok(login)
@@ -119,7 +119,6 @@ fn user_change_ephemeral<T: ByteSerial>(
 
 pub fn register_finish(
     state: &impl State,
-    application: &str,
     request: &str,
     register_eph: &Ephemeral<()>,
 ) -> Result<(), FinishError> {
@@ -129,10 +128,10 @@ pub fn register_finish(
 
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
-
-    let content = register_eph.verify(&verify_keys, application)
+    let eph_decrypted = register_eph.decrypt(&verify_keys)
         .to_one_of()
         .map_err(OneOf::broaden)?;
+    let content = eph_decrypted.read();
 
     let store = state.store();
     let tx = store.open_write().to_one_of().map_err(OneOf::broaden)?;
@@ -201,7 +200,7 @@ pub mod test_util {
         // Use alternative if provided
         let nonce = alt_eph.unwrap_or(nonce);
 
-        register_finish(state, application, &request, &nonce).unwrap();
+        register_finish(state, &request, &nonce).unwrap();
 
         if let Some(claims_set) = claims_set {
             let claims = claims_set.serialize();
@@ -274,4 +273,6 @@ mod tests {
 
         assert_eq!(read_login.password_file, initial_pw_file)
     }
+
+    
 }

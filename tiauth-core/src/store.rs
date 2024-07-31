@@ -2,12 +2,12 @@ use base64::{engine::general_purpose as b64, Engine as _};
 use camino::Utf8Path;
 use redb::{AccessGuard, Database, Error as DbError, Key, ReadOnlyTable, ReadTransaction, ReadableTable as DbReadableTable, StorageError, Table, TableDefinition, TableError, TransactionError, Value, WriteTransaction};
 use sha2::{Digest, Sha256};
-use std::{borrow::Borrow, collections::HashMap, fmt::{write, Display}, io::Cursor, marker::PhantomData, num::ParseIntError, path::Path, str::Utf8Error, string::FromUtf8Error, sync::Arc, time::SystemTime};
+use std::{borrow::Borrow, collections::HashMap, fmt::{write, Display}, io::Cursor, marker::PhantomData, num::ParseIntError, ops::RangeBounds, path::Path, str::Utf8Error, string::FromUtf8Error, sync::Arc, time::SystemTime};
 use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    crypto::{self, EphemeralKey, KeyError, VerifyFailed}, data::{
+    crypto::{self, KeyError}, data::{
         empty_claim_bytes, ByteOwned, ByteSerial, UserPassword, SerializedAs, SessionClaims,
     }, encoded::Encodable, error::WrapErrorOneOf, proof::{EphemeralContent, EphemeralType}, state::State, util::{combine_encode, rmp_read_bin, rmp_read_str}, BytePacked, Claims
 };
@@ -304,6 +304,30 @@ impl TableType for KeysTableType {
     type Key = KeysK;
     type Value = KeysV;
 }
+
+type SessionsK = &'static [u8; 64];
+type SessionsV = (u8, u64);
+type SessionsExpiryK = u64;
+type SessionsExpiryV = &'static [u8; 64];
+
+//type SessionsVOwned = Vec<u8>;
+// Revoked sessions
+pub const SESSIONS: TableDefinition<SessionsK, SessionsV> = TableDefinition::new("sessions");
+pub const SESSIONS_EXPIRY: TableDefinition<SessionsExpiryK, SessionsExpiryV> = TableDefinition::new("sessions_expiry");
+
+pub struct SessionsTableType;
+
+impl TableType for SessionsTableType {
+    type Key = SessionsK;
+    type Value = SessionsV;
+}
+
+pub struct SessionsExpiryTableType;
+
+impl TableType for SessionsExpiryTableType {
+    type Key = SessionsExpiryK;
+    type Value = SessionsExpiryV;
+}
 // use tx::{TxToken, WriteTx}
 
 // struct KeysTable<'tx>(Table<'tx, KeysK, KeysV>);
@@ -335,11 +359,38 @@ pub struct ReadTx {
     // tables: TxTables<'tx>
 }
 
+impl ReadTx {
+    pub fn sessions_table(&self) -> Result<ReadTable<SessionsTableType>, StoreError> {
+        Ok(ReadTable {
+            table: self.tx.open_table(SESSIONS)?
+        })
+    }
+
+    pub fn sessions_expiry_table(&self) -> Result<ReadTable<SessionsExpiryTableType>, StoreError> {
+        Ok(ReadTable {
+            table: self.tx.open_table(SESSIONS_EXPIRY)?
+        })
+    }
+
+    pub fn user_table(&self) -> Result<ReadTable<UserTableType>, StoreError> {
+        Ok(ReadTable {
+            table: self.tx.open_table(USERS)?
+        })
+    }
+
+    pub fn claims_table(&self) -> Result<ReadTable<ClaimsTableType>, StoreError> {
+        Ok(ReadTable {
+            table: self.tx.open_table(CLAIMS)?
+        })
+    }
+}
+
 pub struct WriteTx {
     tx: WriteTransaction,
     // token: TxToken<'tx>,
     // tables: TxTables<'tx>
 }
+
 
 // use super::TxTables;
 
@@ -367,6 +418,18 @@ impl WriteTx {
     pub fn claims_table<'tx>(&'tx self) -> Result<WriteTable<'tx, ClaimsTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(CLAIMS)?
+        })
+    }
+
+    pub fn sessions_table<'tx>(&'tx self) -> Result<WriteTable<'tx, SessionsTableType>, StoreError> {
+        Ok(WriteTable {
+            table: self.tx.open_table(SESSIONS)?
+        })
+    }
+
+    pub fn sessions_expiry_table<'tx>(&'tx self) -> Result<WriteTable<'tx, SessionsExpiryTableType>, StoreError> {
+        Ok(WriteTable {
+            table: self.tx.open_table(SESSIONS_EXPIRY)?
         })
     }
 
@@ -460,7 +523,9 @@ pub const USERS: TableDefinition<UsersK, UsersV> = TableDefinition::new("users")
 // }
 
 pub trait ReadableTable<K: Key + 'static, V: Value + 'static> {
-    fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<K::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, V>>, StoreError>;
+    fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<K as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, V>>, StoreError>;
+
+    fn range<'tbl, 'k, KB: Borrow<<K as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
 }
 
 // impl<'tx> ReadableTable<UsersK, UsersV> for UserTable<'tx> {
@@ -513,11 +578,31 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for WriteTable<'tx, T> {
     fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<T::Key as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
         Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
     }
+    
+    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let range_result: Result<Vec<_>, _> = self.table.range(range)?.into_iter().map(|kv| {
+            kv.map(|(k, v)| {
+                (ReadGuard(k), ReadGuard(v))
+            })
+        }).collect();
+
+        Ok(range_result?)
+    }
 }
 
 impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
     fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<T::Key as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
         Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
+    }
+    
+    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let range_result: Result<Vec<_>, _> = self.table.range(range)?.into_iter().map(|kv| {
+            kv.map(|(k, v)| {
+                (ReadGuard(k), ReadGuard(v))
+            })
+        }).collect();
+
+        Ok(range_result?)
     }
 }
 
@@ -690,7 +775,7 @@ pub mod users {
     ) -> Result<Option<UserPassword>, StoreError> {
         let tx = store.open_read()?;
 
-        let table = tx.tx.open_table(USERS)?;
+        let table = tx.user_table()?;
     
         let access = table.get(user_id)?;
     
@@ -710,7 +795,7 @@ pub mod users {
     ) -> Result<Option<ByteOwned<Claims>>, StoreError> {
         let tx = store.open_read()?;
     
-        let table = tx.tx.open_table(CLAIMS)?;
+        let table = tx.claims_table()?;
     
         let access = table.get(user_id)?;
     
@@ -753,7 +838,30 @@ pub mod users {
     }
 }
 
+pub mod sessions {
+    use sha2::Sha512;
 
+    use crate::{data::SessionStatus, Session};
+
+    use super::*;
+
+    pub fn session_status(store: &Store, session: &Session) -> Result<SessionStatus, StoreError> {
+        let mut hasher = Sha512::new();
+        hasher.update(session.raw_bytes());
+        let result: [u8; 64] = hasher.finalize().into();
+
+        let tx = store.open_read()?;
+
+        let table = tx.sessions_table()?;
+
+        let status = table.get(&result)?;
+
+        Ok(match status.map(|s| s.value()) {
+            Some((status, expires)) => SessionStatus::from_raw_status(status, expires),
+            None => SessionStatus::untracked()
+        })
+    }
+}
 
 // pub struct SetLoginOptions {
 //     require_unset_password: bool,

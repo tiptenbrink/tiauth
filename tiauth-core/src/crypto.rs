@@ -3,7 +3,7 @@ use base64::{engine::general_purpose as b64, Engine as _};
 use ed25519_compact::{self as ed};
 use hmac::{Hmac, Mac};
 use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use rand::{CryptoRng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 use thiserror::Error;
@@ -60,8 +60,8 @@ pub enum KeyError {
     Ed25519Private,
     #[error("Failed to parse string as SubjectPublicKeyInfo-PEM-encoded Ed25519 public key.")]
     Ed25519Public,
-    #[error("Failed to parse bytes as 256-bit session key.")]
-    SessionBytes
+    #[error("Failed to parse bytes as 256-bit symmetric key.")]
+    SymmetricBytes
 }
 
 pub fn load_key(private_key_pem: &str) -> Result<Key, KeyError> {
@@ -90,35 +90,50 @@ pub fn verify_signature(data: &[u8], signature: &[u8], public_key: &PublicKey) -
     }
 }
 
-pub fn create_session_key(rng: &mut StdRng) -> SessionKey {
+pub fn create_symmetric_key(rng: &mut (impl RngCore + CryptoRng)) -> SymmetricKey {
     let mut key_bytes = [0u8; 32];
 
     rng.fill_bytes(&mut key_bytes);
 
-    SessionKey {
+    SymmetricKey {
         key_256: key_bytes.into(),
     }
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct SessionKey {
+pub struct SymmetricKey {
     key_256: aead::Key<aead::Aes256GcmSiv>,
 }
 
-impl SessionKey {
-    pub fn into_saved_bytes(self) -> Vec<u8> {
-        self.key_256.to_vec()
-    }
-
-    pub fn from_saved_bytes(bytes: Vec<u8>) -> Result<Self, KeyError> {
-        Ok(SessionKey {
-            key_256: aead::Key::<aead::Aes256GcmSiv>::from_exact_iter(bytes).ok_or(KeyError::SessionBytes)?,
-        })
+impl AsSymmetricKey for SymmetricKey {
+    fn as_symmetric_key(&self) -> &SymmetricKey {
+        &self
     }
 }
 
-pub struct SavedSessionKey {
-    pub session: String,
+impl SymmetricKey {
+    pub fn raw_bytes(&self) -> &[u8] {
+        self.key_256.as_slice()
+    }
+
+    pub fn from_raw_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
+        if bytes.len() != 32 {
+            return Err(KeyError::SymmetricBytes)
+        }
+
+        Ok(SymmetricKey {
+            key_256: aead::Key::<aead::Aes256GcmSiv>::clone_from_slice(bytes)
+        })
+    }
+
+    pub fn derive_key(base_secret: [u8; 32], key: u64) -> Self {
+        let mut rng = ChaCha20Rng::from_seed(base_secret);
+        rng.set_stream(key);
+        
+        create_symmetric_key(&mut rng)
+    }
+
+    
 }
 
 // pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
@@ -145,8 +160,8 @@ pub struct SavedSessionKey {
 //     }
 // }
 
-pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u8> {
-    let cipher = aead::Aes256GcmSiv::new(&key.key_256);
+pub fn symmetric_encrypt(session_data: &[u8], key: &impl AsSymmetricKey, rng: &mut (impl RngCore + CryptoRng)) -> Vec<u8> {
+    let cipher = aead::Aes256GcmSiv::new(&key.as_symmetric_key().key_256);
 
     let mut iv_bytes = vec![0u8; 12];
     rng.fill_bytes(&mut iv_bytes);
@@ -164,107 +179,99 @@ pub fn session(session_data: &[u8], key: &SessionKey, rng: &mut StdRng) -> Vec<u
 
 /// An EphemeralKey is an HMAC key used to sign `tiauth` data that can be passed to applications/clients and then returned in the next step.
 /// Because EphemeralKeys change frequently, they are not stored. Instead they are computed on demand.
-#[derive(Debug)]
-pub struct EphemeralKey {
-    // HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
-    bytes: [u8; 32],
-}
+// #[derive(Debug)]
+// pub struct EphemeralKey {
+//     // HmacSha256 key can be any length up to 64 bytes, but 256 bits of entropy should be plenty.
+//     bytes: [u8; 32],
+// }
 
-impl EphemeralKey {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self { bytes }
-    }
+// impl EphemeralKey {
+//     pub fn from_bytes(bytes: [u8; 32]) -> Self {
+//         Self { bytes }
+//     }
 
-    pub fn compute<const INTERVAL: u64>(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
-        let passed = now - ref_time;
+    
+// }
 
-        let mut rng = ChaCha20Rng::from_seed(base_secret);
-        let intervals_passed = passed / INTERVAL;
+// type HmacSha256 = Hmac<Sha256>;
 
-        rng.set_stream(intervals_passed);
-        let mut new_key = [0u8; 32];
-        rng.fill_bytes(&mut new_key);
+// pub fn ephemeral(ephemeral_data: &[u8], key: &EphemeralKey) -> [u8; 32] {
+//     let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
 
-        Self { bytes: new_key }
-    }
+//     mac.update(ephemeral_data);
 
-    pub fn last<const INTERVAL: u64>(
-        base_secret: [u8; 32],
-        now: u64,
-        ref_time: u64,
-        amount_valid: u32,
-    ) -> Vec<EphemeralKey> {
-        let key_amount = (amount_valid as u64).min((now - ref_time)/INTERVAL + 1);
+//     let code: [u8; 32] = mac.finalize().into_bytes().into();
 
-        (0..(key_amount))
-            .rev()
-            .map(|i| Self::compute::<INTERVAL>(base_secret, now - (i * INTERVAL), ref_time))
-            .collect()
-    }
-}
+//     code
+// }
 
-type HmacSha256 = Hmac<Sha256>;
+// #[derive(Error, Debug)]
+// #[error("Verification failed.")]
+// pub struct VerifyFailed;
 
-pub fn ephemeral(ephemeral_data: &[u8], key: &EphemeralKey) -> [u8; 32] {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
+// pub fn verify_ephemeral(
+//     ephemeral_data: &[u8],
+//     keys: &[EphemeralKey],
+//     code: &[u8; 32],
+// ) -> Result<(), VerifyFailed> {
+//     let mut i = keys.len() - 1;
+//     loop {
+//         let key = &keys[i];
+//         let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
 
-    mac.update(ephemeral_data);
+//         mac.update(ephemeral_data);
 
-    let code: [u8; 32] = mac.finalize().into_bytes().into();
+//         if mac.verify_slice(code).is_ok() {
+//             return Ok(());
+//         }
 
-    code
-}
+//         if i == 0 {
+//             break;
+//         }
 
-#[derive(Error, Debug)]
-#[error("Verification failed.")]
-pub struct VerifyFailed;
+//         i -= 1;
+//     }
 
-pub fn verify_ephemeral(
-    ephemeral_data: &[u8],
-    keys: &[EphemeralKey],
-    code: &[u8; 32],
-) -> Result<(), VerifyFailed> {
-    let mut i = keys.len() - 1;
-    loop {
-        let key = &keys[i];
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(&key.bytes).unwrap();
-
-        mac.update(ephemeral_data);
-
-        if mac.verify_slice(code).is_ok() {
-            return Ok(());
-        }
-
-        if i == 0 {
-            break;
-        }
-
-        i -= 1;
-    }
-
-    Err(VerifyFailed)
-}
+//     Err(VerifyFailed)
+// }
 
 /// The decryption failed. This can be due to tampered data, an invalid key, invalid IV or incorrect tag.
 #[derive(Error, Debug)]
 #[error("Decryption failed.")]
 pub struct DecryptFailed;
 
-pub fn session_decrypt(session: &[u8], key: &SessionKey) -> Result<Vec<u8>, DecryptFailed> {
-    let session_len = session.len();
-    assert!(session_len >= 28);
+pub trait AsSymmetricKey {
+    fn as_symmetric_key(&self) -> &SymmetricKey;
+}
 
-    let iv = session.get((session_len - 12)..(session_len)).unwrap();
+/// Keys should be passed in the order that they should be tried
+pub fn symmetric_decrypt(encrypted: &[u8], keys: &[impl AsSymmetricKey]) -> Result<Vec<u8>, DecryptFailed> {
+    let encrypted_len = encrypted.len();
+
+    // nonce of 12 bytes, tag of 16 bytes
+    if encrypted_len < 28 {
+        return Err(DecryptFailed)
+    }
+
+    let iv = encrypted.get((encrypted_len - 12)..(encrypted_len)).unwrap();
     let nonce = aead::Nonce::from_slice(iv);
-    let ciphertext = session.get(0..(session_len - 12)).unwrap();
+    let ciphertext = encrypted.get(0..(encrypted_len - 12)).unwrap();
 
-    let cipher = aead::Aes256GcmSiv::new(&key.key_256);
+    for key in keys {
+        let cipher = aead::Aes256GcmSiv::new(&key.as_symmetric_key().key_256);
 
-    cipher.decrypt(nonce, ciphertext).map_err(|_| DecryptFailed)
+        if let Ok(decrypted) = cipher.decrypt(nonce, ciphertext) {
+            return Ok(decrypted)
+        }
+    }
+
+    Err(DecryptFailed)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use rand::{rngs::OsRng, Rng, SeedableRng};
 
     use super::*;
@@ -353,13 +360,13 @@ mod tests {
         OsRng.fill(&mut seed);
         let mut rng = StdRng::from_seed(seed);
 
-        let key = create_session_key(&mut rng);
+        let key = create_symmetric_key(&mut rng);
 
         let data = "this_is_some_amount_of_data_that_I_encrypt";
 
-        let encrypted = session(data.as_bytes(), &key, &mut rng);
+        let encrypted = symmetric_encrypt(data.as_bytes(), &key, &mut rng);
 
-        let data_decrypt = session_decrypt(&encrypted, &key).unwrap();
+        let data_decrypt = symmetric_decrypt(&encrypted, &[key]).unwrap();
 
         assert_eq!(data.as_bytes(), data_decrypt);
     }
@@ -370,11 +377,11 @@ mod tests {
         OsRng.fill(&mut seed);
         let mut rng = StdRng::from_seed(seed);
 
-        let key = create_session_key(&mut rng);
+        let key = create_symmetric_key(&mut rng);
 
         let data = "this_is_some_amount_of_data_that_I_encrypt";
 
-        let encrypted = session(data.as_bytes(), &key, &mut rng);
+        let encrypted = symmetric_encrypt(data.as_bytes(), &key, &mut rng);
 
         let mut encrypted_tampered = encrypted.clone();
         let mut encrypted_invalid_iv = encrypted.clone();
@@ -400,9 +407,9 @@ mod tests {
             encrypted_bad_tag[encrypted_len - 20] = 2;
         }
 
-        let tampered_decrypt = session_decrypt(&encrypted_tampered, &key);
-        let invalid_iv_decrypt = session_decrypt(&encrypted_invalid_iv, &key);
-        let bad_tag_decrypt = session_decrypt(&encrypted_bad_tag, &key);
+        let tampered_decrypt = symmetric_decrypt(&encrypted_tampered, &[key.clone()]);
+        let invalid_iv_decrypt = symmetric_decrypt(&encrypted_invalid_iv, &[key.clone()]);
+        let bad_tag_decrypt = symmetric_decrypt(&encrypted_bad_tag, &[key]);
 
         assert!(tampered_decrypt.is_err());
         assert!(invalid_iv_decrypt.is_err());

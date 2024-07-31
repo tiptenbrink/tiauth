@@ -36,7 +36,7 @@ pub mod state_impl {
 #[cfg(feature = "action")]
 mod action {
     //pub use crate::ops::admin;
-    pub use crate::ops::login;
+    //pub use crate::ops::login;
     // pub use crate::ops::modify;
     // pub use crate::ops::register;
     // pub use crate::ops::verify;
@@ -58,7 +58,7 @@ pub mod app;
 
 #[cfg(feature = "test")]
 pub mod test {
-    pub use super::ops::login::test_util::*;
+    //pub use super::ops::login::test_util::*;
     // pub use super::ops::register::test_util::*;
     // pub use super::ops::verify::test_util::*;
     pub use super::state::test_util::*;

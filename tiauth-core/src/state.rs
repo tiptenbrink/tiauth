@@ -19,9 +19,10 @@ use web_time::SystemTime;
 
 use crate::counter::{CompactSet, Counter};
 use crate::crypto::{
-    create_key, create_session_key, load_key, load_public_key, save_private_key, save_public_key, EphemeralKey, Key, PublicKey, SessionKey
+    create_key, create_symmetric_key, load_key, load_public_key, save_private_key, save_public_key, Key, PublicKey
 };
-use crate::data::{Application, EPHEMERAL_INTERVAL};
+use crate::data::{Application, SessionKey, EPHEMERAL_INTERVAL};
+use crate::proof::EphemeralKey;
 use crate::store::{keys, DataDeserializationErrorSource, Store, StoreAddress, StoreError, WrapDeserializationError, WrapVecTryFromError};
 
 // pub trait GovernorState: State {
@@ -493,12 +494,12 @@ fn init_app_state<const SN: usize>(
         let session_keys: Result<Vec<SessionKey>, StoreError> = (0..SN)
             .map(|i| {
                 let session_key_bytes = keys::get_session_key_or_create(&mut table, i, || {
-                    let session_key = create_session_key(rng);
-                    session_key.into_saved_bytes()
+                    let session_key = SessionKey::create(rng);
+                    session_key.to_saved_bytes().to_vec()
                 })?;
 
 
-                Ok(SessionKey::from_saved_bytes(session_key_bytes).to_deser_err(format!("session key {}", i))?)
+                Ok(SessionKey::from_saved_bytes(&session_key_bytes).to_deser_err(format!("session key {}", i))?)
             })
             .collect();
 

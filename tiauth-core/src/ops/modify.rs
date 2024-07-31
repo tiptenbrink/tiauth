@@ -4,13 +4,15 @@ use crate::data::{
 use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
-use crate::proof::{verify_proof_content, Ephemeral, EphemeralType, InvalidSession};
+use crate::proof::{verify_proof_content, Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidSession};
 use crate::state::State;
 use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
 use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use std::time::SystemTime;
 use terrors::OneOf;
+
+use super::verify::{verify_proof, verify_session};
 
 /// Resets the password based on application proof. This is necessary because otherwise any user could reset another's password.
 /// For example, an application could provide a proof to the client after a user presses a button in a reset password email.
@@ -24,18 +26,12 @@ use terrors::OneOf;
 /// The function returns a "change nonce" that serves as a one-time token that allows one to re-enter the registration flow.
 pub fn reset_password(
     state: &impl State,
-    application: &str,
     proof: &Proof<()>,
 ) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidProof, LoginFieldError)>> {
-    let key = state.public_key();
     let time = state.time();
-    let proof_content = verify_proof_content(
-        proof,
-        &key,
-        AboutVerify::new(application, ActionType::ResetPassword),
-        time
-    )
-    .map_err(OneOf::broaden)?;
+
+    let proof_content = verify_proof(state, proof, AboutVerify::new(ActionType::ResetPassword), time)
+        .map_err(OneOf::broaden)?;
 
     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
     let about = proof_content.about;
@@ -102,12 +98,12 @@ pub fn reset_password(
     //     .into_one_of::<DbError>()
     //     .map_err(OneOf::broaden)?;
 
-    let state = EphemeralType::ChangePassword.change_password_state(&password_file);
+    let state = EphemeralChangePasswordState { password_file };
     let change_entry = Ephemeral::create(
         &key,
         &user_id,
         &about.application,
-        &state,
+        state,
         EphemeralType::ChangePassword,
         BytePacked::<()>::empty(),
     );
@@ -118,27 +114,18 @@ pub fn reset_password(
 fn change_password(
     state: &impl State,
     session_encrypted: &Session,
-) -> Result<Ephemeral<()>, OneOf<(DbError, InvalidSession)>> {
-    let verified = verify_session(state, session_encrypted)
-        .to_one_of()
-        .map_err(OneOf::broaden)?;
-    let session = verified.read().to_one_of().map_err(OneOf::broaden)?;
-
+) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidSession)>> {
     let time = state.time();
-
-    if time > session.expires + LEEWAY {
-        println!("Session has expired!");
-        return Err(OneOf::new(InvalidSession));
-    }
+    let verified = verify_session(state, session_encrypted, time)
+        .map_err(OneOf::broaden)?;
+    let session = verified.read(time).to_one_of().map_err(OneOf::broaden)?;
 
     if time > session.issued + CHANGE_AGE {
         return Err(OneOf::new(InvalidSession));
     }
 
-    let key = state.keys().ephemeral_key(&session.application);
-
-    let LoginPassword { password_file, .. } =
-        match get_login(state, &session.application, &session.user_id)
+    let UserPassword { password_file, .. } =
+        match users::get_login(state.store(),  &session.user_id)
             .to_one_of()
             .map_err(OneOf::broaden)?
         {
@@ -148,13 +135,15 @@ fn change_password(
                 return Err(OneOf::new(InvalidSession));
             }
         };
-    // As state we use the password file, this ensures it can be used successfully only once, because any change would change the password file
-    let state = EphemeralType::ChangePassword.change_password_state(&password_file);
-    let change_entry = Ephemeral::create(
+
+    let key = state.keys().ephemeral_key(time);
+
+    let state = EphemeralChangePasswordState { password_file };
+    let change_entry = Ephemeral::create::<EphemeralChangePasswordState>(
         &key,
         &session.user_id,
         &session.application,
-        &state,
+        state,
         EphemeralType::ChangePassword,
         BytePacked::<()>::empty(),
     );
