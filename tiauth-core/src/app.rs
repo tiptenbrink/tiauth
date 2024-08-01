@@ -3,7 +3,7 @@
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
 use crate::data::BytePacked;
 use crate::encoded::Encoded;
-use crate::proof::{create_proof, Ephemeral};
+use crate::proof::{Ephemeral};
 use crate::{ActionType, Target, TargetList};
 use crate::{Claims, Proof};
 

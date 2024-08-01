@@ -15,12 +15,12 @@ mod state;
 #[cfg(feature = "action")]
 mod store;
 
-pub use crate::data::ActionType;
+pub use crate::proof::ActionType;
 pub use crate::data::Application;
 pub use crate::data::Claims;
 pub use crate::data::SessionClaims;
-pub use crate::data::Target;
-pub use crate::data::TargetList;
+pub use crate::proof::Target;
+pub use crate::proof::TargetList;
 pub use crate::data::{ByteOwned, BytePacked, ByteSerial};
 pub use crate::proof::{Proof, Session};
 
@@ -54,7 +54,7 @@ mod action {
 pub use action::*;
 
 #[cfg(feature = "app")]
-pub mod app;
+//pub mod app;
 
 #[cfg(feature = "test")]
 pub mod test {

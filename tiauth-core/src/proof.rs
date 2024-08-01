@@ -1,22 +1,369 @@
 use crate::crypto::{self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey};
 use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
 use crate::data::{
-    AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs,
+     ByteSerial, SerializedAs,
 };
 use crate::encoded::Encodable;
 use crate::error::OneOfTo;
 use crate::util::{combine_encode, cursor_slice, rmp_read_bin, rmp_read_str};
-use crate::{ActionType, ByteOwned, BytePacked, Claims, Target, TargetList};
+use crate::{ByteOwned, BytePacked, Claims};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use std::collections::HashSet;
 use std::error::Error;
 use std::io::Cursor;
 use std::marker::PhantomData;
 use terrors::OneOf;
+
+
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum ActionType {
+    ResetPassword,
+    DeleteClaims,
+    SetClaims,
+    AddClaims,
+    MergeClaims,
+    ReadUsers,
+    ReadPassword,
+    DeleteUser,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Target {
+    Select,
+    Range,
+    All,
+}
+
+impl Target {
+    fn name(&self) -> &'static str {
+        match &self {
+            Self::Select => "select",
+            Self::Range => "range",
+            Self::All => "all",
+        }
+    }
+
+    fn from_name(name: &str) -> Result<Self, InvalidProof> {
+        Ok(match name {
+            "select" => Self::Select,
+            "range" => Self::Range,
+            "all" => Self::All,
+            _ => return Err(InvalidProof)
+        })
+    }
+}
+
+impl ActionType {
+    fn name(&self) -> &'static str {
+        match &self {
+            ActionType::ResetPassword => "reset_password",
+            ActionType::DeleteClaims => "delete_claims",
+            ActionType::SetClaims => "set_claims",
+            ActionType::AddClaims => "add_claims",
+            ActionType::MergeClaims => "merge_claims",
+            ActionType::ReadUsers => "read_users",
+            ActionType::ReadPassword => "read_password",
+            ActionType::DeleteUser => "delete_user",
+        }
+    }
+
+    fn from_name(name: &str) -> Result<Self, InvalidProof> {
+        Ok(match name {
+            "reset_password" => ActionType::ResetPassword ,
+            "delete_claims" => ActionType::DeleteClaims ,
+            "set_claims" => ActionType::SetClaims ,
+            "add_claims" => ActionType::AddClaims ,
+            "merge_claims" => ActionType::MergeClaims ,
+             "read_users" => ActionType::ReadUsers,
+        "read_password" => ActionType::ReadPassword,
+             "delete_user" => ActionType::DeleteUser,
+            _ => {
+                eprintln!("ActionType {} does not exist!", name);
+                return Err(InvalidProof)
+            }
+        })
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("Invalid proof.")]
+pub struct InvalidProof;
+
+#[derive(Debug)]
+pub struct ProofContent<'a, T>
+where
+    T: ByteSerial,
+{
+    action: ActionType,
+    target: Target,
+    target_data: TargetList,
+    expires: u64,
+    ephemeral: &'a BytePacked<Ephemeral<()>>,
+    data: &'a BytePacked<T>,
+}
+
+enum MaybeValidated<T> {
+    Validated(T),
+    Unvalidated(T)
+}
+
+impl<T> MaybeValidated<T> {
+    fn check_unvalidated(self) -> T {
+        match self {
+            MaybeValidated::Validated(_) => panic!("Value is already validated!"),
+            MaybeValidated::Unvalidated(value) => value,
+        }
+    }
+
+    fn check_validated(&self) {
+        match self {
+            MaybeValidated::Unvalidated(_) => panic!("Value is not validated!"),
+            MaybeValidated::Validated(_) => (),
+        }
+    }
+}
+
+pub struct UnknownTarget;
+
+pub struct UnvalidatedProofObject<'a, T: ByteSerial, R> {
+    action: MaybeValidated<ActionType>,
+    target: MaybeValidated<Target>,
+    target_data: Option<TargetList>,
+    validated_target: Option<R>,
+    data: &'a BytePacked<T>
+}
+
+impl<'a, T: ByteSerial, R> UnvalidatedProofObject<'a, T, R> {
+    pub fn valid_action(self, action: ActionType) -> Result<Self, InvalidProof> {
+        let Self { action: self_action, target, validated_target, target_data, data } = self;
+        let self_action = self_action.check_unvalidated();
+        
+        if action != self_action {
+            return Err(InvalidProof)
+        }
+        
+        Ok(Self { action: MaybeValidated::Validated(self_action), target, validated_target, target_data, data })
+    }
+
+    pub fn select_one(self) -> Result<UnvalidatedProofObject<'a, T, String>, InvalidProof> {
+        let Self { action, target: self_target,  target_data, data, .. } = self;
+        let self_target = self_target.check_unvalidated();
+
+        let mut targets = target_data.unwrap();
+
+        Ok(match self_target {
+            Target::Select => {
+                if targets.0.len() == 1 {
+                    let selected = targets.0.pop().unwrap();
+                    UnvalidatedProofObject { action, target: MaybeValidated::Validated(self_target), validated_target: Some(selected), target_data: None, data }
+                } else {
+                    return Err(InvalidProof)
+                }
+            }
+            _ => return Err(InvalidProof),
+        })
+    }
+
+    pub fn validate(self) -> Result<(T::Deserialized<'a>, R), InvalidProof> {
+        let _ = self.action.check_validated();
+        let _ = self.target.check_validated();
+
+        let data = self.data.try_deserialize().map_err(|_| InvalidProof)?;
+        let target = self.validated_target.unwrap();
+
+        Ok((data, target))
+    }
+}
+
+// pub fn verify_proof_content<'a, T: ByteSerial>(
+//     proof_bytes: &'a Proof<T>,
+//     application: &str,
+//     public_key: &PublicKey,
+//     verify: AboutVerify,
+//     time: u64,
+// ) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
+//     let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content)
+//         .to_one_of()
+//         .map_err(OneOf::broaden)?;
+
+//     if verify.verify(&proof_input.about, application).is_err() {
+//         println!("bad action");
+//         return Err(OneOf::new(InvalidProof {}));
+//     }
+
+//     if time > proof_input.about.expires + LEEWAY {
+//         println!("expired");
+//         return Err(OneOf::new(InvalidProof {}));
+//     };
+
+//     if verify_signature(&proof_bytes.content, &proof_bytes.signature, public_key) {
+//         Ok(proof_input)
+//     } else {
+//         println!("invalid sig");
+//         Err(OneOf::new(InvalidProof {}))
+//     }
+// }
+
+pub struct ProofAction {
+    action: ActionType,
+    target: Target,
+    target_data: TargetList
+}
+
+impl<'a, T> ProofContent<'a, T>
+where
+    T: ByteSerial,
+{
+    pub fn new(
+        expires: u64,
+        action: ProofAction,
+        ephemeral: &'a BytePacked<Ephemeral<()>>,
+        data: &'a BytePacked<T>,
+    ) -> Self {
+        Self {
+            action: action.action,
+            target: action.target,
+            target_data: action.target_data,
+            expires,
+            ephemeral,
+            data,
+        }
+    }
+
+    // pub fn verify<F>(&self, time: u64, signature: &[u8], public_key: &PublicKey, used: F) -> Result<(), InvalidProof>
+    //     where F: FnOnce(&Ephemeral<()>) -> Result<(), InvalidProof>
+    // {
+    //     // if verify.verify(&proof_input.about, application).is_err() {
+    //     //     println!("bad action");
+    //     //     return Err(OneOf::new(InvalidProof {}));
+    //     // }
+    
+    //     if time >= self.expires + LEEWAY {
+    //         eprintln!("expired proof");
+    //         return Err(InvalidProof);
+    //     };
+    
+        
+    // }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        rmp::encode::write_array_len(&mut buf, 6).unwrap();
+        rmp::encode::write_str(&mut buf, self.action.name()).unwrap();
+        rmp::encode::write_str(&mut buf, self.target.name()).unwrap();
+        rmp::encode::write_array_len(&mut buf, self.target_data.0.len() as u32).unwrap();
+        for t in &self.target_data.0 {
+            rmp::encode::write_str(&mut buf, t).unwrap();
+        }
+        rmp::encode::write_u64(&mut buf, self.expires).unwrap();
+        rmp::encode::write_bin(&mut buf, self.ephemeral.as_bytes()).unwrap();
+        rmp::encode::write_bin(&mut buf, self.data.as_bytes()).unwrap();
+
+        buf
+    }
+
+    pub fn deserialize(bytes: &'a [u8]) -> Result<Self, InvalidProof> {
+        // let mut cursor = Cursor::new(bytes);
+        let mut cursor = Cursor::new(bytes);
+        let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
+        if array_len != 6 {
+            return Err(InvalidProof)
+        }
+        let action = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let action = ActionType::from_name(action)?;
+        let target = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let target = Target::from_name(target)?;
+        
+        let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
+        let mut targets = Vec::with_capacity((array_len as usize));
+        for _ in 0..array_len {
+            let target = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+            targets.push(target.to_owned())
+        }
+        let expires = rmp::decode::read_u64(&mut cursor).map_err(|_| InvalidProof {})?;
+        let ephemeral = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let data = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
+        let data = BytePacked::new(data);
+
+        Ok(Self {
+            action,
+            target,
+            target_data: TargetList(targets),
+            expires,
+            ephemeral: BytePacked::new(ephemeral),
+            data,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct TargetList(Vec<String>);
+
+impl TargetList {
+    pub fn new<S: AsRef<str>>(vec: Vec<S>) -> Self {
+        Self(vec.into_iter().map(|s| s.as_ref().to_owned()).collect())
+    }
+
+    pub fn user(user_id: &str) -> Self {
+        Self::new(vec![user_id])
+    }
+
+    pub fn from_vec(vec: Vec<String>) -> Self {
+        Self(vec)
+    }
+
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn as_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+// pub struct AboutVerify {
+//     allowed_actions: Vec<ActionType>,
+// }
+
+// impl AboutVerify {
+//     pub fn action(action: ActionType) -> Self {
+//         Self {
+//             allowed_actions: vec![action],
+//         }
+//     }
+
+//     pub fn with_allowed(allowed_actions: Vec<ActionType>) -> Self {
+//         Self {
+//             allowed_actions,
+//         }
+//     }
+
+//     // pub fn with_claims_actions(application: &str) -> Self {
+//     //     Self::with_allowed(
+//     //         application,
+//     //         vec![
+//     //             ActionType::Reset,
+//     //             ActionType::Merge,
+//     //             ActionType::Add,
+//     //             ActionType::Delete,
+//     //         ],
+//     //     )
+//     // }
+
+//     // pub fn verify(&self, about: &ProofAbout, application: &str) -> Result<(), InvalidProof> {
+//     //     if !self.allowed_actions.contains(&about.action) || application != about.application {
+//     //         return Err(InvalidProof {});
+//     //     }
+
+//     //     Ok(())
+//     // }
+// }
 
 #[derive(Debug)]
 /// A proof is issued by the application using their private key and verified using the public key stored inside `tiauth`. 
@@ -24,6 +371,47 @@ pub struct Proof<T> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
     signature: Vec<u8>,
+}
+
+impl<T: ByteSerial> Proof<T> {
+    // pub fn verify<F>(&self, time: u64, signature: &[u8], public_key: &PublicKey, used: F) -> Result<(), InvalidProof>
+    //     where F: FnOnce(&Ephemeral<()>) -> Result<(), InvalidProof>
+    // {
+    //     // if verify.verify(&proof_input.about, application).is_err() {
+    //     //     println!("bad action");
+    //     //     return Err(OneOf::new(InvalidProof {}));
+    //     // }
+    
+    //     if time >= self.expires + LEEWAY {
+    //         eprintln!("expired proof");
+    //         return Err(InvalidProof);
+    //     };
+    pub fn verify<'a, F>(&'a self, public_key: &PublicKey, time: u64, used: F) -> Result<UnvalidatedProofObject<'a, T, UnknownTarget>, InvalidProof> 
+        where F: FnOnce(&EphemeralView<()>) -> Result<(), InvalidProof>
+    {
+        let content = ProofContent::<T>::deserialize(&self.content)?;
+
+        if time >= content.expires + LEEWAY {
+            return Err(InvalidProof)
+        }
+        
+        if !verify_signature(&self.content, &self.signature, public_key) {
+            eprintln!("invalid sig");
+            return Err(InvalidProof)
+        }
+        
+        let ephemeral = content.ephemeral.try_deserialize()
+            .map_err(|_| InvalidProof)?;
+        used(&ephemeral)?;
+
+        Ok(UnvalidatedProofObject {
+            action: MaybeValidated::Unvalidated(content.action),
+            target: MaybeValidated::Unvalidated(content.target),
+            target_data: Some(content.target_data),
+            validated_target: None,
+            data: content.data
+        })
+    }
 }
 
 impl<T> Encodable for Proof<T> {
@@ -73,70 +461,45 @@ impl<T> Encodable for Proof<T> {
     }
 }
 
-pub fn create_proof<T: ByteSerial>(
-    application: &str,
-    expires_in: u64,
-    action: ActionType,
-    target: Target,
-    target_data: TargetList,
-    nonce: impl SerializedAs<Ephemeral<()>>,
-    data: impl SerializedAs<T>,
-    key: &Key,
-    now: u64
-) -> Proof<T> {
-    let expires = expires_in + now;
-    let content = ProofContent::new(
-        application,
-        expires,
-        action,
-        target,
-        target_data,
-        nonce.serialized(),
-        data.serialized(),
-    );
 
-    write_proof(&content, key)
-}
 
-fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
-    let content = proof_content.to_bytes();
-    let signature = sign_data(key, &content);
+// pub fn create_proof<T: ByteSerial>(
+//     expires_in: u64,
+//     action: ActionType,
+//     target: Target,
+//     target_data: TargetList,
+//     nonce: impl SerializedAs<Ephemeral<()>>,
+//     data: impl SerializedAs<T>,
+//     key: &Key,
+//     now: u64
+// ) -> Proof<T> {
+//     let expires = expires_in + now;
+//     let content = ProofContent::new(
+//         application,
+//         expires,
+//         action,
+//         target,
+//         target_data,
+//         nonce.serialized(),
+//         data.serialized(),
+//     );
 
-    Proof {
-        content,
-        signature,
-        phantom: PhantomData,
-    }
-}
+//     write_proof(&content, key)
+// }
 
-pub fn verify_proof_content<'a, T: ByteSerial>(
-    proof_bytes: &'a Proof<T>,
-    application: &str,
-    public_key: &PublicKey,
-    verify: AboutVerify,
-    time: u64,
-) -> Result<ProofContent<'a, T>, OneOf<(InvalidProof,)>> {
-    let proof_input: ProofContent<T> = ProofContent::from_bytes(&proof_bytes.content)
-        .to_one_of()
-        .map_err(OneOf::broaden)?;
+// fn write_proof<T: ByteSerial>(proof_content: &ProofContent<T>, key: &Key) -> Proof<T> {
+//     let content = proof_content.to_bytes();
+//     let signature = sign_data(key, &content);
 
-    if verify.verify(&proof_input.about, application).is_err() {
-        println!("bad action");
-        return Err(OneOf::new(InvalidProof {}));
-    }
+//     Proof {
+//         content,
+//         signature,
+//         phantom: PhantomData,
+//     }
+// }
 
-    if time > proof_input.about.expires + LEEWAY {
-        println!("expired");
-        return Err(OneOf::new(InvalidProof {}));
-    };
 
-    if verify_signature(&proof_bytes.content, &proof_bytes.signature, public_key) {
-        Ok(proof_input)
-    } else {
-        println!("invalid sig");
-        Err(OneOf::new(InvalidProof {}))
-    }
-}
+
 
 #[derive(Debug, PartialEq)]
 pub struct Session {

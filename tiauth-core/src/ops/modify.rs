@@ -1,14 +1,14 @@
 use crate::data::{
-    AboutVerify, ActionType, ClaimKeys, InvalidProof, ModifyClaimError, ProofContent, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY
+    ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY
 };
 use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
-use crate::proof::{verify_proof_content, Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidSession};
+use crate::proof::{Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidProof, InvalidSession};
 use crate::state::State;
 use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
-use crate::{BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
+use crate::{ActionType, BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use std::time::SystemTime;
 use terrors::OneOf;
 
@@ -32,12 +32,14 @@ pub fn reset_password(
 ) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidProof, LoginFieldError)>> {
     let time = state.time();
 
-    let proof_content = verify_proof(state, proof, AboutVerify::new(ActionType::ResetPassword), time)
+    let proof_unvalidated = verify_proof(state, proof, time)
         .map_err(OneOf::broaden)?;
+    
+    let proof_unvalidated = proof_unvalidated.select_one().to_one_of().map_err(OneOf::broaden)?;
+    let proof_unvalidated = proof_unvalidated.valid_action(ActionType::ResetPassword).to_one_of().map_err(OneOf::broaden)?;
+    let (_, user_id) = proof_unvalidated.validate().to_one_of().map_err(OneOf::broaden)?;
 
-    let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
-
-    let UserPassword { password_file, user_id } = match users::get_login(state.store(),  &user_id)
+    let UserPassword { password_file, user_id } = match users::get_login(state.store(), &user_id)
         .to_one_of()
         .map_err(OneOf::broaden)?
     {

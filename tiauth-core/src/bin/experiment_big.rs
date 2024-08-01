@@ -289,16 +289,16 @@ fn multi_threaded_tx(values: &[(u128, &[u8])]) {
 #[inline(never)]
 fn multi_threaded_mult_db(values: &[(u128, &[u8])]) {
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db1 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db2 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db3 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db4 = Database::builder().create(tmpfile.path()).unwrap();
     let value_keys: Vec<u128> = values.iter().map(|(k, _)| *k).collect();
 
@@ -438,16 +438,16 @@ fn multi_threaded_mult_db(values: &[(u128, &[u8])]) {
 #[inline(never)]
 fn multi_threaded_mult_db_channel(values: &[(u128, &[u8])]) {
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db1 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db2 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db3 = Database::builder().create(tmpfile.path()).unwrap();
     let tmpfile: NamedTempFile =
-    NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+        NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
     let db4 = Database::builder().create(tmpfile.path()).unwrap();
     let value_keys: Vec<u128> = values.iter().map(|(k, _)| *k).collect();
 

@@ -2,7 +2,6 @@ use opaque_borink::{server::register_server, Error as OpaqueError};
 use thiserror::Error;
 
 use crate::data::Claims;
-use crate::data::InvalidProof;
 use crate::data::UserPassword;
 use crate::encoded::Encodable;
 use crate::error::{OneOfTo, WrapErrorOneOf};
@@ -64,7 +63,6 @@ pub enum SetLoginError {
 type FinishError = OneOf<(
     StoreError,
     OpaqueError,
-    InvalidProof,
     SetLoginError,
     InvalidEphemeral,
 )>;

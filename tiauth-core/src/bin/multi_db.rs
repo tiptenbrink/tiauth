@@ -1,34 +1,38 @@
-use std::{env::current_dir, fs, path::{Path, PathBuf}, process, thread::{self, JoinHandle}, time::{Duration, Instant}};
+use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use redb::{Database, ReadableTable, TableDefinition};
-use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
+use std::{
+    env::current_dir,
+    fs,
+    path::{Path, PathBuf},
+    process,
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
 use tempfile::NamedTempFile;
 
 #[derive(Clone, Debug)]
 struct SessionInfo {
     session_id: u128,
-    family: [u8; 64]
+    family: [u8; 64],
 }
 
 struct CreateSession {
     session: SessionInfo,
-    result: Sender<CreateSessionResult>
+    result: Sender<CreateSessionResult>,
 }
 
 impl CreateSession {
     fn new(session: SessionInfo) -> (Self, Receiver<CreateSessionResult>) {
         let (s, r) = channel::bounded(1);
-        (Self {
-            session,
-            result: s
-        }, r)
+        (Self { session, result: s }, r)
     }
 }
 
 #[derive(Debug, PartialEq)]
 enum CreateSessionResult {
     AlreadyExists,
-    Success
+    Success,
 }
 
 impl SessionInfo {
@@ -45,12 +49,12 @@ impl SessionInfo {
 
         let (family, id_bytes) = bytes.split_at(64);
         let session_id_arr: [u8; 16] = id_bytes.try_into().unwrap();
-        
+
         let session_id = u128::from_le_bytes(session_id_arr);
 
         Self {
             family: family.try_into().unwrap(),
-            session_id
+            session_id,
         }
     }
 }
@@ -62,10 +66,7 @@ fn session_id() -> SessionInfo {
     rng.fill(family.as_mut_slice());
     let session_id: u128 = rng.gen();
 
-    SessionInfo {
-        family,
-        session_id
-    }
+    SessionInfo { family, session_id }
 }
 
 // the u32 is a bit flag.
@@ -73,7 +74,6 @@ fn session_id() -> SessionInfo {
 // 1 = revoked
 const SESSIONS: TableDefinition<&'static [u8], u32> = TableDefinition::new("sessions");
 const SESSION_SYNC: TableDefinition<&'static [u8], u32> = TableDefinition::new("sessions_sync");
-
 
 ///
 /// Suppose an attacker received an Ephemeral from login_start and wishes to create two valid Sessions.
@@ -83,8 +83,6 @@ const SESSION_SYNC: TableDefinition<&'static [u8], u32> = TableDefinition::new("
 /// Now the threads synchronize. Since normal operation would never lead to two requests for the same login_start,
 /// we simply revoke the Session. A revokation on a thread always trumps any active status.
 
-
-
 fn write_session(session: SessionInfo, sender: Sender<CreateSession>) -> CreateSessionResult {
     let (sess, r) = CreateSession::new(session);
     sender.send(sess).unwrap();
@@ -93,23 +91,23 @@ fn write_session(session: SessionInfo, sender: Sender<CreateSession>) -> CreateS
     result
 }
 
-fn synchronize(db: &Database, sync_s: Sender<(SessionInfo, u32)>, sync_r: Receiver<(SessionInfo, u32)>) {
+fn synchronize(
+    db: &Database,
+    sync_s: Sender<(SessionInfo, u32)>,
+    sync_r: Receiver<(SessionInfo, u32)>,
+) {
     thread::scope(|s| {
-        s.spawn(|| {
-            while let Ok(session) = sync_r.recv() {
-
-            }
-
-        });
+        s.spawn(|| while let Ok(session) = sync_r.recv() {});
     });
 }
 
 fn open_db_thread(path: PathBuf, rcv: Receiver<CreateSession>) -> JoinHandle<()> {
     thread::spawn(move || {
-            let db = Database::create(path).unwrap();
+        let db = Database::create(path).unwrap();
 
-            loop {
-                let CreateSession { session, result } = match rcv.recv_timeout(Duration::from_millis(10)) {
+        loop {
+            let CreateSession { session, result } =
+                match rcv.recv_timeout(Duration::from_millis(10)) {
                     Ok(create_session) => create_session,
                     Err(RecvTimeoutError::Disconnected) => panic!("Disconnected!"),
                     Err(RecvTimeoutError::Timeout) => {
@@ -118,38 +116,38 @@ fn open_db_thread(path: PathBuf, rcv: Receiver<CreateSession>) -> JoinHandle<()>
                     }
                 };
 
-                let write_txn = db.begin_write().unwrap();
+            let write_txn = db.begin_write().unwrap();
 
-                let session_bytes = session.serialize();
-                let session_bytes = session_bytes.as_slice();
+            let session_bytes = session.serialize();
+            let session_bytes = session_bytes.as_slice();
 
-                let exists = {
-                    let table = write_txn.open_table(SESSIONS).unwrap();
+            let exists = {
+                let table = write_txn.open_table(SESSIONS).unwrap();
 
-                    let value = table.get(session_bytes).unwrap();
+                let value = table.get(session_bytes).unwrap();
 
-                    value.is_some()
-                };
+                value.is_some()
+            };
 
-                if exists {
-                    result.send(CreateSessionResult::AlreadyExists).unwrap();
-                    continue;
-                }
-
-                {
-                    let mut table = write_txn.open_table(SESSIONS).unwrap();
-
-                    table.insert(session_bytes, 0).unwrap();
-
-                    let mut table = write_txn.open_table(SESSION_SYNC).unwrap();
-
-                    table.insert(session_bytes, 0).unwrap();
-                }
-
-                write_txn.commit().unwrap();
-
-                result.send(CreateSessionResult::Success).unwrap();
+            if exists {
+                result.send(CreateSessionResult::AlreadyExists).unwrap();
+                continue;
             }
+
+            {
+                let mut table = write_txn.open_table(SESSIONS).unwrap();
+
+                table.insert(session_bytes, 0).unwrap();
+
+                let mut table = write_txn.open_table(SESSION_SYNC).unwrap();
+
+                table.insert(session_bytes, 0).unwrap();
+            }
+
+            write_txn.commit().unwrap();
+
+            result.send(CreateSessionResult::Success).unwrap();
+        }
     })
 }
 
@@ -170,16 +168,16 @@ fn main() {
         let mut joins: Vec<JoinHandle<_>> = Vec::new();
         for _ in 0..4 {
             let tmpfile: NamedTempFile =
-            NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
+                NamedTempFile::new_in(current_dir().unwrap().join(".benchmark")).unwrap();
             let ijoin = open_db_thread(tmpfile.path().to_owned(), rcv.clone());
             joins.push(ijoin);
         }
-        
+
         for j in joins {
             j.join().unwrap();
         }
     });
-    
+
     let start = Instant::now();
     thread::scope(|s| {
         for _ in 0..4 {
@@ -192,7 +190,7 @@ fn main() {
             });
         }
     });
-    
+
     let end = Instant::now();
     let duration = end - start;
     let duration_time = duration.as_secs_f64() * 1000f64;

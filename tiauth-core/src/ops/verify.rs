@@ -1,7 +1,7 @@
 use crate::crypto::{PublicKey};
-use crate::data::{AboutVerify, ByteSerial, InvalidProof, ProofContent, SessionStatus, UserPassword};
+use crate::data::{ByteSerial, SessionStatus, UserPassword};
 use crate::error::{OneOfTo, WrapErrorOneOf};
-use crate::proof::{verify_proof_content, DecryptedSession, EphemeralProofTokenState, InvalidEphemeral, InvalidSession, SessionContent};
+use crate::proof::{DecryptedSession, EphemeralProofTokenState, InvalidEphemeral, InvalidProof, InvalidSession, SessionContent, UnknownTarget, UnvalidatedProofObject};
 use crate::state::{CounterState, State};
 use crate::store::{sessions, users, Store, StoreError};
 use crate::{AppState, BytePacked, Claims, KeyState, Proof, Session};
@@ -82,39 +82,34 @@ pub fn verify_session<'a>(state: &impl State, session: &'a SessionContent<'a>, t
 pub fn verify_proof<'a, T: ByteSerial>(
     state: &impl State,
     proof: &'a Proof<T>,
-    verify: AboutVerify,
     time: u64
-) -> Result<ProofContent<'a, T>, OneOf<(StoreError, InvalidProof)>>
+) -> Result<UnvalidatedProofObject<'a, T, UnknownTarget>, OneOf<(InvalidProof,)>>
 where
 {
     let public_key = state.public_key();
-    let application = state.application();
-    let proof_content = verify_proof_content(proof, application, public_key, verify, time).map_err(OneOf::broaden)?;
     
-    let eph_keys = state.keys().eph_veri_keys(time);
-
-    let proof_eph = proof_content.nonce.try_deserialize()
-        .and_then(|v| v.decrypt(&eph_keys))
-        .map_err(|_| OneOf::new(InvalidProof {}))?;
-
-    let proof_eph = proof_eph.read();
-
-    proof_eph.verify_state::<EphemeralProofTokenState, _>(time, |EphemeralProofTokenState { count, expires }| {
-        if state.counter_used(proof_eph.user_id, count, expires, time) {
-            return Err(InvalidEphemeral)
-        }
+    let proof_ob = proof.verify(public_key, time, |eph| {
+        let keys = state.keys().eph_veri_keys(time);
         
-        Ok(())
-    }).map_err(|_| OneOf::new(InvalidProof {}))?;
+        let decrypted_eph = eph.decrypt(&keys).map_err(|_| InvalidProof)?;
+        let eph = decrypted_eph.read();
+        eph.verify_state::<EphemeralProofTokenState, _>(time, |EphemeralProofTokenState { count, expires }| {
+            if state.counter_used(eph.user_id, count, expires, time) {
+                return Err(InvalidEphemeral)
+            }
+            
+            Ok(())
+        }).map_err(|_| InvalidProof)?;
 
-    Ok(proof_content)
+        Ok(())
+    }).to_one_of().map_err(OneOf::broaden)?;
+
+    Ok(proof_ob)
 }
 
 #[cfg(feature = "test")]
 pub mod test_util {
     use crate::data::SerializedAs;
-    use crate::data::{ActionType, Claims, Target, TargetList};
-    use crate::proof::create_proof;
     use crate::state::{test_util::*, DriverState};
 
     use super::*;
