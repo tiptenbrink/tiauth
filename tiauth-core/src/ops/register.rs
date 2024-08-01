@@ -40,9 +40,9 @@ pub fn start_register(
     let ephemeral = Ephemeral::create(
         &key,
         user_id,
-        state.application(),
         EphemeralEmptyState,
         EphemeralType::NewUser,
+        time,
         BytePacked::<()>::empty(),
     );
 
@@ -71,6 +71,7 @@ type FinishError = OneOf<(
 
 fn user_change_ephemeral<T: ByteSerial>(
     entry: &EphemeralContent<T>,
+    time: u64,
     old_login_bytes: Option<&[u8]>,
     password_file: String,
 ) -> Result<UserPassword, OneOf<(SetLoginError, InvalidEphemeral,)>> {
@@ -85,7 +86,7 @@ fn user_change_ephemeral<T: ByteSerial>(
             // }
             // Note that the content is verified, so the state and data are not user-determined
             // It's a programming error if they are non-empty for the NewUser type
-            entry.verify_state_equal::<EphemeralEmptyState>(EphemeralEmptyState).unwrap();
+            entry.verify_state_equal::<EphemeralEmptyState>(time, EphemeralEmptyState).unwrap();
 
             UserPassword {
                 user_id: entry.user_id.to_owned(),
@@ -99,7 +100,7 @@ fn user_change_ephemeral<T: ByteSerial>(
                 return Err(OneOf::new(SetLoginError::NotFound));
             };
             let login = UserPassword::deserialize(old_login_bytes);
-            entry.verify_state_equal::<EphemeralChangePasswordState>(EphemeralChangePasswordState { password_file: login.password_file.to_owned() })
+            entry.verify_state_equal::<EphemeralChangePasswordState>(time, EphemeralChangePasswordState { password_file: login.password_file.to_owned() })
             .map_err(|_| OneOf::new(SetLoginError::StateMismatch))?;
 
             // Some programming error must have occurred if this happens
@@ -146,7 +147,9 @@ pub fn register_finish(
                 .map_err(OneOf::broaden)?;
             // The `as_ref` here allows us to make this work
             let option_bytes = guarded_option.as_ref().map(|g| g.value());
-            user_change_ephemeral(&content, option_bytes, password_file)
+
+            let time = state.time();
+            user_change_ephemeral(&content, time, option_bytes, password_file)
                 .map_err(OneOf::broaden)?
                 .serialize()
         };

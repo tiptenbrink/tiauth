@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::crypto::{create_symmetric_key, load_public_key, AsSymmetricKey, KeyError, PublicKey, SavedPublicKey, SymmetricKey};
-use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession};
+use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession, PasswordFileHash};
 use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -715,7 +715,7 @@ impl<'a> ClaimsView<'a> {
 pub struct SessionStatus {
     // if it's untracked, by default it is valid
     tracked: bool,
-    // value of zero is meaningless
+    // value of zero is meaningless, 1 = valid, rest is revoked
     status: u8,
     // value of zero is meaningless
     pub expires: u64
@@ -765,85 +765,6 @@ impl SessionKey {
         let symmetric_key = SymmetricKey::from_raw_bytes(bytes)?;
 
         Ok(Self(symmetric_key))
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct SessionContent<'a> {
-    pub user_id: String,
-    pub application: String,
-    pub issued: u64,
-    pub expires: u64,
-    pw_file_hash: [u8; 32],
-    /// These are a subset of the "login claims"
-    pub session_claims: &'a BytePacked<Claims>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SessionCreate<'a> {
-    application: &'a str,
-    user_id: &'a str,
-    issued: u64,
-    expires: u64,
-}
-
-impl<'a> SessionContent<'a> {
-    pub fn new(
-        application: &str,
-        user_id: &str,
-        issued: u64,
-        expires: u64,
-        pw_file_hash: [u8; 32],
-        session_claims: &'a BytePacked<Claims>,
-    ) -> Self {
-        Self {
-            user_id: user_id.to_owned(),
-            application: application.to_owned(),
-            issued,
-            expires,
-            pw_file_hash,
-            session_claims,
-        }
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = Vec::new();
-        let about = SessionCreate {
-            application: &self.application,
-            user_id: &self.user_id,
-            issued: self.issued,
-            expires: self.expires,
-        };
-        let about_bytes = rmp_serde::encode::to_vec(&about).unwrap();
-        rmp::encode::write_bin(&mut buf, &about_bytes).unwrap();
-        rmp::encode::write_bin(&mut buf, &self.pw_file_hash).unwrap();
-        rmp::encode::write_bin(&mut buf, self.session_claims.as_bytes()).unwrap();
-
-        buf
-    }
-
-    pub fn from_bytes(bytes: &'a [u8]) -> Self {
-        // let mut cursor = Cursor::new(bytes);
-        let mut cursor = Cursor::new(bytes);
-
-        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
-        let about = cursor_slice(bytes, &mut cursor, len);
-
-        let pw_file_hash: [u8; 32] = rmp_read_bin(bytes, &mut cursor).unwrap().try_into().unwrap();
-
-        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
-        let claims = cursor_slice(bytes, &mut cursor, len);
-
-        let about: SessionCreate = rmp_serde::from_slice(about).unwrap();
-
-        Self {
-            user_id: about.user_id.to_owned(),
-            application: about.application.to_owned(),
-            issued: about.issued,
-            expires: about.expires,
-            pw_file_hash,
-            session_claims: BytePacked::new(claims),
-        }
     }
 }
 

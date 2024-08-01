@@ -6,12 +6,11 @@ use crate::data::EXPIRE_TIME;
 use crate::data::LEEWAY;
 use crate::error::OneOfTo;
 use crate::error::WrapErrorOneOf;
-use crate::proof::create_session;
 use crate::proof::Ephemeral;
-use crate::proof::EphemeralCounterState;
 use crate::proof::EphemeralLoginState;
 use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
+use crate::proof::PasswordFileHash;
 use crate::state::State;
 use crate::store::StoreError;
 use crate::store::{
@@ -66,7 +65,7 @@ pub fn login_start(
     let expires = time + COUNTER_EXPIRES;
     let state_input = EphemeralLoginState { expires, count: state.counter_next(user_id, expires), password_file: read_login.password_file };
     let data = <String as ByteSerial>::serialize(&state_data);
-    let eph = Ephemeral::create(&key, user_id, state.application(), state_input, eph_type, data.as_packed());
+    let eph = Ephemeral::create_expires(&key, user_id, state_input, eph_type, expires, data.as_packed());
 
     Ok((response, eph))
 }
@@ -78,7 +77,7 @@ fn login_finish(
     state: &impl State,
     request: &str,
     nonce: &Ephemeral<String>,
-) -> Result<(String, String, [u8; 32]), OneOf<(OpaqueError, InvalidEphemeral, StoreError)>> {
+) -> Result<(String, String, PasswordFileHash), OneOf<(OpaqueError, InvalidEphemeral, StoreError)>> {
 
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
@@ -93,11 +92,11 @@ fn login_finish(
         todo!()
     };
 
-    let new_pw_file_hash = EphemeralLoginState::hash_password(&read_login.password_file);
+    let new_pw_file_hash = PasswordFileHash::create(&read_login.password_file);
 
     let time = state.time();
 
-    let opaque_state = entry.verify_state::<EphemeralLoginState, _>(|(count, expires, pw_file_hash)| {
+    let opaque_state = entry.verify_state::<EphemeralLoginState, _>(time, |(count, expires, pw_file_hash)| {
         if state.counter_used(entry.user_id, count, expires, time) || new_pw_file_hash != pw_file_hash {
             return Err(InvalidEphemeral)
         }
@@ -119,7 +118,6 @@ pub enum LoginError {
 
 pub fn login_session(
     state: &impl State,
-    application: &str,
     request: &str,
     nonce: &Ephemeral<String>,
     secret: &str,
@@ -137,7 +135,7 @@ pub fn login_session(
     let key = state.keys().session_key();
 
     let time = state.time();
-    let session = create_session(application, &user_id, EXPIRE_TIME, pw_file_hash, claims.borrow(), key, time);
+    let session = Session::create(&user_id, EXPIRE_TIME, pw_file_hash, claims.borrow(), key, time);
 
     Ok(session)
 }
@@ -174,7 +172,6 @@ pub mod test_util {
         // println!("server time: {} ms", time_server);
         login_session(
             state,
-            application,
             &request,
             &nonce,
             &secret,
@@ -237,7 +234,6 @@ mod tests {
 
         let session = login_session(
             &state,
-            app,
             &request,
             &nonce,
             &secret,

@@ -1,17 +1,19 @@
 use crate::crypto::{self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey};
-use crate::data::{SessionKey, LEEWAY};
+use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
 use crate::data::{
-    AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs, SessionContent,
+    AboutVerify, ByteSerial, InvalidProof, ProofContent, SerializedAs,
 };
 use crate::encoded::Encodable;
 use crate::error::OneOfTo;
-use crate::util::{combine_encode, rmp_read_bin, rmp_read_str};
+use crate::util::{combine_encode, cursor_slice, rmp_read_bin, rmp_read_str};
 use crate::{ActionType, ByteOwned, BytePacked, Claims, Target, TargetList};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use std::error::Error;
 use std::io::Cursor;
 use std::marker::PhantomData;
 use terrors::OneOf;
@@ -141,14 +143,57 @@ pub struct Session {
     encrypted: Vec<u8>,
 }
 
+trait SessionVerifyStatus {
+    type StatusVerifyError;
+
+    fn encrypted_bytes(&self) -> &[u8];
+
+    fn decrypt(&self, keys: &[SessionKey]) -> Result<DecryptedSession, InvalidSession> {
+        let decrypted = crypto::symmetric_decrypt(self.encrypted_bytes(), keys)
+            .map_err(|_e| InvalidSession {})?;
+
+        Ok(DecryptedSession {
+            decrypted
+        })
+    }
+}
+
 impl Session {
+    pub fn create(
+        user_id: &str,
+        expires_in: u64,
+        pw_file_hash: PasswordFileHash,
+        session_claims: impl SerializedAs<Claims>,
+        key: &SessionKey,
+        time: u64,
+    ) -> Self {
+        let expires = expires_in + time;
+        let content = SessionContent::new(
+            user_id,
+            time,
+            expires,
+            pw_file_hash,
+            session_claims.serialized(),
+        );
+    
+        Self {
+            encrypted: crypto::symmetric_encrypt(&content.to_bytes(), key, &mut StdRng::from_entropy()),
+        }
+    }
+
     pub fn raw_bytes(&self) -> &[u8] {
         &self.encrypted
     }
 
-    pub fn decrypt(&self, keys: &[SessionKey]) -> Result<DecryptedSession, InvalidSession> {
+    pub fn decrypt<E, F, FE>(&self, time: u64, keys: &[SessionKey], status: F, convert: FE) -> Result<DecryptedSession, E> 
+        where E: std::fmt::Debug, FE: Fn(InvalidSession) -> E, F: FnOnce(&Self) -> Result<SessionStatus, E>
+    {
+        let status = status(&self)?;
+
+        status.valid(time).map_err(|e| convert(e))?;
+
         let decrypted = crypto::symmetric_decrypt(&self.encrypted, keys)
-            .map_err(|_e| InvalidSession {})?;
+            .map_err(|_| convert(InvalidSession))?;
 
         Ok(DecryptedSession {
             decrypted
@@ -160,45 +205,16 @@ pub struct DecryptedSession {
     decrypted: Vec<u8>
 }
 
-pub fn create_session(
-    application: &str,
-    user_id: &str,
-    expires_in: u64,
-    pw_file_hash: [u8; 32],
-    session_claims: impl SerializedAs<Claims>,
-    key: &SessionKey,
-    time: u64,
-) -> Session {
-    let expires = expires_in + time;
-    let content = SessionContent::new(
-        application,
-        user_id,
-        time,
-        expires,
-        pw_file_hash,
-        session_claims.serialized(),
-    );
 
-    Session {
-        encrypted: crypto::symmetric_encrypt(&content.to_bytes(), key, &mut StdRng::from_entropy()),
+impl DecryptedSession {
+    /// Note that the Session has not yet been verified, it might be expired or revoked!
+    pub fn read(&self) -> SessionContent {
+        SessionContent::from_bytes(&self.decrypted)
     }
 }
 
-
-
-impl DecryptedSession {
-    // pub fn read(&self, time: u64) -> Result<SessionContent, InvalidSession> {
-    //     let content = SessionContent::from_bytes(&self.decrypted);
-
-    //     if content.expires + LEEWAY <= time {
-    //         return Err(InvalidSession)
-    //     }
-
-    //     Ok(content)
-    // }
-}
-
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("Invalid session.")]
 pub struct InvalidSession;
 
 // pub fn verify_session_bytes(
@@ -284,7 +300,7 @@ pub struct EphemeralLoginState {
     pub password_file: String
 }
 
-pub struct EphemeralCounterState {
+pub struct EphemeralProofTokenState {
     pub count: u64,
     pub expires: u64
 }
@@ -311,11 +327,23 @@ impl EphemeralStateType for EphemeralEmptyState {
     }
 }
 
-impl EphemeralLoginState {
-    pub fn hash_password(password_file: &str) -> [u8; 32] {
+#[derive(PartialEq, Debug)]
+pub struct PasswordFileHash([u8; 32]);
+
+impl PasswordFileHash {
+    pub fn create(password_file: &str) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(password_file.as_bytes());
-        hasher.finalize().into()
+        Self(hasher.finalize().into())
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        assert_eq!(bytes.len(), 32);
+        Self(bytes.try_into().unwrap())
     }
 }
 
@@ -324,14 +352,14 @@ impl EphemeralStateType for EphemeralLoginState {
         eph_type == &EphemeralType::Login
     }
 
-    /// This function panics if the state is not exactly 48 bytes.
+    /// This function panics if the state is not the correct elngth
     fn get_state(state: &[u8]) -> Self::VerifyType<'_> {
-        assert_eq!(state.len(), 48);
+        assert!(state.len() >= 16);
         let counter_bytes: [u8; 8] = state[0..8].try_into().unwrap();
         let expires_bytes: [u8; 8] = state[8..16].try_into().unwrap();
-        let pw_file_hash: [u8; 32] = state[16..].try_into().unwrap();
+        let pw_file_hash_bytes = &state[16..];
 
-        (u64::from_le_bytes(counter_bytes), u64::from_le_bytes(expires_bytes), pw_file_hash)
+        (u64::from_le_bytes(counter_bytes), u64::from_le_bytes(expires_bytes), PasswordFileHash::from_bytes(pw_file_hash_bytes))
     }
     
     fn create_state(self) -> impl AsRef<[u8]> {
@@ -340,19 +368,19 @@ impl EphemeralStateType for EphemeralLoginState {
         state_bytes[0..8].copy_from_slice(&self.count.to_le_bytes());
         state_bytes[8..16].copy_from_slice(&self.expires.to_le_bytes());
         
-        let pw_file_hash = Self::hash_password(&self.password_file);
-        state_bytes[16..].copy_from_slice(&pw_file_hash);
+        let pw_file_hash = PasswordFileHash::create(&self.password_file);
+        state_bytes[16..].copy_from_slice(pw_file_hash.as_bytes());
 
         state_bytes
     }
     
-    type VerifyType<'a> = (u64, u64, [u8; 32]);
+    type VerifyType<'a> = (u64, u64, PasswordFileHash);
     
 }
 
-impl EphemeralStateType for EphemeralCounterState {
+impl EphemeralStateType for EphemeralProofTokenState {
     fn is_valid_type(eph_type: &EphemeralType) -> bool {
-        eph_type == &EphemeralType::ProofToken || eph_type == &EphemeralType::Login
+        eph_type == &EphemeralType::ProofToken
     }
 
     /// This function panics if the state is not exactly 16 bytes.
@@ -546,18 +574,19 @@ impl<T: ByteSerial> Encodable for Ephemeral<T> {
 }
 
 impl<T: ByteSerial> Ephemeral<T> {
-    pub fn create<S: EphemeralStateType>(
+    pub fn create_expires<S: EphemeralStateType>(
         key: &EphemeralKey,
         user_id: &str,
-        application: &str,
         state: S,
         eph_type: EphemeralType,
+        expires: u64,
         data: &BytePacked<T>,
     ) -> Self {
         assert!(S::is_valid_type(&eph_type));
         let state = state.create_state();
         let ephemeral = EphemeralContent {
             user_id,
+            expires,
             state: state.as_ref(),
             eph_type,
             data,
@@ -571,6 +600,19 @@ impl<T: ByteSerial> Ephemeral<T> {
             phantom: PhantomData,
             encrypted
         }
+    }
+    
+    pub fn create<S: EphemeralStateType>(
+        key: &EphemeralKey,
+        user_id: &str,
+        state: S,
+        eph_type: EphemeralType,
+        time: u64,
+        data: &BytePacked<T>,
+    ) -> Self {
+        // By default validity as long as EphemeralKey, so it's actually bounded by the key in this case
+        let expires = time + (EPHEMERAL_INTERVAL * 2);
+        Self::create_expires(key, user_id, state, eph_type, expires, data)
     }
 
     // fn verify_components<'a, 'tag>(
@@ -632,6 +674,7 @@ impl<T: ByteSerial> DecryptedEphemeral<T> {
 pub struct EphemeralContent<'a, T: ByteSerial> {
     /// Allowed to be empty for ProofToken
     pub user_id: &'a str,
+    expires: u64,
     // Note that we do not need an application here because keys are application-specific
     /// This can be used for the either the state itself or a hash of the state (based on the EphemeralType), the Ephemeral is only
     /// valid if the state is unchanged from when the Ephemeral was handed out
@@ -647,21 +690,25 @@ pub struct EphemeralContent<'a, T: ByteSerial> {
 // }
 
 impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
-    fn new(
-        user_id: &'a str,
-        state: &'a [u8],
-        eph_type: EphemeralType,
-        data: &'a BytePacked<T>,
-    ) -> Self {
-        Self {
-            user_id,
-            state,
-            eph_type,
-            data,
-        }
-    }
+    // fn new(
+    //     user_id: &'a str,
+    //     state: &'a [u8],
+    //     eph_type: EphemeralType,
+    //     data: &'a BytePacked<T>,
+    // ) -> Self {
+    //     Self {
+    //         user_id,
+    //         state,
+    //         eph_type,
+    //         data,
+    //     }
+    // }
 
-    pub fn verify_state<S: EphemeralStateType, F: FnOnce(S::VerifyType<'a>) -> Result<(), InvalidEphemeral>>(&self, verify: F) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+    pub fn verify_state<S: EphemeralStateType, F: FnOnce(S::VerifyType<'a>) -> Result<(), InvalidEphemeral>>(&self, time: u64, verify: F) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+        if time >= self.expires + LEEWAY {
+            return Err(InvalidEphemeral)
+        }
+        
         // This also checks if the eph_type is valid       
         let s: S::VerifyType<'a> = self.eph_type.try_get_state::<S>(&self.state)?;
 
@@ -670,7 +717,11 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         Ok(self.data.deserialize())
     }
 
-    pub fn verify_state_equal<S: EphemeralStateType>(&self, current_state_input: S) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+    pub fn verify_state_equal<S: EphemeralStateType>(&self, time: u64, current_state_input: S) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+        if time >= self.expires + LEEWAY {
+            return Err(InvalidEphemeral)
+        }
+        
         S::valid_type(&self.eph_type)?;
         
         let current_state = current_state_input.create_state();
@@ -687,6 +738,7 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
 
         rmp::encode::write_array_len(&mut buf, 5).unwrap();
         rmp::encode::write_str(&mut buf, self.user_id).unwrap();
+        rmp::encode::write_u64(&mut buf, self.expires).unwrap();
         rmp::encode::write_bin(&mut buf, self.state).unwrap();
         let eph_type = self.eph_type.key_name();
         rmp::encode::write_str(&mut buf, eph_type).unwrap();
@@ -704,6 +756,7 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
             return Err(InvalidEphemeral);
         }
         let user_id = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidEphemeral)?;
+        let expires = rmp::decode::read_u64(&mut cursor).map_err(|_| InvalidEphemeral)?;
         let state = rmp_read_bin(bytes, &mut cursor).map_err(|_| InvalidEphemeral)?;
         let eph_type = rmp_read_str(bytes, &mut cursor).unwrap();
         let eph_type = EphemeralType::from_key_name(eph_type).map_err(|_| InvalidEphemeral)?;
@@ -711,9 +764,105 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         let data: &BytePacked<T> = BytePacked::new(data);
         Ok(Self {
             user_id,
+            expires,
             state,
             eph_type,
             data,
         })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SessionContent<'a> {
+    pub user_id: String,
+    issued: u64,
+    expires: u64,
+    pw_file_hash: PasswordFileHash,
+    /// These are a subset of the "login claims"
+    session_claims: &'a BytePacked<Claims>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionCreate<'a> {
+    user_id: &'a str,
+    issued: u64,
+    expires: u64,
+}
+
+impl<'a> SessionContent<'a> {
+    pub fn new(
+        user_id: &str,
+        issued: u64,
+        expires: u64,
+        pw_file_hash: PasswordFileHash,
+        session_claims: &'a BytePacked<Claims>,
+    ) -> Self {
+        Self {
+            user_id: user_id.to_owned(),
+            issued,
+            expires,
+            pw_file_hash,
+            session_claims,
+        }
+    }
+
+    pub fn verify(&self, time: u64, password_file: &str) -> Result<&BytePacked<Claims>, InvalidSession> {
+        let pw_file_hash = PasswordFileHash::create(password_file);
+
+        if self.pw_file_hash != pw_file_hash {
+            return Err(InvalidSession)
+        }
+
+        if time >= self.expires + LEEWAY {
+            return Err(InvalidSession)
+        }
+
+        Ok(&self.session_claims)
+    }
+
+    pub fn verify_max_age(&self, time: u64, password_file: &str, max_age: u64) -> Result<&BytePacked<Claims>, InvalidSession> {
+        if time > self.issued + max_age {
+            return Err(InvalidSession)
+        }
+        
+        self.verify(time, password_file)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        let about = SessionCreate {
+            user_id: &self.user_id,
+            issued: self.issued,
+            expires: self.expires,
+        };
+        let about_bytes = rmp_serde::encode::to_vec(&about).unwrap();
+        rmp::encode::write_bin(&mut buf, &about_bytes).unwrap();
+        rmp::encode::write_bin(&mut buf, &self.pw_file_hash.as_bytes()).unwrap();
+        rmp::encode::write_bin(&mut buf, self.session_claims.as_bytes()).unwrap();
+
+        buf
+    }
+
+    pub fn from_bytes(bytes: &'a [u8]) -> Self {
+        // let mut cursor = Cursor::new(bytes);
+        let mut cursor = Cursor::new(bytes);
+
+        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
+        let about = cursor_slice(bytes, &mut cursor, len);
+
+        let pw_file_hash = rmp_read_bin(bytes, &mut cursor).unwrap();
+
+        let len = rmp::decode::read_bin_len(&mut cursor).unwrap();
+        let claims = cursor_slice(bytes, &mut cursor, len);
+
+        let about: SessionCreate = rmp_serde::from_slice(about).unwrap();
+
+        Self {
+            user_id: about.user_id.to_owned(),
+            issued: about.issued,
+            expires: about.expires,
+            pw_file_hash: PasswordFileHash::from_bytes(pw_file_hash),
+            session_claims: BytePacked::new(claims),
+        }
     }
 }
