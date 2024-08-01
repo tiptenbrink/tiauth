@@ -1,7 +1,7 @@
 use crate::crypto::{PublicKey};
 use crate::data::{ByteSerial, SessionStatus, UserPassword};
 use crate::error::{OneOfTo, WrapErrorOneOf};
-use crate::proof::{DecryptedSession, EphemeralProofTokenState, InvalidEphemeral, InvalidProof, InvalidSession, SessionContent, UnknownTarget, UnvalidatedProofObject};
+use crate::proof::{DecryptedSession, EphemeralProofTokenState, InvalidEphemeral, InvalidProof, InvalidSession, SessionContent, UnvalidatedProofObject};
 use crate::state::{CounterState, State};
 use crate::store::{sessions, users, Store, StoreError};
 use crate::{AppState, BytePacked, Claims, KeyState, Proof, Session};
@@ -83,7 +83,7 @@ pub fn verify_proof<'a, T: ByteSerial>(
     state: &impl State,
     proof: &'a Proof<T>,
     time: u64
-) -> Result<UnvalidatedProofObject<'a, T, UnknownTarget>, OneOf<(InvalidProof,)>>
+) -> Result<UnvalidatedProofObject<'a, T>, OneOf<(InvalidProof,)>>
 where
 {
     let public_key = state.public_key();
@@ -140,7 +140,7 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{ActionType, Claims, EXPIRE_TIME},
+        data::{Claims, EXPIRE_TIME},
         state::test_util::*, KeyState,
     };
 

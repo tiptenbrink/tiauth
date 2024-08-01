@@ -4,7 +4,7 @@ use crate::data::{
 use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
-use crate::proof::{Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidProof, InvalidSession};
+use crate::proof::{Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidProof, InvalidSession, ProofSingleTarget};
 use crate::state::State;
 use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
@@ -35,9 +35,7 @@ pub fn reset_password(
     let proof_unvalidated = verify_proof(state, proof, time)
         .map_err(OneOf::broaden)?;
     
-    let proof_unvalidated = proof_unvalidated.select_one().to_one_of().map_err(OneOf::broaden)?;
-    let proof_unvalidated = proof_unvalidated.valid_action(ActionType::ResetPassword).to_one_of().map_err(OneOf::broaden)?;
-    let (_, user_id) = proof_unvalidated.validate().to_one_of().map_err(OneOf::broaden)?;
+    let (_, user_id) = proof_unvalidated.validate(ActionType::ResetPassword, ProofSingleTarget).to_one_of().map_err(OneOf::broaden)?;
 
     let UserPassword { password_file, user_id } = match users::get_login(state.store(), &user_id)
         .to_one_of()

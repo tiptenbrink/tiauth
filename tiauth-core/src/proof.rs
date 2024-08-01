@@ -108,60 +108,16 @@ where
     data: &'a BytePacked<T>,
 }
 
-enum MaybeValidated<T> {
-    Validated(T),
-    Unvalidated(T)
-}
+pub struct ProofSingleTarget;
 
-impl<T> MaybeValidated<T> {
-    fn check_unvalidated(self) -> T {
-        match self {
-            MaybeValidated::Validated(_) => panic!("Value is already validated!"),
-            MaybeValidated::Unvalidated(value) => value,
-        }
-    }
-
-    fn check_validated(&self) {
-        match self {
-            MaybeValidated::Unvalidated(_) => panic!("Value is not validated!"),
-            MaybeValidated::Validated(_) => (),
-        }
-    }
-}
-
-pub struct UnknownTarget;
-
-pub struct UnvalidatedProofObject<'a, T: ByteSerial, R> {
-    action: MaybeValidated<ActionType>,
-    target: MaybeValidated<Target>,
-    target_data: Option<TargetList>,
-    validated_target: Option<R>,
-    data: &'a BytePacked<T>
-}
-
-impl<'a, T: ByteSerial, R> UnvalidatedProofObject<'a, T, R> {
-    pub fn valid_action(self, action: ActionType) -> Result<Self, InvalidProof> {
-        let Self { action: self_action, target, validated_target, target_data, data } = self;
-        let self_action = self_action.check_unvalidated();
-        
-        if action != self_action {
-            return Err(InvalidProof)
-        }
-        
-        Ok(Self { action: MaybeValidated::Validated(self_action), target, validated_target, target_data, data })
-    }
-
-    pub fn select_one(self) -> Result<UnvalidatedProofObject<'a, T, String>, InvalidProof> {
-        let Self { action, target: self_target,  target_data, data, .. } = self;
-        let self_target = self_target.check_unvalidated();
-
-        let mut targets = target_data.unwrap();
-
-        Ok(match self_target {
+impl ProofTarget for ProofSingleTarget {
+    type Output = String;
+    
+    fn validate(self, target: Target, mut target_data: TargetList) -> Result<Self::Output, InvalidProof> {
+        Ok(match target {
             Target::Select => {
-                if targets.0.len() == 1 {
-                    let selected = targets.0.pop().unwrap();
-                    UnvalidatedProofObject { action, target: MaybeValidated::Validated(self_target), validated_target: Some(selected), target_data: None, data }
+                if target_data.0.len() == 1 {
+                    target_data.0.pop().unwrap()
                 } else {
                     return Err(InvalidProof)
                 }
@@ -169,15 +125,32 @@ impl<'a, T: ByteSerial, R> UnvalidatedProofObject<'a, T, R> {
             _ => return Err(InvalidProof),
         })
     }
+}
 
-    pub fn validate(self) -> Result<(T::Deserialized<'a>, R), InvalidProof> {
-        let _ = self.action.check_validated();
-        let _ = self.target.check_validated();
+pub trait ProofTarget {
+    type Output;
+
+    fn validate(self, target: Target, target_data: TargetList) -> Result<Self::Output, InvalidProof>;
+}
+
+pub struct UnvalidatedProofObject<'a, T: ByteSerial> {
+    action: ActionType,
+    target:Target,
+    target_data: TargetList,
+    data: &'a BytePacked<T>
+}
+
+impl<'a, T: ByteSerial> UnvalidatedProofObject<'a, T> {
+    pub fn validate<P: ProofTarget>(self, action: ActionType, proof_target: P) -> Result<(T::Deserialized<'a>, P::Output), InvalidProof> {
+        let target_output = proof_target.validate(self.target, self.target_data)?;
+
+        if self.action != action {
+            return Err(InvalidProof)
+        }
 
         let data = self.data.try_deserialize().map_err(|_| InvalidProof)?;
-        let target = self.validated_target.unwrap();
 
-        Ok((data, target))
+        Ok((data, target_output))
     }
 }
 
@@ -386,7 +359,7 @@ impl<T: ByteSerial> Proof<T> {
     //         eprintln!("expired proof");
     //         return Err(InvalidProof);
     //     };
-    pub fn verify<'a, F>(&'a self, public_key: &PublicKey, time: u64, used: F) -> Result<UnvalidatedProofObject<'a, T, UnknownTarget>, InvalidProof> 
+    pub fn verify<'a, F>(&'a self, public_key: &PublicKey, time: u64, used: F) -> Result<UnvalidatedProofObject<'a, T>, InvalidProof> 
         where F: FnOnce(&EphemeralView<()>) -> Result<(), InvalidProof>
     {
         let content = ProofContent::<T>::deserialize(&self.content)?;
@@ -405,10 +378,9 @@ impl<T: ByteSerial> Proof<T> {
         used(&ephemeral)?;
 
         Ok(UnvalidatedProofObject {
-            action: MaybeValidated::Unvalidated(content.action),
-            target: MaybeValidated::Unvalidated(content.target),
-            target_data: Some(content.target_data),
-            validated_target: None,
+            action: content.action,
+            target: content.target,
+            target_data: content.target_data,
             data: content.data
         })
     }
