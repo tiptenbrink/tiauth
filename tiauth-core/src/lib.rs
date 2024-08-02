@@ -22,7 +22,7 @@ pub use crate::data::{ByteOwned, BytePacked, ByteSerial};
 pub use crate::proof::ActionType;
 pub use crate::proof::Target;
 pub use crate::proof::TargetList;
-pub use crate::proof::{Proof, Session};
+pub use crate::proof::{Ephemeral, Proof, Session};
 
 #[cfg(feature = "action")]
 pub mod state_impl {
@@ -34,11 +34,12 @@ pub mod state_impl {
 }
 
 #[cfg(feature = "action")]
-mod action {
+mod _action {
     //pub use crate::ops::admin;
-    //pub use crate::ops::login;
-    // pub use crate::ops::modify;
-    // pub use crate::ops::register;
+    pub use crate::ops::register;
+    pub use crate::ops::login;
+    pub use crate::ops::modify;
+    
     // pub use crate::ops::verify;
     // pub use crate::state::CoreKeyState;
     // pub use crate::state::CoreState;
@@ -50,10 +51,10 @@ mod action {
     // pub use crate::store::Tables;
 }
 #[cfg(feature = "action")]
-pub use action::*;
+pub use _action::*;
 
 #[cfg(feature = "app")]
-//pub mod app;
+pub mod app;
 #[cfg(feature = "test")]
 pub mod test {
     //pub use super::ops::login::test_util::*;

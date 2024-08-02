@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
 use crate::crypto::{create_key, load_key, save_private_key, save_public_key, Key, KeyError};
-use crate::data::BytePacked;
+use crate::data::{empty_packed, BytePacked};
 use crate::encoded::Encoded;
-use crate::proof::{Ephemeral};
+use crate::proof::{Ephemeral, ProofAction};
 use crate::{ActionType, Target, TargetList};
 use crate::{Claims, Proof};
 
@@ -46,18 +46,15 @@ pub fn create_set_claims_proof(
 ) -> Encoded<Proof<Claims>> {
     let action = ActionType::SetClaims;
     let target = Target::Select;
-    let target_data = vec![user_id.to_owned()];
+    let target_data = TargetList::user(user_id);
+    let action = ProofAction::new(action, target, target_data);
 
-    let proof = create_proof(
-        proof_base.application,
-        proof_base.expires_in,
+    let proof = Proof::create(
+        proof_base.key,
+        proof_base.expires_in + proof_base.now,
         action,
-        target,
-        TargetList::from_vec(target_data),
         proof_base.nonce,
         claims,
-        proof_base.key,
-        proof_base.now
     );
 
     Encoded::from_encodable(proof)
@@ -68,7 +65,7 @@ pub fn create_set_claims_proof(
 //     let target = Target::Select;
 //     let target_data = TargetList::from_vec(vec![user_id.to_owned()]);
 
-//     let proof: Proof<()> = create_proof(
+//     let proof: Proof<()> = Proof::create(
 //         proof_base.application,
 //         proof_base.expires_in,
 //         action,
@@ -84,17 +81,15 @@ pub fn create_set_claims_proof(
 pub fn create_read_all_proof(proof_base: ProofBaseView) -> Encoded<Proof<()>> {
     let action = ActionType::ReadUsers;
     let target = Target::All;
+    let target_data = TargetList::empty();
+    let action = ProofAction::new(action, target, target_data);
 
-    let proof: Proof<()> = create_proof(
-        proof_base.application,
-        proof_base.expires_in,
-        action,
-        target,
-        TargetList::empty(),
-        proof_base.nonce,
-        BytePacked::new(&[]),
+    let proof = Proof::create(
         proof_base.key,
-        proof_base.now
+        proof_base.expires_in + proof_base.now,
+        action,
+        proof_base.nonce,
+        empty_packed(),
     );
 
     Encoded::from_encodable(proof)
@@ -107,17 +102,15 @@ pub fn create_read_some_proof(
 ) -> Encoded<Proof<()>> {
     let action = ActionType::ReadUsers;
     let target = Target::Select;
+    let target_data = TargetList::from_vec(selection);
+    let action = ProofAction::new(action, target, target_data);
 
-    let proof: Proof<()> = create_proof(
-        proof_base.application,
-        proof_base.expires_in,
-        action,
-        target,
-        TargetList::from_vec(selection),
-        proof_base.nonce,
-        BytePacked::new(&[]),
+    let proof = Proof::create(
         proof_base.key,
-        proof_base.now
+        proof_base.expires_in + proof_base.now,
+        action,
+        proof_base.nonce,
+        empty_packed(),
     );
 
     Encoded::from_encodable(proof)
@@ -133,17 +126,16 @@ pub fn create_read_range_proof(
 
     let action = ActionType::ReadUsers;
     let target = Target::Range;
+    let target_data = TargetList::from_vec(selection);
 
-    let proof: Proof<()> = create_proof(
-        proof_base.application,
-        proof_base.expires_in,
-        action,
-        target,
-        TargetList::from_vec(selection),
-        proof_base.nonce,
-        BytePacked::new(&[]),
+    let action = ProofAction::new(action, target, target_data);
+
+    let proof = Proof::create(
         proof_base.key,
-        proof_base.now
+        proof_base.expires_in + proof_base.now,
+        action,
+        proof_base.nonce,
+        empty_packed(),
     );
 
     Encoded::from_encodable(proof)

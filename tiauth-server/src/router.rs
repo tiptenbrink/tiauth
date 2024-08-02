@@ -1,4 +1,4 @@
-use crate::admin;
+//use crate::admin;
 use crate::functions;
 use crate::model::{
     LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, GetUsers
@@ -99,12 +99,12 @@ async fn login_session(
     Json(functions::login_session(&state, payload))
 }
 
-async fn admin_get_users_encoded(
-    ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<GetUsers>,
-) -> Vec<u8> {
-    admin::get_users_encoded(&state, payload).await
-}
+// async fn admin_get_users_encoded(
+//     ExtractState(state): ExtractState<ServerState>,
+//     Json(payload): Json<GetUsers>,
+// ) -> Vec<u8> {
+//     admin::get_users_encoded(&state, payload).await
+// }
 
 pub fn create_router<S>(state: ServerState) -> Router<S>
 where
@@ -116,7 +116,7 @@ where
         .route("/register/finish", post(register_finish))
         .route("/login/start", post(start_login))
         .route("/login/session", post(login_session))
-        .route("/admin/users", post(admin_get_users_encoded))
+        //.route("/admin/users", post(admin_get_users_encoded))
         .with_state(state)
         .layer((TimeoutLayer::new(Duration::from_secs(15)),))
 }

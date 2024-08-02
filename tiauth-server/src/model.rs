@@ -1,4 +1,4 @@
-use tiauth_core::encoded::Encoded;
+use tiauth_core::{encoded::Encoded, Ephemeral};
 use serde::{Deserialize, Serialize};
 use tiauth_core::{Claims, Proof};
 
@@ -27,7 +27,7 @@ pub struct RegisterFinishRequest {
 pub struct LoginFinishRequest {
     pub application: String,
     pub opaque_request: String,
-    pub start_nonce: String,
+    pub start_nonce: Encoded<Ephemeral<String>>,
     pub pake_secret: String,
     pub all_claims: Option<bool>,
     pub requested_claims: Option<Vec<String>>,

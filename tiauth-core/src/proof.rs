@@ -542,6 +542,24 @@ pub struct Session {
     encrypted: Vec<u8>,
 }
 
+impl Encodable for Session {
+    type Error = InvalidSession;
+
+    fn decode(encoded: &str) -> Result<Self, Self::Error>
+    where
+        Self: Sized {
+        let encrypted = b64::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| InvalidSession)?;
+
+        Ok(Self {
+            encrypted
+        })
+    }
+
+    fn encode(&self) -> String {
+        b64::URL_SAFE_NO_PAD.encode(&self.encrypted)
+    }
+}
+
 trait SessionVerifyStatus {
     type StatusVerifyError;
 
