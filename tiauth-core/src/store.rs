@@ -1,15 +1,37 @@
 use base64::{engine::general_purpose as b64, Engine as _};
 use camino::Utf8Path;
-use redb::{AccessGuard, Database, Error as DbError, Key, ReadOnlyTable, ReadTransaction, ReadableTable as DbReadableTable, StorageError, Table, TableDefinition, TableError, TransactionError, Value, WriteTransaction};
+use redb::{
+    AccessGuard, CommitError, Database, Error as DbError, Key, ReadOnlyTable, ReadTransaction,
+    ReadableTable as DbReadableTable, StorageError, Table, TableDefinition, TableError,
+    TransactionError, Value, WriteTransaction,
+};
 use sha2::{Digest, Sha256};
-use std::{borrow::Borrow, collections::HashMap, fmt::{write, Display}, io::Cursor, marker::PhantomData, num::ParseIntError, ops::RangeBounds, path::Path, str::Utf8Error, string::FromUtf8Error, sync::Arc, time::SystemTime};
+use std::{
+    borrow::Borrow,
+    collections::HashMap,
+    fmt::{write, Display},
+    io::Cursor,
+    marker::PhantomData,
+    num::ParseIntError,
+    ops::RangeBounds,
+    path::Path,
+    str::Utf8Error,
+    string::FromUtf8Error,
+    sync::Arc,
+    time::SystemTime,
+};
 use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    crypto::{self, KeyError}, data::{
-        empty_claim_bytes, ByteOwned, ByteSerial, UserPassword, SerializedAs, SessionClaims,
-    }, encoded::Encodable, error::WrapErrorOneOf, proof::{EphemeralContent, EphemeralType}, state::State, util::{combine_encode, rmp_read_bin, rmp_read_str}, BytePacked, Claims
+    crypto::{self, KeyError},
+    data::{empty_claim_bytes, ByteOwned, ByteSerial, SerializedAs, SessionClaims, UserPassword},
+    encoded::Encodable,
+    error::WrapErrorOneOf,
+    proof::{EphemeralContent, EphemeralType},
+    state::State,
+    util::{combine_encode, rmp_read_bin, rmp_read_str},
+    BytePacked, Claims,
 };
 
 // pub type TableStore = (String, String, String);
@@ -87,22 +109,21 @@ pub const SERVER: TableDefinition<&str, String> = TableDefinition::new("server")
 /// App identities
 pub const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
 
-
 #[derive(Debug)]
 struct LoadContext {
     address: String,
-    inner: String
+    inner: String,
 }
 
 #[derive(Debug)]
 struct InnerStringContext {
-    inner: String
+    inner: String,
 }
 
 #[derive(Debug)]
 struct DataDeserializationContext {
     info: String,
-    inner: String
+    inner: String,
 }
 
 type StringContext = Context<InnerStringContext>;
@@ -117,7 +138,7 @@ pub enum DataDeserializationErrorSource {
     InvalidLength { exp: usize, got: usize },
     // Generic parsing error
     #[error("Parse failure.")]
-    ParseError
+    ParseError,
 }
 
 impl From<ParseIntError> for DataDeserializationErrorSource {
@@ -127,10 +148,10 @@ impl From<ParseIntError> for DataDeserializationErrorSource {
 }
 
 #[derive(Error, Debug)]
-#[error("Failed to deserialize table data: {info}. Underlying error: {kind}",)]
+#[error("Failed to deserialize table data: {info}. Underlying error: {kind}")]
 pub struct DataDeserializationError {
     info: String,
-    kind: DataDeserializationErrorSource
+    kind: DataDeserializationErrorSource,
 }
 
 // impl From<FromUtf8Error> for DataDeserializationError {
@@ -143,37 +164,44 @@ pub trait WrapDeserializationError<T> {
     fn to_deser_err<S: Into<String>>(self, info: S) -> Result<T, DataDeserializationError>;
 }
 
-impl<T, E> WrapDeserializationError<T> for Result<T, E> 
-    where E: Into<DataDeserializationErrorSource>
+impl<T, E> WrapDeserializationError<T> for Result<T, E>
+where
+    E: Into<DataDeserializationErrorSource>,
 {
     fn to_deser_err<S: Into<String>>(self, info: S) -> Result<T, DataDeserializationError> {
         match self {
             Ok(ok) => Ok(ok),
-            Err(err) => {
-                Err(DataDeserializationError {
-                    info: info.into(),
-                    kind: err.into()
-                })
-            },
+            Err(err) => Err(DataDeserializationError {
+                info: info.into(),
+                kind: err.into(),
+            }),
         }
     }
 }
 
 pub trait WrapVecTryFromError<T> {
-    fn to_deser_err<S: Into<String>>(self, exp: usize, info: S) -> Result<T, DataDeserializationError>;
+    fn to_deser_err<S: Into<String>>(
+        self,
+        exp: usize,
+        info: S,
+    ) -> Result<T, DataDeserializationError>;
 }
 
-impl<T, U> WrapVecTryFromError<T> for Result<T, Vec<U>> 
-{
-    fn to_deser_err<S: Into<String>>(self, exp: usize, info: S, ) -> Result<T, DataDeserializationError> {
+impl<T, U> WrapVecTryFromError<T> for Result<T, Vec<U>> {
+    fn to_deser_err<S: Into<String>>(
+        self,
+        exp: usize,
+        info: S,
+    ) -> Result<T, DataDeserializationError> {
         match self {
             Ok(ok) => Ok(ok),
-            Err(err) => {
-                Err(DataDeserializationError {
-                    info: info.into(),
-                    kind: DataDeserializationErrorSource::InvalidLength { exp, got: err.len() }
-                })
-            },
+            Err(err) => Err(DataDeserializationError {
+                info: info.into(),
+                kind: DataDeserializationErrorSource::InvalidLength {
+                    exp,
+                    got: err.len(),
+                },
+            }),
         }
     }
 }
@@ -181,14 +209,12 @@ impl<T, U> WrapVecTryFromError<T> for Result<T, Vec<U>>
 #[derive(Debug)]
 #[repr(transparent)]
 struct Context<T> {
-    b: Box<T>
+    b: Box<T>,
 }
 
 impl<T> Context<T> {
     fn new(inner: T) -> Self {
-        Self {
-            b: Box::new(inner)
-        }
+        Self { b: Box::new(inner) }
     }
 }
 
@@ -205,12 +231,14 @@ pub enum StoreError {
     #[error("{}", .0.b)]
     DataDeserialization(Context<DataDeserializationError>),
     #[error("Invariant failed to hold during initialization: {}", .0.b.inner)]
-    Init(StringContext)
+    Init(StringContext),
 }
 
 impl StoreError {
     pub fn new_init<S: Into<String>>(failed_invariant: S) -> Self {
-        Self::Init(Context::new(InnerStringContext { inner: failed_invariant.into() }))
+        Self::Init(Context::new(InnerStringContext {
+            inner: failed_invariant.into(),
+        }))
     }
 }
 
@@ -222,45 +250,82 @@ impl From<DataDeserializationError> for StoreError {
 
 impl From<TransactionError> for StoreError {
     fn from(value: TransactionError) -> Self {
-        Self::OpenTransaction(Context::new(InnerStringContext { inner: value.to_string() }))
+        Self::OpenTransaction(Context::new(InnerStringContext {
+            inner: value.to_string(),
+        }))
+    }
+}
+
+impl From<CommitError> for StoreError {
+    fn from(value: CommitError) -> Self {
+        Self::Storage(Context::new(InnerStringContext {
+            inner: value.to_string(),
+        }))
     }
 }
 
 impl From<StorageError> for StoreError {
     fn from(value: StorageError) -> Self {
-        Self::Storage(Context::new(InnerStringContext { inner: value.to_string() }))
+        Self::Storage(Context::new(InnerStringContext {
+            inner: value.to_string(),
+        }))
     }
 }
 
 impl From<TableError> for StoreError {
     fn from(value: TableError) -> Self {
         match value {
-            TableError::Storage(value) => Self::Storage(Context::new(InnerStringContext { inner: value.to_string() })),
-            _ => Self::Table(Context::new(InnerStringContext { inner: value.to_string() }))
+            TableError::Storage(value) => Self::Storage(Context::new(InnerStringContext {
+                inner: value.to_string(),
+            })),
+            _ => Self::Table(Context::new(InnerStringContext {
+                inner: value.to_string(),
+            })),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct Store {
-    database: Arc<Database>
+    database: Arc<Database>,
+}
+
+pub enum StoreType {
+    Application,
+    Server,
 }
 
 impl Store {
-    pub fn load(address: StoreAddress) -> Result<Self, StoreError> {
-        let db = open_db(&address.0)
-            .map_err(|e| {
-                StoreError::Load(Context::new(LoadContext { address: address.to_string(), inner: e.to_string() }))
-            })?;
+    pub fn load(address: StoreAddress, store_type: StoreType) -> Result<Self, StoreError> {
+        let db = open_db(&address.0).map_err(|e| {
+            StoreError::Load(Context::new(LoadContext {
+                address: address.to_string(),
+                inner: e.to_string(),
+            }))
+        })?;
+
+        let tx = db.begin_write()?;
+
+        match store_type {
+            StoreType::Application => {
+                tx.open_table(SESSIONS)?;
+                tx.open_table(SESSIONS_EXPIRY)?;
+                tx.open_table(CLAIMS)?;
+                tx.open_table(USERS)?;
+            }
+            StoreType::Server => todo!(),
+        }
+
+        tx.commit()?;
 
         Ok(Self {
-            database: Arc::new(db)
+            database: Arc::new(db),
         })
     }
 
     pub fn open_read(&self) -> Result<ReadTx, StoreError> {
         let tx = self.database.begin_read()?;
-    
+
         Ok(ReadTx {
             tx,
             // token: TxToken::new(),
@@ -270,7 +335,7 @@ impl Store {
 
     pub fn open_write(&self) -> Result<WriteTx, StoreError> {
         let tx = self.database.begin_write()?;
-    
+
         Ok(WriteTx {
             tx,
             // token: TxToken::new(),
@@ -313,7 +378,8 @@ type SessionsExpiryV = &'static [u8; 64];
 //type SessionsVOwned = Vec<u8>;
 // Revoked sessions
 pub const SESSIONS: TableDefinition<SessionsK, SessionsV> = TableDefinition::new("sessions");
-pub const SESSIONS_EXPIRY: TableDefinition<SessionsExpiryK, SessionsExpiryV> = TableDefinition::new("sessions_expiry");
+pub const SESSIONS_EXPIRY: TableDefinition<SessionsExpiryK, SessionsExpiryV> =
+    TableDefinition::new("sessions_expiry");
 
 pub struct SessionsTableType;
 
@@ -341,7 +407,7 @@ impl TableType for SessionsExpiryTableType {
 //     pub struct TxToken<'tx> {
 //         phantom: PhantomData<&'tx TxGuard>
 //     }
-    
+
 //     impl<'tx> TxToken<'tx> {
 //         fn new() -> Self {
 //             Self {
@@ -350,7 +416,6 @@ impl TableType for SessionsExpiryTableType {
 //         }
 //     }
 
-    
 // }
 
 pub struct ReadTx {
@@ -362,25 +427,25 @@ pub struct ReadTx {
 impl ReadTx {
     pub fn sessions_table(&self) -> Result<ReadTable<SessionsTableType>, StoreError> {
         Ok(ReadTable {
-            table: self.tx.open_table(SESSIONS)?
+            table: self.tx.open_table(SESSIONS)?,
         })
     }
 
     pub fn sessions_expiry_table(&self) -> Result<ReadTable<SessionsExpiryTableType>, StoreError> {
         Ok(ReadTable {
-            table: self.tx.open_table(SESSIONS_EXPIRY)?
+            table: self.tx.open_table(SESSIONS_EXPIRY)?,
         })
     }
 
     pub fn user_table(&self) -> Result<ReadTable<UserTableType>, StoreError> {
         Ok(ReadTable {
-            table: self.tx.open_table(USERS)?
+            table: self.tx.open_table(USERS)?,
         })
     }
 
     pub fn claims_table(&self) -> Result<ReadTable<ClaimsTableType>, StoreError> {
         Ok(ReadTable {
-            table: self.tx.open_table(CLAIMS)?
+            table: self.tx.open_table(CLAIMS)?,
         })
     }
 }
@@ -390,7 +455,6 @@ pub struct WriteTx {
     // token: TxToken<'tx>,
     // tables: TxTables<'tx>
 }
-
 
 // use super::TxTables;
 
@@ -405,31 +469,35 @@ impl WriteTx {
 
     pub fn keys_table<'tx>(&'tx self) -> Result<WriteTable<'tx, KeysTableType>, StoreError> {
         Ok(WriteTable {
-            table: self.tx.open_table(KEYS)?
+            table: self.tx.open_table(KEYS)?,
         })
     }
 
     pub fn user_table<'tx>(&'tx self) -> Result<WriteTable<'tx, UserTableType>, StoreError> {
         Ok(WriteTable {
-            table: self.tx.open_table(USERS)?
+            table: self.tx.open_table(USERS)?,
         })
     }
 
     pub fn claims_table<'tx>(&'tx self) -> Result<WriteTable<'tx, ClaimsTableType>, StoreError> {
         Ok(WriteTable {
-            table: self.tx.open_table(CLAIMS)?
+            table: self.tx.open_table(CLAIMS)?,
         })
     }
 
-    pub fn sessions_table<'tx>(&'tx self) -> Result<WriteTable<'tx, SessionsTableType>, StoreError> {
+    pub fn sessions_table<'tx>(
+        &'tx self,
+    ) -> Result<WriteTable<'tx, SessionsTableType>, StoreError> {
         Ok(WriteTable {
-            table: self.tx.open_table(SESSIONS)?
+            table: self.tx.open_table(SESSIONS)?,
         })
     }
 
-    pub fn sessions_expiry_table<'tx>(&'tx self) -> Result<WriteTable<'tx, SessionsExpiryTableType>, StoreError> {
+    pub fn sessions_expiry_table<'tx>(
+        &'tx self,
+    ) -> Result<WriteTable<'tx, SessionsExpiryTableType>, StoreError> {
         Ok(WriteTable {
-            table: self.tx.open_table(SESSIONS_EXPIRY)?
+            table: self.tx.open_table(SESSIONS_EXPIRY)?,
         })
     }
 
@@ -450,38 +518,67 @@ type KeysTableWrite<'tx> = WriteTable<'tx, KeysTableType>;
 pub mod keys {
     use super::*;
 
-    pub fn get_opaque_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, f: F) -> Result<KeysVOwned, StoreError>
-        where F: FnOnce() -> KeysVOwned
+    pub fn get_opaque_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
     {
         get_or_create(table, "opaque_setup", f)
     }
-    
-    pub fn get_session_key_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, i: usize, f: F) -> Result<KeysVOwned, StoreError> where 
-        F: FnOnce() -> KeysVOwned {
+
+    pub fn get_session_key_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        i: usize,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
+    {
         let key_name = format!("session_key_{}", i);
-        
+
         get_or_create(table, key_name.as_str(), f)
     }
 
-    pub fn get_ephemeral_secret_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, f: F) -> Result<KeysVOwned, StoreError>
-        where F: FnOnce() -> KeysVOwned
+    pub fn get_ephemeral_secret_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
     {
         get_or_create(table, "ephemeral_secret", f)
     }
 
-    pub fn get_ephemeral_time_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, f: F) -> Result<KeysVOwned, StoreError>
-        where F: FnOnce() -> KeysVOwned
+    pub fn get_ephemeral_time_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
     {
         get_or_create(table, "ephemeral_time", f)
     }
 
-    pub fn get_ephemeral_valid_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, f: F) -> Result<KeysVOwned, StoreError>
-        where F: FnOnce() -> KeysVOwned
+    pub fn get_ephemeral_valid_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
     {
         get_or_create(table, "ephemeral_valid", f)
     }
-    
-    pub fn get_or_create<'tx, F>(table: &mut KeysTableWrite<'tx>, key: &str, f: F) -> Result<KeysVOwned, StoreError> where F: FnOnce() -> KeysVOwned {
+
+    pub fn get_or_create<'tx, F>(
+        table: &mut KeysTableWrite<'tx>,
+        key: &str,
+        f: F,
+    ) -> Result<KeysVOwned, StoreError>
+    where
+        F: FnOnce() -> KeysVOwned,
+    {
         let table = &mut table.table;
         let bytes = if let Some(bytes) = table.get(key)? {
             bytes.value().to_vec()
@@ -491,8 +588,12 @@ pub mod keys {
 
         Ok(bytes)
     }
-    
-    pub fn overwrite_or_get<'tx>(table: &mut KeysTableWrite<'tx>, key: &str, value: Option<KeysVOwned>) -> Result<Option<KeysVOwned>, StoreError> {
+
+    pub fn overwrite_or_get<'tx>(
+        table: &mut KeysTableWrite<'tx>,
+        key: &str,
+        value: Option<KeysVOwned>,
+    ) -> Result<Option<KeysVOwned>, StoreError> {
         let table = &mut table.table;
         if let Some(value) = value {
             table.insert(key, value.as_slice())?;
@@ -502,9 +603,11 @@ pub mod keys {
             Ok(table.get(key)?.map(|v| v.value().to_vec()))
         }
     }
-    
-    pub fn overwrite_public_key_or_get<'tx>(table: &mut KeysTableWrite<'tx>, value: Option<KeysVOwned>) -> Result<Option<KeysVOwned>, StoreError>
-    {
+
+    pub fn overwrite_public_key_or_get<'tx>(
+        table: &mut KeysTableWrite<'tx>,
+        value: Option<KeysVOwned>,
+    ) -> Result<Option<KeysVOwned>, StoreError> {
         overwrite_or_get(table, "public_key", value)
     }
 }
@@ -523,9 +626,15 @@ pub const USERS: TableDefinition<UsersK, UsersV> = TableDefinition::new("users")
 // }
 
 pub trait ReadableTable<K: Key + 'static, V: Value + 'static> {
-    fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<K as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, V>>, StoreError>;
+    fn get<'tbl, 'k>(
+        &'tbl self,
+        key: impl Borrow<<K as Value>::SelfType<'k>>,
+    ) -> Result<Option<ReadGuard<'tbl, V>>, StoreError>;
 
-    fn range<'tbl, 'k, KB: Borrow<<K as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
+    fn range<'tbl, 'k, KB: Borrow<<K as Value>::SelfType<'k>> + 'k>(
+        &'tbl self,
+        range: impl RangeBounds<KB> + 'k,
+    ) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
 }
 
 // impl<'tx> ReadableTable<UsersK, UsersV> for UserTable<'tx> {
@@ -540,7 +649,7 @@ pub const CLAIMS: TableDefinition<ClaimsK, ClaimsV> = TableDefinition::new("clai
 
 pub trait TableType {
     type Key: Key + 'static;
-    type Value: Value + 'static; 
+    type Value: Value + 'static;
 }
 
 pub struct UserTableType;
@@ -558,11 +667,15 @@ impl TableType for ClaimsTableType {
 }
 
 pub struct WriteTable<'tx, T: TableType> {
-    table: Table<'tx, T::Key, T::Value>
+    table: Table<'tx, T::Key, T::Value>,
 }
 
 impl<'tx, T: TableType> WriteTable<'tx, T> {
-    pub fn insert<'kv>(&mut self, key: impl Borrow<<T::Key as Value>::SelfType<'kv>>, value: impl Borrow<<T::Value as Value>::SelfType<'kv>>) -> Result<(), StoreError> {
+    pub fn insert<'kv>(
+        &mut self,
+        key: impl Borrow<<T::Key as Value>::SelfType<'kv>>,
+        value: impl Borrow<<T::Value as Value>::SelfType<'kv>>,
+    ) -> Result<(), StoreError> {
         self.table.insert(key, value)?;
 
         Ok(())
@@ -570,37 +683,51 @@ impl<'tx, T: TableType> WriteTable<'tx, T> {
 }
 
 pub struct ReadTable<T: TableType> {
-    table: ReadOnlyTable<T::Key, T::Value>
+    table: ReadOnlyTable<T::Key, T::Value>,
 }
 
 // Some of the typing here is buggy an dmaybe rust-analyzer is crashing? TODO investigate
 impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for WriteTable<'tx, T> {
-    fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<T::Key as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
+    fn get<'tbl, 'k>(
+        &'tbl self,
+        key: impl Borrow<<T::Key as Value>::SelfType<'k>>,
+    ) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
         Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
     }
-    
-    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
-        let range_result: Result<Vec<_>, _> = self.table.range(range)?.into_iter().map(|kv| {
-            kv.map(|(k, v)| {
-                (ReadGuard(k), ReadGuard(v))
-            })
-        }).collect();
+
+    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(
+        &'tbl self,
+        range: impl RangeBounds<KB> + 'k,
+    ) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let range_result: Result<Vec<_>, _> = self
+            .table
+            .range(range)?
+            .into_iter()
+            .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
+            .collect();
 
         Ok(range_result?)
     }
 }
 
 impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
-    fn get<'tbl, 'k>(&'tbl self, key: impl Borrow<<T::Key as Value>::SelfType<'k>>) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
+    fn get<'tbl, 'k>(
+        &'tbl self,
+        key: impl Borrow<<T::Key as Value>::SelfType<'k>>,
+    ) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
         Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
     }
-    
-    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(&'tbl self, range: impl RangeBounds<KB> + 'k) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
-        let range_result: Result<Vec<_>, _> = self.table.range(range)?.into_iter().map(|kv| {
-            kv.map(|(k, v)| {
-                (ReadGuard(k), ReadGuard(v))
-            })
-        }).collect();
+
+    fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(
+        &'tbl self,
+        range: impl RangeBounds<KB> + 'k,
+    ) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let range_result: Result<Vec<_>, _> = self
+            .table
+            .range(range)?
+            .into_iter()
+            .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
+            .collect();
 
         Ok(range_result?)
     }
@@ -765,65 +892,65 @@ impl<'a, V: Value + 'static> ReadGuard<'a, V> {
 }
 
 pub mod users {
-    use crate::data::{UserClaims, UserPassword};
+    use crate::data::{SessionClaimsView, UserClaims, UserPassword};
 
     use super::*;
 
-    pub fn get_login(
-        store: &Store,
-        user_id: &str,
-    ) -> Result<Option<UserPassword>, StoreError> {
+    pub fn get_login(store: &Store, user_id: &str) -> Result<Option<UserPassword>, StoreError> {
         let tx = store.open_read()?;
 
         let table = tx.user_table()?;
-    
+
         let access = table.get(user_id)?;
-    
+
         if let Some(access) = access {
             let login_bytes = access.value();
-    
+
             Ok(Some(UserPassword::deserialize(login_bytes)))
         } else {
             Ok(None)
         }
     }
 
-    pub fn get_login_claims_bytes(
+    /// Returns the found claims, as well as requested claims that could not be found.
+    pub fn get_login_claims_bytes<'a>(
         store: &Store,
         user_id: &str,
-        requested_claims: SessionClaims,
-    ) -> Result<Option<ByteOwned<Claims>>, StoreError> {
+        requested_claims: &'a SessionClaims,
+    ) -> Result<(ByteOwned<Claims>, SessionClaimsView<'a>), StoreError> {
         let tx = store.open_read()?;
-    
+
         let table = tx.claims_table()?;
-    
+
         let access = table.get(user_id)?;
-    
+
         if let Some(access) = access {
             let login_bytes = access.value();
-    
+
             let login = UserClaims::deserialize(login_bytes);
-    
-            let claim_bytes = if let SessionClaims::Some(subset) = requested_claims {
+
+            Ok(if let SessionClaims::Some(subset) = requested_claims {
                 // This is very cheap since it's a zero-copy deserialization
                 let claim_view = login.claims.deserialize();
 
-                claim_view.subset_serialize(&subset)
+                let (claims, not_found) = claim_view.subset_serialize(&subset);
+                (claims, SessionClaimsView::Some(not_found))
             } else {
                 // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function
-                login.claims.to_owned()
-            };
-    
-            Ok(Some(claim_bytes))
+                (login.claims.to_owned(), SessionClaimsView::Some(Vec::new()))
+            })
         } else {
-            Ok(None)
+            Ok(match requested_claims {
+                SessionClaims::All => (empty_claim_bytes().to_owned(), SessionClaimsView::All),
+                SessionClaims::Some(not_found) => (
+                    empty_claim_bytes().to_owned(),
+                    SessionClaimsView::Some(not_found.iter().map(|s| s.as_str()).collect()),
+                ),
+            })
         }
     }
 
-    pub fn set_login_claims(
-        store: &Store,
-        claims: UserClaims
-    ) -> Result<(), StoreError> {
+    pub fn set_login_claims(store: &Store, claims: UserClaims) -> Result<(), StoreError> {
         let tx = store.open_write()?;
 
         {
@@ -858,7 +985,7 @@ pub mod sessions {
 
         Ok(match status.map(|s| s.value()) {
             Some((status, expires)) => SessionStatus::from_raw_status(status, expires),
-            None => SessionStatus::untracked()
+            None => SessionStatus::untracked(),
         })
     }
 }
@@ -877,10 +1004,7 @@ pub mod sessions {
 //     }
 // }
 
-
-
 // // For EphemeralType = ChangePassword, old_login_bytes must be set.
-
 
 // /// If `require_unset_password` is set to false, it returns a [LoginFieldError::PasswordSet] when password is already set.
 // /// If `create_user` is set to true, it will create a user when the user does not exist. Otherwise, it
@@ -957,10 +1081,6 @@ pub mod sessions {
 
 //     Ok(())
 // }
-
-
-
-
 
 // #[cfg(test)]
 // mod tests {

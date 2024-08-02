@@ -1,9 +1,9 @@
 #![allow(dead_code)]
-use std::sync::{atomic, LazyLock, OnceLock};
 use base64::{engine::general_purpose as b64, Engine as _};
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+use std::sync::{atomic, LazyLock, OnceLock};
 // use redb::{Database, Error as DbError, ReadableTable, TableDefinition};
 use rmp_serde::{decode, encode};
 use sha2::{Digest, Sha256};
@@ -19,11 +19,15 @@ use web_time::SystemTime;
 
 use crate::counter::{CompactSet, Counter};
 use crate::crypto::{
-    create_key, create_symmetric_key, load_key, load_public_key, save_private_key, save_public_key, Key, PublicKey
+    create_key, create_symmetric_key, load_key, load_public_key, save_private_key, save_public_key,
+    Key, PublicKey,
 };
 use crate::data::{Application, SessionKey, EPHEMERAL_INTERVAL};
 use crate::proof::EphemeralKey;
-use crate::store::{keys, DataDeserializationErrorSource, Store, StoreAddress, StoreError, WrapDeserializationError, WrapVecTryFromError};
+use crate::store::{
+    keys, DataDeserializationErrorSource, Store, StoreAddress, StoreError, StoreType,
+    WrapDeserializationError, WrapVecTryFromError,
+};
 
 // pub trait GovernorState: State {
 //     type Readonly;
@@ -133,9 +137,7 @@ pub trait GovernorAppState: AppState {
 //     fn apps(&self) -> Vec<&String>;
 // }
 
-pub trait State: DriverState + AppState + CounterState {
-
-}
+pub trait State: DriverState + AppState + CounterState {}
 
 pub trait DriverState {
     // Seconds since the epoch
@@ -156,8 +158,6 @@ pub trait AppState {
     fn public_key(&self) -> &PublicKey;
 
     fn store(&self) -> &Store;
-
-    
 
     // fn private(&self) -> &PrivateState;
 
@@ -250,7 +250,6 @@ pub struct KeyStateImpl<const SN: usize> {
     opaque: String,
 }
 
-
 impl<const SN: usize> KeyState<SN> for KeyStateImpl<SN> {
     fn opaque(&self) -> &str {
         &self.opaque
@@ -321,12 +320,11 @@ impl<const SN: usize> GovernorKeyState<SN> for KeyStateImpl<SN> {
     }
 }
 
-
 #[derive(Clone)]
 pub struct StateImpl {
     // Persistent database for overall configuration and app information
     pub store: Arc<Store>,
-    pub apps: HashMap<String, OnceLock<AppStateImpl>>
+    pub apps: HashMap<String, OnceLock<AppStateImpl>>,
 }
 
 #[derive(Clone)]
@@ -341,20 +339,32 @@ pub struct AppStateImpl {
     pub store: Arc<Store>,
     // Keys and secrets
     pub key_state: KeyStateImpl<2>,
-    pub time: Arc<AtomicU64>
+    pub time: Arc<AtomicU64>,
 }
 
-fn load_app_state(application: &str, address: StoreAddress, public_key: Option<PublicKey>, now: u64) -> Result<AppStateImpl, StoreError> {
-    let store = Store::load(address)?;
+fn load_app_state(
+    application: &str,
+    address: StoreAddress,
+    public_key: Option<PublicKey>,
+    now: u64,
+) -> Result<AppStateImpl, StoreError> {
+    let store = Store::load(address, StoreType::Application)?;
 
-    let AppInitState { opaque, ephemeral_secret, public_key, session_keys, ephemeral_valid, ephemeral_time } = init_app_state(&store, public_key, &mut StdRng::from_entropy(), now)?;
+    let AppInitState {
+        opaque,
+        ephemeral_secret,
+        public_key,
+        session_keys,
+        ephemeral_valid,
+        ephemeral_time,
+    } = init_app_state(&store, public_key, &mut StdRng::from_entropy(), now)?;
 
     let key_state = KeyStateImpl {
         opaque,
         valid_session_keys: session_keys,
         ephemeral_secret,
         ephemeral_valid,
-        ephemeral_time
+        ephemeral_time,
     };
 
     let counter = Counter::new();
@@ -368,7 +378,7 @@ fn load_app_state(application: &str, address: StoreAddress, public_key: Option<P
         compact_set,
         store: Arc::new(store),
         key_state,
-        time
+        time,
     };
 
     Ok(app_state)
@@ -386,7 +396,6 @@ fn load_app_state(application: &str, address: StoreAddress, public_key: Option<P
 // }
 
 impl AppState for AppStateImpl {
-
     fn store(&self) -> &Store {
         &self.store
     }
@@ -395,19 +404,17 @@ impl AppState for AppStateImpl {
     //     &self.private
     // }
 
-
     fn keys(&self) -> &impl KeyState<2> {
         &self.key_state
     }
-    
+
     fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
-    
+
     fn application(&self) -> &str {
         &self.application
     }
-
 }
 
 impl CounterState for AppStateImpl {
@@ -415,7 +422,7 @@ impl CounterState for AppStateImpl {
         // It should be possible to in the future make this counter be per-user, or to store the fact that the counter has been given out
         self.counter.increment()
     }
-    
+
     fn counter_used(&self, _: &str, num: u64, expires: u64, time: u64) -> bool {
         self.compact_set.num_exists(num, expires, Some(time))
     }
@@ -425,15 +432,13 @@ impl DriverState for AppStateImpl {
     fn time(&self) -> u64 {
         self.time.load(atomic::Ordering::Relaxed)
     }
-    
+
     fn drive_time(&self, time: u64) {
         self.time.store(time, atomic::Ordering::Relaxed)
     }
 }
 
-impl State for AppStateImpl {
-
-}
+impl State for AppStateImpl {}
 
 impl GovernorAppState for AppStateImpl {
     type Readonly = AppStateImpl;
@@ -442,8 +447,6 @@ impl GovernorAppState for AppStateImpl {
         &mut self.key_state
     }
 }
-
-
 
 // pub struct InitState<const SN: usize> {
 //     pub db: Database,
@@ -486,9 +489,7 @@ fn init_app_state<const SN: usize>(
     let (opaque, session_keys, public_key, ephemeral_secret, ephemeral_valid, ephemeral_time) = {
         let mut table = tx.keys_table()?;
 
-        let setup = keys::get_opaque_or_create(&mut table, || {
-            create_setup().into_bytes()
-        })?;
+        let setup = keys::get_opaque_or_create(&mut table, || create_setup().into_bytes())?;
         let setup = String::from_utf8(setup).to_deser_err("opaque setup")?;
 
         let session_keys: Result<Vec<SessionKey>, StoreError> = (0..SN)
@@ -498,8 +499,8 @@ fn init_app_state<const SN: usize>(
                     session_key.to_saved_bytes().to_vec()
                 })?;
 
-
-                Ok(SessionKey::from_saved_bytes(&session_key_bytes).to_deser_err(format!("session key {}", i))?)
+                Ok(SessionKey::from_saved_bytes(&session_key_bytes)
+                    .to_deser_err(format!("session key {}", i))?)
             })
             .collect();
 
@@ -514,23 +515,26 @@ fn init_app_state<const SN: usize>(
         let ephemeral_secret = TryInto::<[u8; 32]>::try_into(ephemeral_secret)
             .to_deser_err(32, "ephemeral secret length")?;
 
-        let ephemeral_time = keys::get_ephemeral_time_or_create(&mut table, || {
-            now.to_string().into_bytes()
-        })?;
+        let ephemeral_time =
+            keys::get_ephemeral_time_or_create(&mut table, || now.to_string().into_bytes())?;
         let time_str = String::from_utf8(ephemeral_time).to_deser_err("ephemeral time to str")?;
-        let ephemeral_time = time_str.parse::<u64>().to_deser_err("ephemeral time str as u64")?;
+        let ephemeral_time = time_str
+            .parse::<u64>()
+            .to_deser_err("ephemeral time str as u64")?;
 
-        let ephemeral_valid = keys::get_ephemeral_valid_or_create(&mut table, || {
-            2.to_string().into_bytes()
-        })?;
-        let valid_str = String::from_utf8(ephemeral_valid).to_deser_err("ephemeral valid to str")?;
-        let ephemeral_valid = valid_str.parse::<u32>().to_deser_err("ephemeral valid str as u32")?;
+        let ephemeral_valid =
+            keys::get_ephemeral_valid_or_create(&mut table, || 2.to_string().into_bytes())?;
+        let valid_str =
+            String::from_utf8(ephemeral_valid).to_deser_err("ephemeral valid to str")?;
+        let ephemeral_valid = valid_str
+            .parse::<u32>()
+            .to_deser_err("ephemeral valid str as u32")?;
 
-        let public_key_bytes = public_key.map(|k| {
-            save_public_key(&k).pem().into_bytes()
-        });
+        let public_key_bytes = public_key.map(|k| save_public_key(&k).pem().into_bytes());
         let public_key_bytes = keys::overwrite_public_key_or_get(&mut table, public_key_bytes)?
-            .ok_or_else(|| StoreError::new_init("No public key set for application and none provided!"))?;
+            .ok_or_else(|| {
+                StoreError::new_init("No public key set for application and none provided!")
+            })?;
         let public_key_pem = String::from_utf8(public_key_bytes).to_deser_err("public key pem")?;
         let public_key = load_public_key(&public_key_pem).to_deser_err("public key")?;
 
@@ -696,15 +700,15 @@ pub mod test_util {
         fn application(&self) -> &str {
             self.state.application()
         }
-    
+
         fn public_key(&self) -> &PublicKey {
             self.state.public_key()
         }
-    
+
         fn store(&self) -> &Store {
             self.state.store()
         }
-    
+
         fn keys(&self) -> &impl KeyState<2> {
             self.state.keys()
         }
@@ -713,26 +717,24 @@ pub mod test_util {
     impl CounterState for TestState {
         fn counter_next(&self, key: &str, expires: u64) -> u64 {
             self.state.counter_next(key, expires)
-         }
-     
-         fn counter_used(&self, key: &str, num: u64, expires: u64, time: u64) -> bool {
-             self.state.counter_used(key, num, expires, time)
-         }
+        }
+
+        fn counter_used(&self, key: &str, num: u64, expires: u64, time: u64) -> bool {
+            self.state.counter_used(key, num, expires, time)
+        }
     }
 
     impl DriverState for TestState {
         fn time(&self) -> u64 {
             *(self.time.borrow())
         }
-    
+
         fn drive_time(&self, time: u64) {
             self.time.replace(time);
         }
     }
 
-    impl State for TestState {
-
-    }
+    impl State for TestState {}
 
     impl TestState {
         pub fn private_key(&self) -> &Key {
@@ -749,19 +751,22 @@ pub mod test_util {
                 .unwrap()
                 .as_secs()
                 - (86400 * 15);
-                
-            let state = load_app_state(app_name, StoreAddress::from_path(tmp_path), Some(key.to_public_key()), now).unwrap();
 
+            let state = load_app_state(
+                app_name,
+                StoreAddress::from_path(tmp_path),
+                Some(key.to_public_key()),
+                now,
+            )
+            .unwrap();
 
             Self {
                 state,
                 key,
-                time: RefCell::new(now)
+                time: RefCell::new(now),
             }
         }
     }
-
-    
 
     // impl GovernorKeyState<2> for TestKeyState {
     //     fn opaque(&self) -> &str {
@@ -899,8 +904,6 @@ pub mod test_util {
     //         unimplemented!("Do not use this function for TestState! Use `setup_test`.")
     //     }
 
-
-
     //     fn setup<P: AsRef<Path>>(_: P, _: u64) -> Result<Self, DbError>
     //     where
     //         Self: Sized,
@@ -911,8 +914,6 @@ pub mod test_util {
     //     fn remove_app_from_state(&mut self, _: &str) {
     //         unimplemented!("Do not use this function for TestState!")
     //     }
-
-
 
     //     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
     //         &mut self.key_state

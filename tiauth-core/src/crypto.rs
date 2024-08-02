@@ -61,7 +61,7 @@ pub enum KeyError {
     #[error("Failed to parse string as SubjectPublicKeyInfo-PEM-encoded Ed25519 public key.")]
     Ed25519Public,
     #[error("Failed to parse bytes as 256-bit symmetric key.")]
-    SymmetricBytes
+    SymmetricBytes,
 }
 
 pub fn load_key(private_key_pem: &str) -> Result<Key, KeyError> {
@@ -118,22 +118,20 @@ impl SymmetricKey {
 
     pub fn from_raw_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
         if bytes.len() != 32 {
-            return Err(KeyError::SymmetricBytes)
+            return Err(KeyError::SymmetricBytes);
         }
 
         Ok(SymmetricKey {
-            key_256: aead::Key::<aead::Aes256GcmSiv>::clone_from_slice(bytes)
+            key_256: aead::Key::<aead::Aes256GcmSiv>::clone_from_slice(bytes),
         })
     }
 
     pub fn derive_key(base_secret: [u8; 32], key: u64) -> Self {
         let mut rng = ChaCha20Rng::from_seed(base_secret);
         rng.set_stream(key);
-        
+
         create_symmetric_key(&mut rng)
     }
-
-    
 }
 
 // pub fn save_session_key(key: &SessionKey) -> SavedSessionKey {
@@ -160,7 +158,11 @@ impl SymmetricKey {
 //     }
 // }
 
-pub fn symmetric_encrypt(session_data: &[u8], key: &impl AsSymmetricKey, rng: &mut (impl RngCore + CryptoRng)) -> Vec<u8> {
+pub fn symmetric_encrypt(
+    session_data: &[u8],
+    key: &impl AsSymmetricKey,
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Vec<u8> {
     let cipher = aead::Aes256GcmSiv::new(&key.as_symmetric_key().key_256);
 
     let mut iv_bytes = vec![0u8; 12];
@@ -190,7 +192,6 @@ pub fn symmetric_encrypt(session_data: &[u8], key: &impl AsSymmetricKey, rng: &m
 //         Self { bytes }
 //     }
 
-    
 // }
 
 // type HmacSha256 = Hmac<Sha256>;
@@ -245,15 +246,20 @@ pub trait AsSymmetricKey {
 }
 
 /// Keys should be passed in the order that they should be tried
-pub fn symmetric_decrypt(encrypted: &[u8], keys: &[impl AsSymmetricKey]) -> Result<Vec<u8>, DecryptFailed> {
+pub fn symmetric_decrypt(
+    encrypted: &[u8],
+    keys: &[impl AsSymmetricKey],
+) -> Result<Vec<u8>, DecryptFailed> {
     let encrypted_len = encrypted.len();
 
     // nonce of 12 bytes, tag of 16 bytes
     if encrypted_len < 28 {
-        return Err(DecryptFailed)
+        return Err(DecryptFailed);
     }
 
-    let iv = encrypted.get((encrypted_len - 12)..(encrypted_len)).unwrap();
+    let iv = encrypted
+        .get((encrypted_len - 12)..(encrypted_len))
+        .unwrap();
     let nonce = aead::Nonce::from_slice(iv);
     let ciphertext = encrypted.get(0..(encrypted_len - 12)).unwrap();
 
@@ -261,7 +267,7 @@ pub fn symmetric_decrypt(encrypted: &[u8], keys: &[impl AsSymmetricKey]) -> Resu
         let cipher = aead::Aes256GcmSiv::new(&key.as_symmetric_key().key_256);
 
         if let Ok(decrypted) = cipher.decrypt(nonce, ciphertext) {
-            return Ok(decrypted)
+            return Ok(decrypted);
         }
     }
 

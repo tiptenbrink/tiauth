@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
-use crate::crypto::{create_symmetric_key, load_public_key, AsSymmetricKey, KeyError, PublicKey, SavedPublicKey, SymmetricKey};
+use crate::crypto::{
+    create_symmetric_key, load_public_key, AsSymmetricKey, KeyError, PublicKey, SavedPublicKey,
+    SymmetricKey,
+};
 use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession, PasswordFileHash};
 use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
@@ -37,8 +40,6 @@ pub struct UserPassword {
     pub password_file: String,
 }
 
-
-
 impl UserPassword {
     pub fn deserialize(bytes: &[u8]) -> UserPassword {
         let mut cursor = Cursor::new(bytes);
@@ -46,11 +47,11 @@ impl UserPassword {
         let user_id_len = rmp::decode::read_str_len(&mut cursor).unwrap();
         let user_id_bytes = cursor_slice(bytes, &mut cursor, user_id_len);
         let user_id = std::str::from_utf8(user_id_bytes).unwrap().to_owned();
-    
+
         let pw_len = rmp::decode::read_str_len(&mut cursor).unwrap();
         let pw_bytes = cursor_slice(bytes, &mut cursor, pw_len);
         let password_file = std::str::from_utf8(pw_bytes).unwrap().to_owned();
-    
+
         UserPassword {
             user_id,
             password_file,
@@ -177,6 +178,10 @@ impl<T: ByteSerial> From<Vec<u8>> for ByteOwned<T> {
     }
 }
 
+pub fn empty_packed() -> &'static BytePacked<()> {
+    BytePacked::<()>::new(&[])
+}
+
 impl<T> BytePacked<T>
 where
     T: ByteSerial,
@@ -188,10 +193,6 @@ where
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    pub fn empty() -> &'static Self {
-        Self::new(&[])
     }
 
     pub fn deserialize(&self) -> T::Deserialized<'_> {
@@ -323,6 +324,11 @@ impl ByteSerial for String {
 pub enum SessionClaims {
     All,
     Some(Vec<String>),
+}
+
+pub enum SessionClaimsView<'a> {
+    All,
+    Some(Vec<&'a str>),
 }
 
 impl SessionClaims {
@@ -504,6 +510,11 @@ pub enum ModifyClaimError {
 #[error("Claim keys are not in ascending order.")]
 pub struct ClaimsUnsortedError;
 
+enum FindResult<'a, 'b> {
+    Found((&'a str, &'a [u8])),
+    NotFound(&'b str),
+}
+
 impl<'a> ClaimsView<'a> {
     pub fn add_claims(
         &self,
@@ -576,56 +587,73 @@ impl<'a> ClaimsView<'a> {
     /// Smarter still, you pick the middle element from the subset, allowing you to split the claims in two. Now the left part of the subset can only be in the left part of the claims,
     /// and the right part of the subset only in the right part of the claims. This even allows parallelizing, although in practice the performance improvement is not huge, especially
     /// when there are not a lot of free threads lying around, like for a webserver.
-    fn subset_vec<S: AsRef<str>>(&self, subset: &[S]) -> Vec<(String, Vec<u8>)> {
+    fn subset_vec<'b, S: AsRef<str>>(
+        &self,
+        subset: &'b [S],
+    ) -> (Vec<(String, Vec<u8>)>, Vec<&'b str>) {
         let mut vec_out = Vec::with_capacity(subset.len());
+        let mut not_found = Vec::new();
         let linear_len = self.keys.len() as f32;
         // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
         // We prefer the binary split in most cases
         let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
 
+        let out_fn = |result| match result {
+            FindResult::Found((k, v)) => {
+                vec_out.push((k.to_string(), v.to_vec()));
+            }
+            FindResult::NotFound(s) => {
+                not_found.push(s);
+            }
+        };
+
         if ops_binary > linear_len {
-            self.subset_linear(subset, &mut vec_out, |out, (s, v)| {
-                out.push((s.to_string(), v.to_vec()));
-            });
+            self.subset_linear(subset, out_fn);
         } else {
-            self.subset_binary_split(subset, &mut vec_out, |out, (s, v)| {
-                out.push((s.to_string(), v.to_vec()));
-            });
+            self.subset_binary_split(subset, out_fn);
         }
 
-        vec_out
+        (vec_out, not_found)
     }
 
     /// In the future a more efficient way of creating varzerovec should be investigated
-    pub fn subset_serialize<S: AsRef<str>>(&self, subset: &[S]) -> ByteOwned<Claims> {
+    pub fn subset_serialize<'b, S: AsRef<str>>(
+        &self,
+        subset: &'b [S],
+    ) -> (ByteOwned<Claims>, Vec<&'b str>) {
         let keys: Vec<String> = Vec::with_capacity(self.keys.len());
         let values: Vec<Vec<u8>> = Vec::with_capacity(self.keys.len());
 
         let mut out = Claims { keys, values };
+        let mut not_found = Vec::new();
 
         let linear_len = self.keys.len() as f32;
         // In practice we have less operations than this, but their complexities depend on the data and are harder to compute
         // We prefer the binary split in most cases
         let ops_binary = linear_len.log2() * (subset.len() as f32) * 0.5;
 
+        let out_fn = |result| match result {
+            FindResult::Found((k, v)) => {
+                out.keys.push(k.to_string());
+                out.values.push(v.to_vec());
+            }
+            FindResult::NotFound(s) => {
+                not_found.push(s);
+            }
+        };
+
         if ops_binary > linear_len {
-            self.subset_linear(subset, &mut out, |claims, (s, v)| {
-                claims.keys.push(s.to_string());
-                claims.values.push(v.to_vec());
-            });
+            self.subset_linear(subset, out_fn);
         } else {
-            self.subset_binary_split(subset, &mut out, |claims, (s, v)| {
-                claims.keys.push(s.to_string());
-                claims.values.push(v.to_vec());
-            });
+            self.subset_binary_split(subset, out_fn);
         }
 
-        out.serialize()
+        (out.serialize(), not_found)
     }
 
-    fn subset_linear<F, O, S>(&self, subset: &[S], out: &mut O, action: F)
+    fn subset_linear<'b, F, S>(&'a self, subset: &'b [S], mut action: F)
     where
-        F: Fn(&mut O, (&str, &[u8])),
+        F: FnMut(FindResult<'a, 'b>),
         S: AsRef<str>,
     {
         let subset_len = subset.len();
@@ -635,20 +663,22 @@ impl<'a> ClaimsView<'a> {
 
         for (k_i, k) in self.keys.iter().enumerate() {
             if current.as_ref() == k {
-                action(out, (k, &self.values[k_i]));
+                action(FindResult::Found((k, &self.values[k_i])));
                 i += 1;
                 if i == subset.len() {
                     break;
                 } else {
                     current = &subset[i];
                 }
+            } else if k > current.as_ref() {
+                action(FindResult::NotFound(current.as_ref()));
             }
         }
     }
 
-    fn subset_binary_split<F, O, S>(&self, subset: &[S], out: &mut O, action: F)
+    fn subset_binary_split<'b, F, S>(&'a self, subset: &'b [S], mut action: F)
     where
-        F: Fn(&mut O, (&str, &[u8])),
+        F: FnMut(FindResult<'a, 'b>),
         S: AsRef<str>,
     {
         let start = 0;
@@ -669,7 +699,7 @@ impl<'a> ClaimsView<'a> {
                 .unwrap()
             {
                 let k_i = rel_k_i + range.start;
-                action(out, (middle_element.as_ref(), &self.values[k_i]));
+                action(FindResult::Found((&self.keys[k_i], &self.values[k_i])));
 
                 let left = range.start..k_i;
                 let right = k_i + 1..range.end;
@@ -680,7 +710,7 @@ impl<'a> ClaimsView<'a> {
                     &subset_slice[middle_element_i + 1..subset_slice.len()],
                 ));
             } else {
-                panic!("All elements in subset must be present!");
+                action(FindResult::NotFound(middle_element.as_ref()));
             }
         }
     }
@@ -718,25 +748,33 @@ pub struct SessionStatus {
     // value of zero is meaningless, 1 = valid, rest is revoked
     status: u8,
     // value of zero is meaningless
-    pub expires: u64
+    pub expires: u64,
 }
 
 impl SessionStatus {
     pub fn untracked() -> Self {
-        Self { tracked: false, status: 0, expires: 0 }
+        Self {
+            tracked: false,
+            status: 0,
+            expires: 0,
+        }
     }
 
     pub fn from_raw_status(status: u8, expires: u64) -> Self {
-        Self { tracked: true, status, expires }
+        Self {
+            tracked: true,
+            status,
+            expires,
+        }
     }
 
     pub fn valid(&self, time: u64) -> Result<(), InvalidSession> {
         if !self.tracked {
-            return Ok(())
+            return Ok(());
         }
 
         if time < self.expires + LEEWAY && self.status == 1 {
-            return Ok(())
+            return Ok(());
         }
 
         Err(InvalidSession)
@@ -843,7 +881,11 @@ mod test {
 
         assert_eq!(user_claims, user_claims_deser);
 
-        let claims_deser = user_claims_deser.claims.deserialize().to_claims_sorted().unwrap();
+        let claims_deser = user_claims_deser
+            .claims
+            .deserialize()
+            .to_claims_sorted()
+            .unwrap();
 
         assert_eq!(claims, claims_deser);
     }
@@ -929,7 +971,7 @@ mod test {
         let claims = claims.to_view();
 
         let t = Instant::now();
-        let mut s1 = claims.subset_vec(&subset);
+        let (mut s1, _) = claims.subset_vec(&subset);
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32() * 1000f32);
         assert_eq!(s1.len(), subset.len());
@@ -948,8 +990,11 @@ mod test {
 
         let mut s1: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
-        claims.subset_linear(&subset, &mut s1, |out, (s, v)| {
-            out.push((s.to_string(), v.to_vec()));
+        claims.subset_linear(&subset, |f| match f {
+            FindResult::Found((k, v)) => {
+                s1.push((k.to_string(), v.to_vec()));
+            }
+            FindResult::NotFound(_) => panic!("All should be found!"),
         });
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32() * 1000f32);
@@ -958,8 +1003,11 @@ mod test {
 
         let mut s5: Vec<(String, Vec<u8>)> = Vec::with_capacity(subset.len());
         let t = Instant::now();
-        claims.subset_binary_split(&subset, &mut s5, |out, (s, v)| {
-            out.push((s.to_string(), v.to_vec()));
+        claims.subset_binary_split(&subset, |f| match f {
+            FindResult::Found((k, v)) => {
+                s5.push((k.to_string(), v.to_vec()));
+            }
+            FindResult::NotFound(_) => panic!("All should be found!"),
         });
         let t_e = Instant::now();
         println!("took {} ms.", t_e.duration_since(t).as_secs_f32() * 1000f32);

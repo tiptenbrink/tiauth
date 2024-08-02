@@ -1,11 +1,22 @@
-use std::{cmp::Ordering, collections::VecDeque, io::Cursor, ops::DerefMut, path::Display, sync::{atomic::{self, AtomicU64}, Arc, Mutex}, time::Instant};
+use std::{
+    cmp::Ordering,
+    collections::VecDeque,
+    io::Cursor,
+    ops::DerefMut,
+    path::Display,
+    sync::{
+        atomic::{self, AtomicU64},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
 
 use crate::util::rmp_read_bin;
 
 #[derive(Clone)]
-/// A simple counter with concurrent access. 
+/// A simple counter with concurrent access.
 pub struct Counter {
-    counter: Arc<AtomicU64>
+    counter: Arc<AtomicU64>,
 }
 
 impl Counter {
@@ -13,7 +24,7 @@ impl Counter {
     pub fn new() -> Self {
         Self {
             // Since we use zero as "empty" in CompactSet, the first value must be 1
-            counter: Arc::new(AtomicU64::new(1))
+            counter: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -23,7 +34,7 @@ impl Counter {
 
     pub fn to_saved_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        
+
         let counter_bytes = self.counter.load(atomic::Ordering::Relaxed).to_le_bytes();
 
         buf.extend_from_slice(&counter_bytes);
@@ -36,13 +47,13 @@ impl Counter {
         let value = u64::from_le_bytes(bytes);
 
         Self {
-            counter: Arc::new(AtomicU64::new(value))
+            counter: Arc::new(AtomicU64::new(value)),
         }
     }
 }
 
 #[derive(Clone)]
-/// A data structure that tracks whether it has already seen a u64 value with as little space as possible. 
+/// A data structure that tracks whether it has already seen a u64 value with as little space as possible.
 /// Probabilistic data structures (like a Bloom filter) need 10+ bits per element if you want a decent error rate, but
 /// our values are in a small(ish) and predictable range. It's designed to use less space than a bit arrray in the case
 /// that values are mostly checked in order. If certain values have very large deviations (i.e. they arrive much earlier
@@ -50,7 +61,7 @@ impl Counter {
 /// Until real-world data can be gathered, it will be difficult to evaluate. Currently, the structure is hidden behind
 /// a Mutex to allow access from multiple threads.  
 pub struct CompactSet {
-    ranges: Arc<Mutex<VecDeque<Range<64>>>>
+    ranges: Arc<Mutex<VecDeque<Range<64>>>>,
 }
 
 impl CompactSet {
@@ -59,13 +70,13 @@ impl CompactSet {
         ranges.push_back(Range::new(1));
 
         Self {
-            ranges: Arc::new(Mutex::new(ranges))
+            ranges: Arc::new(Mutex::new(ranges)),
         }
     }
 
     pub fn num_exists(&self, num: u64, expires: u64, time: Option<u64>) -> bool {
         let mut ranges = self.ranges.lock().unwrap();
-        
+
         let exists = add_num(ranges.deref_mut(), num, expires);
 
         // Some basic experimentation showed that by doing it every four provides the best space/time tradeoff
@@ -101,7 +112,7 @@ impl CompactSet {
         }
 
         Self {
-            ranges: Arc::new(Mutex::new(ranges))
+            ranges: Arc::new(Mutex::new(ranges)),
         }
     }
 }
@@ -109,7 +120,7 @@ impl CompactSet {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Expiry {
     At(u64),
-    Unknown
+    Unknown,
 }
 
 #[derive(Clone)]
@@ -117,7 +128,7 @@ struct Range<const N: usize> {
     members: Option<[u8; N]>,
     min: u64,
     max: u64,
-    expires: Expiry
+    expires: Expiry,
 }
 
 impl<const N: usize> Range<N> {
@@ -125,18 +136,18 @@ impl<const N: usize> Range<N> {
         Self {
             members: Some([0u8; N]),
             min,
-            max: min+(N as u64)-1,
-            expires: Expiry::Unknown
+            max: min + (N as u64) - 1,
+            expires: Expiry::Unknown,
         }
     }
 
     fn full(min: u64, max: u64, expires: Expiry) -> Self {
-        assert!(max >= min+(N as u64)-1);
+        assert!(max >= min + (N as u64) - 1);
         Self {
             members: None,
             min,
             max,
-            expires
+            expires,
         }
     }
 
@@ -149,7 +160,7 @@ impl<const N: usize> Range<N> {
             for i in 0..N {
                 let val = members[i];
                 if val == num_small {
-                    return None
+                    return None;
                 } else if val == 0 {
                     let members = if i == N - 1 {
                         // In this case we are the last index, so it's full now
@@ -158,13 +169,13 @@ impl<const N: usize> Range<N> {
                         members[i] = num_small;
                         Some(members)
                     };
-                    
+
                     return Some(Self {
                         members,
                         min: self.min,
                         max: self.max,
-                        expires: self.expires
-                    })
+                        expires: self.expires,
+                    });
                 }
             }
 
@@ -179,10 +190,10 @@ impl<const N: usize> Range<N> {
             Some(members) => {
                 rmp::encode::write_bin(&mut buf, &[244]).unwrap();
                 rmp::encode::write_bin(&mut buf, &members).unwrap();
-            },
+            }
             None => {
                 rmp::encode::write_bin(&mut buf, &[133]).unwrap();
-            },
+            }
         }
         rmp::encode::write_u64(&mut buf, self.min).unwrap();
         rmp::encode::write_u64(&mut buf, self.max).unwrap();
@@ -190,10 +201,10 @@ impl<const N: usize> Range<N> {
             Expiry::At(at) => {
                 rmp::encode::write_bin(&mut buf, &[66]).unwrap();
                 rmp::encode::write_u64(&mut buf, at).unwrap();
-            },
+            }
             Expiry::Unknown => {
                 rmp::encode::write_bin(&mut buf, &[55]).unwrap();
-            },
+            }
         }
 
         buf
@@ -204,7 +215,12 @@ impl<const N: usize> Range<N> {
 
         let members_byte = rmp_read_bin(bytes, &mut cursor).unwrap();
         let members: Option<[u8; N]> = if members_byte == &[244] {
-            Some(rmp_read_bin(bytes, &mut cursor).unwrap().try_into().unwrap())
+            Some(
+                rmp_read_bin(bytes, &mut cursor)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            )
         } else if members_byte == &[133] {
             None
         } else {
@@ -212,7 +228,7 @@ impl<const N: usize> Range<N> {
         };
         let min = rmp::decode::read_u64(&mut cursor).unwrap();
         let max = rmp::decode::read_u64(&mut cursor).unwrap();
-        let expires_byte =  rmp_read_bin(bytes, &mut cursor).unwrap();
+        let expires_byte = rmp_read_bin(bytes, &mut cursor).unwrap();
         let expires: Expiry = if expires_byte == &[66] {
             Expiry::At(rmp::decode::read_u64(&mut cursor).unwrap())
         } else if expires_byte == &[55] {
@@ -225,16 +241,27 @@ impl<const N: usize> Range<N> {
             members,
             min,
             max,
-            expires
+            expires,
         }
     }
 }
 
 impl<const N: usize> std::fmt::Debug for Range<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{{}-{};{:?};exp={:?}}}", self.min, self.max, self.members.map(|a| a.map(|v| {
-            if v != 0 { (v as u64) + self.min - 1 } else { 0 }
-        })), self.expires)
+        write!(
+            f,
+            "{{{}-{};{:?};exp={:?}}}",
+            self.min,
+            self.max,
+            self.members.map(|a| a.map(|v| {
+                if v != 0 {
+                    (v as u64) + self.min - 1
+                } else {
+                    0
+                }
+            })),
+            self.expires
+        )
     }
 }
 
@@ -253,21 +280,17 @@ impl<const N: usize> std::fmt::Debug for Range<N> {
 // }
 
 fn add_num_ranges<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64) -> (usize, bool) {
-    let n_i = match ranges.binary_search_by(|r| {
-        match r.min.cmp(&num) {
-            Ordering::Equal => Ordering::Less,
-            o => o
-        }
+    let n_i = match ranges.binary_search_by(|r| match r.min.cmp(&num) {
+        Ordering::Equal => Ordering::Less,
+        o => o,
     }) {
         Ok(_) => panic!("Should be no equality!"),
-        Err(u) => u
+        Err(u) => u,
     };
 
-    let target_i = n_i-1;
+    let target_i = n_i - 1;
 
-    let initial_max = {
-        ranges[target_i].max
-    };
+    let initial_max = { ranges[target_i].max };
 
     if n_i == ranges.len() && num > initial_max {
         let mut max = initial_max;
@@ -276,80 +299,84 @@ fn add_num_ranges<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64) -> 
             max = new_range.max;
             ranges.push_back(new_range);
         }
-        
-        return (ranges.len()-1, false);
+
+        return (ranges.len() - 1, false);
     }
-    
+
     let target_range = (&ranges[target_i]).add_num(num);
 
     if target_range.is_none() {
-        return (target_i, true)
+        return (target_i, true);
     }
 
     let target_range = target_range.unwrap();
 
     if target_range.members.is_some() {
         ranges[target_i] = target_range;
-        return (target_i, false)
+        return (target_i, false);
     } else {
         ranges[target_i] = target_range.clone();
     }
-    
-    let prev_min_exp= (target_i != 0).then(|| {
-        let prev = &ranges[target_i - 1];
-        if prev.members.is_none() {
-            Some((prev.min, prev.expires))
-        } else {
-            None
-        }
-    }).flatten();
 
-    let next_max = (n_i != ranges.len()).then(|| {
-        let next = &ranges[n_i];
-        if next.members.is_none() {
-            Some(next.max)
-        } else {
-            None
-        }
-    }).flatten();
+    let prev_min_exp = (target_i != 0)
+        .then(|| {
+            let prev = &ranges[target_i - 1];
+            if prev.members.is_none() {
+                Some((prev.min, prev.expires))
+            } else {
+                None
+            }
+        })
+        .flatten();
+
+    let next_max = (n_i != ranges.len())
+        .then(|| {
+            let next = &ranges[n_i];
+            if next.members.is_none() {
+                Some(next.max)
+            } else {
+                None
+            }
+        })
+        .flatten();
 
     let target_i = if prev_min_exp.is_some() && next_max.is_some() {
         let (prev_min, prev_expires) = prev_min_exp.unwrap();
-        ranges[target_i-1] = Range::full(prev_min, next_max.unwrap(), prev_expires);
+        ranges[target_i - 1] = Range::full(prev_min, next_max.unwrap(), prev_expires);
 
-        if ranges.len() > target_i+2 {
-            for i in target_i..(ranges.len()-2) {
-                ranges[i] = ranges[i+2].clone()
+        if ranges.len() > target_i + 2 {
+            for i in target_i..(ranges.len() - 2) {
+                ranges[i] = ranges[i + 2].clone()
             }
         }
-        ranges.truncate(ranges.len()-2);
-        target_i-1
+        ranges.truncate(ranges.len() - 2);
+        target_i - 1
     } else if let Some((prev_min, prev_expires)) = prev_min_exp {
-        ranges[target_i-1] = Range::full(prev_min, target_range.max, prev_expires);
+        ranges[target_i - 1] = Range::full(prev_min, target_range.max, prev_expires);
 
         if ranges.len() > target_i {
-            for i in target_i..(ranges.len()-1) {
-                ranges[i] = ranges[i+1].clone()
+            for i in target_i..(ranges.len() - 1) {
+                ranges[i] = ranges[i + 1].clone()
             }
         }
-        ranges.truncate(ranges.len()-1);
-        target_i-1
+        ranges.truncate(ranges.len() - 1);
+        target_i - 1
     } else if let Some(next_max) = next_max {
         ranges[target_i] = Range::full(target_range.min, next_max, target_range.expires);
 
-        if ranges.len() > target_i+1 {
-            for i in (target_i+1)..(ranges.len()-1) {
-                ranges[i] = ranges[i+1].clone()
+        if ranges.len() > target_i + 1 {
+            for i in (target_i + 1)..(ranges.len() - 1) {
+                ranges[i] = ranges[i + 1].clone()
             }
         }
-        ranges.truncate(ranges.len()-1);
+        ranges.truncate(ranges.len() - 1);
         target_i
     } else {
         target_i
     };
-    
+
     (target_i, false)
-} 
+}
 
 // The majority of the time is spent in Range::add_num and binary_search (based on flamegraph)
 /// The basic idea is that the data structure consists of a dynamic number of fixed-size ranges. It's inspired
@@ -388,17 +415,15 @@ fn add_num<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64, expires: u
 
 // Linear search is not faster, but doesn't seem much slower either, but for better worst-case we'll use binary search
 fn expired_search<const N: usize>(ranges: &VecDeque<Range<N>>, time: u64) -> usize {
-    match ranges.binary_search_by(|r| {
-        match r.expires {
-            Expiry::At(at) => match at.cmp(&time) {
-                Ordering::Equal => Ordering::Less,
-                o => o
-            },
-            Expiry::Unknown => Ordering::Greater,
-        }
+    match ranges.binary_search_by(|r| match r.expires {
+        Expiry::At(at) => match at.cmp(&time) {
+            Ordering::Equal => Ordering::Less,
+            o => o,
+        },
+        Expiry::Unknown => Ordering::Greater,
     }) {
         Ok(_) => panic!("Should be no equality!"),
-        Err(u) => u
+        Err(u) => u,
     }
 }
 
@@ -409,14 +434,14 @@ fn check_expired<const N: usize>(ranges: &mut VecDeque<Range<N>>, time: u64) {
     let first_min = ranges[0].min;
 
     if exp_i == 0 {
-        return
+        return;
     }
 
-    let last_max = ranges[exp_i-1].max;
+    let last_max = ranges[exp_i - 1].max;
     let new_range = Range::full(first_min, last_max, Expiry::At(0));
 
     ranges.rotate_left(exp_i);
-    ranges.truncate(ranges.len()-exp_i);
+    ranges.truncate(ranges.len() - exp_i);
     ranges.push_front(new_range);
     ranges.shrink_to_fit();
 }
@@ -467,7 +492,10 @@ fn check_expired<const N: usize>(ranges: &mut VecDeque<Range<N>>, time: u64) {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::{BTreeMap, BTreeSet, HashMap, HashSet}, time::Instant};
+    use std::{
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+        time::Instant,
+    };
 
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use rayon::collections::vec_deque;
@@ -480,9 +508,9 @@ mod test {
         let mut ranges = VecDeque::new();
 
         for i in 1..10 {
-            let mut range = Range::<RANGE_SIZE>::new(i*(RANGE_SIZE as u64));
+            let mut range = Range::<RANGE_SIZE>::new(i * (RANGE_SIZE as u64));
             if i < 7 {
-                range.expires = Expiry::At((i as u64)*100);
+                range.expires = Expiry::At((i as u64) * 100);
             }
             ranges.push_back(range)
         }
@@ -533,7 +561,7 @@ mod test {
         assert_eq!(ranges[0].max, 13);
 
         ranges.push_back(Range::new(14));
-        ranges.push_back(Range::new(14+(RANGE_SIZE as u64)));
+        ranges.push_back(Range::new(14 + (RANGE_SIZE as u64)));
 
         add_num(&mut ranges, 16, 800);
 
@@ -543,20 +571,28 @@ mod test {
         assert!(ranges[0].members.is_none());
         assert_eq!(ranges[0].min, 2);
         assert_eq!(ranges[0].max, 15);
-        
+
         println!("{:?}", ranges);
     }
 
     fn lightly_shuffle<T>(vec: &mut Vec<T>, max_distance: usize) {
         let mut rng = rand::thread_rng();
         let len = vec.len();
-    
+
         for i in 0..len {
-            let start = if i >= max_distance { i - max_distance } else { 0 };
-            let end = if i + max_distance < len { i + max_distance } else { len - 1 };
-    
+            let start = if i >= max_distance {
+                i - max_distance
+            } else {
+                0
+            };
+            let end = if i + max_distance < len {
+                i + max_distance
+            } else {
+                len - 1
+            };
+
             let j = rng.gen_range(start..=end);
-    
+
             vec.swap(i, j);
         }
     }
@@ -576,7 +612,7 @@ mod test {
         // `cargo test --package tiauth-core --lib --release --all-features -- compactset::test::routine --exact --show-output`
         let size = 5000;
         let amnt = 10;
-        let ops = amnt*size;
+        let ops = amnt * size;
         let mut add_time = 0f64;
         let mut check_time = 0f64;
 
@@ -588,8 +624,8 @@ mod test {
                 expiry += rng.gen_range(0..1000);
                 values.push((i, expiry));
             }
-            
-            lightly_shuffle(&mut values, size/100);
+
+            lightly_shuffle(&mut values, size / 100);
 
             let mut ranges: VecDeque<Range<ROUTINE_SIZE>> = VecDeque::new();
             ranges.push_back(Range::new(1));
@@ -597,11 +633,11 @@ mod test {
             let mut max_space = 0;
 
             let mut time = 0;
-            
+
             for (i, expires) in values {
                 //println!("sp: {}", ranges.len());
                 let around: i32 = rng.gen_range(-900..100);
-                time = time.max(0.max((expires as i32)+around) as u64);
+                time = time.max(0.max((expires as i32) + around) as u64);
                 let now = Instant::now();
                 add_num(&mut ranges, i as u64, expires);
                 add_time += now.elapsed().as_secs_f64();
@@ -617,12 +653,20 @@ mod test {
             maxes.push(max_space);
         }
 
-        let max_space: usize = maxes.into_iter().sum::<usize>()/amnt;
+        let max_space: usize = maxes.into_iter().sum::<usize>() / amnt;
 
-        println!("add: {} ops/s.\ncheck: {} ops/s.", (ops as f64)/add_time, (ops as f64)/check_time);
+        println!(
+            "add: {} ops/s.\ncheck: {} ops/s.",
+            (ops as f64) / add_time,
+            (ops as f64) / check_time
+        );
         let mem_size = std::mem::size_of::<Range<ROUTINE_SIZE>>();
-        println!("avg max space: {}; mem_size: {}", (max_space)*mem_size, mem_size);
-        println!("total {} ops/s.", (ops as f64)/(add_time+check_time));
+        println!(
+            "avg max space: {}; mem_size: {}",
+            (max_space) * mem_size,
+            mem_size
+        );
+        println!("total {} ops/s.", (ops as f64) / (add_time + check_time));
     }
 
     #[test]
@@ -634,7 +678,7 @@ mod test {
         // `cargo test --package tiauth-core --lib --release --all-features -- compactset::test::routine --exact --show-output`
         let size = 10000;
         let amnt = 10;
-        let ops = amnt*size;
+        let ops = amnt * size;
         let mut add_time = 0f64;
         let mut check_time = 0f64;
 
@@ -645,8 +689,8 @@ mod test {
                 expiry += rng.gen_range(0..1000);
                 values.push((i, expiry));
             }
-            
-            lightly_shuffle(&mut values, size/100);
+
+            lightly_shuffle(&mut values, size / 100);
 
             let mut ranges: VecDeque<Range<ROUTINE_SIZE>> = VecDeque::new();
             ranges.push_back(Range::new(1));
@@ -656,18 +700,17 @@ mod test {
             compact_set.ranges = Arc::new(Mutex::new(ranges));
 
             let mut time = 0;
-            
+
             for (i, expires) in values {
                 //println!("sp: {}", ranges.len());
                 let around: i32 = rng.gen_range(-900..100);
-                time = time.max(0.max((expires as i32)+around) as u64);
+                time = time.max(0.max((expires as i32) + around) as u64);
                 let now = Instant::now();
                 compact_set.num_exists((i as u64), expires, Some(time));
                 add_time += now.elapsed().as_secs_f64();
             }
         }
 
-
-        println!("total: {} ops/s.", (ops as f64)/add_time);
+        println!("total: {} ops/s.", (ops as f64) / add_time);
     }
 }

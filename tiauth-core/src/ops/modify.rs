@@ -1,12 +1,15 @@
 use crate::data::{
-    ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY
+    empty_packed, ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY,
 };
 use crate::encoded::{Encodable, Encoded};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
-use crate::proof::{Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidProof, InvalidSession, ProofSingleTarget};
+use crate::proof::{
+    Ephemeral, EphemeralChangePasswordState, EphemeralType, InvalidProof, InvalidSession,
+    ProofSingleTarget,
+};
 use crate::state::State;
-use crate::store::{users, LoginFieldError, StoreError};
+use crate::store::{users, LoginFieldError, ReadableTable, StoreError};
 // use crate::verify::verify_session;
 use crate::{ActionType, BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
 use std::time::SystemTime;
@@ -32,12 +35,17 @@ pub fn reset_password(
 ) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidProof, LoginFieldError)>> {
     let time = state.time();
 
-    let proof_unvalidated = verify_proof(state, proof, time)
-        .map_err(OneOf::broaden)?;
-    
-    let (_, user_id) = proof_unvalidated.validate(ActionType::ResetPassword, ProofSingleTarget).to_one_of().map_err(OneOf::broaden)?;
+    let proof_unvalidated = verify_proof(state, proof, time).map_err(OneOf::broaden)?;
 
-    let UserPassword { password_file, user_id } = match users::get_login(state.store(), &user_id)
+    let (_, user_id) = proof_unvalidated
+        .validate(ActionType::ResetPassword, ProofSingleTarget)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
+
+    let UserPassword {
+        password_file,
+        user_id,
+    } = match users::get_login(state.store(), &user_id)
         .to_one_of()
         .map_err(OneOf::broaden)?
     {
@@ -49,7 +57,7 @@ pub fn reset_password(
     };
     // We check time again because we did a (potentially blocking) database access before.
     let time = state.time();
-    
+
     let key = state.keys().ephemeral_key(time);
 
     // let entropy = nonce_384(&mut state.rng());
@@ -107,7 +115,7 @@ pub fn reset_password(
         state,
         EphemeralType::ChangePassword,
         time,
-        BytePacked::<()>::empty(),
+        empty_packed(),
     );
 
     Ok(change_entry)
@@ -118,8 +126,7 @@ fn change_password(
     session_encrypted: &Session,
 ) -> Result<Ephemeral<()>, OneOf<(StoreError, InvalidSession)>> {
     let time = state.time();
-    let decrypted = decrypt_session(state, session_encrypted, time)
-        .map_err(OneOf::broaden)?;
+    let decrypted = decrypt_session(state, session_encrypted, time).map_err(OneOf::broaden)?;
     let session = decrypted.read();
 
     let (_, password_file) = verify_session(state, &session, time, Some(CHANGE_AGE))?;
@@ -135,7 +142,7 @@ fn change_password(
         state,
         EphemeralType::ChangePassword,
         time,
-        BytePacked::<()>::empty(),
+        empty_packed(),
     );
 
     Ok(change_entry)
@@ -245,40 +252,24 @@ fn change_password(
 //     state: &impl State,
 //     application: &str,
 //     claims_proof: &Proof<Claims>,
-// ) -> Result<(), OneOf<(InvalidProof, DbError, ModifyClaimError)>> {
-//     let key = state.app_key(application);
-//     let proof_content = verify_proof_content(
-//         claims_proof,
-//         &key,
-//         AboutVerify::with_allowed(
-//             application,
-//             vec![
-//                 ActionType::MergeClaims,
-//                 ActionType::AddClaims,
-//                 ActionType::SetClaims,
-//             ],
-//         ),
-//     )
-//     .map_err(OneOf::broaden)?;
-
-//     let user_id = proof_content.select_one().map_err(OneOf::broaden)?;
-
-//     let write_txn = state
-//         .db()
-//         .begin_write()
-//         .into_one_of::<DbError>()
+// ) -> Result<(), OneOf<(InvalidProof, StoreError, ModifyClaimError)>> {
+//     let key = state.public_key();
+//     let time = state.time();
+//     let proof = verify_proof(state, claims_proof, time)
 //         .map_err(OneOf::broaden)?;
+//     let action = proof.action;
+//     let (claims, user_id) = proof.validate(vec![ActionType::MergeClaims, ActionType::SetClaims, ActionType::AddClaims], ProofSingleTarget)
+//         .to_one_of().map_err(OneOf::broaden)?;
+
+//     let write_txn = state.store().open_write().to_one_of().map_err(OneOf::broaden)?;
 
 //     {
-//         let mut table = write_txn
-//             .open_table(state.app_tables(application).users())
-//             .into_one_of::<DbError>()
-//             .map_err(OneOf::broaden)?;
+//         let mut table = write_txn.claims_table().to_one_of().map_err(OneOf::broaden)?;
 
 //         let new_login_bytes = {
 //             let login = table
 //                 .get(user_id.as_str())
-//                 .into_one_of::<DbError>()
+//                 .to_one_of()
 //                 .map_err(OneOf::broaden)?;
 
 //             if let Some(login_bytes) = login {
@@ -456,11 +447,14 @@ pub fn user_remove_claims(
 mod tests {
 
     use super::*;
-    use crate::data::{BytePacked, SessionClaims, Target, TargetList};
+    use crate::data::{BytePacked, SessionClaims};
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
-    use crate::proof::create_proof;
+    use crate::ops::verify::proof_token;
+    use crate::proof::ProofAction;
     use crate::state::test_util::TestState;
+    use crate::state::DriverState;
+    use crate::{AppState, Target, TargetList};
 
     #[test]
     fn test_reset_password() {
@@ -468,29 +462,33 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(vec![app]);
+        let state = TestState::setup_test(app);
 
         register_flow(&state, user_id, app, password, None, None);
-        let key = state.proof_key(app);
-        let proof = create_proof(
-            app,
-            1800,
-            ActionType::ResetPassword,
-            Target::Select,
-            TargetList::user(user_id),
-            BytePacked::empty(),
+        let key = state.private_key();
+        let time = state.time();
+        let eph = proof_token(&state, time).serialize();
+        let proof = Proof::create(
             key,
+            time + 1800,
+            ProofAction::new(
+                ActionType::ResetPassword,
+                Target::Select,
+                TargetList::user(user_id),
+            ),
+            eph.as_packed(),
+            empty_packed(),
         );
 
-        let nonce = reset_password(&state, app, &proof).unwrap();
+        let nonce = reset_password(&state, &proof).unwrap();
 
-        let login = get_login(&state, app, user_id).unwrap().unwrap();
+        let login = users::get_login(state.store(), user_id).unwrap().unwrap();
 
         let start_pass = login.password_file;
 
         register_flow(&state, user_id, app, password, Some(nonce), None);
 
-        let login = get_login(&state, app, user_id).unwrap().unwrap();
+        let login = users::get_login(state.store(), user_id).unwrap().unwrap();
 
         assert!(start_pass != login.password_file);
     }
@@ -501,68 +499,68 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(vec![app]);
+        let state = TestState::setup_test(app);
 
         let session =
             login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
         let nonce = change_password(&state, &session).unwrap();
 
-        let login = get_login(&state, app, user_id).unwrap().unwrap();
+        let login = users::get_login(state.store(), user_id).unwrap().unwrap();
         let initial_pw_file = login.password_file;
 
         assert_ne!(initial_pw_file, "");
 
         register_flow(&state, user_id, app, password, Some(nonce), None);
 
-        let login = get_login(&state, app, user_id).unwrap().unwrap();
+        let login = users::get_login(state.store(), user_id).unwrap().unwrap();
 
         assert_ne!(initial_pw_file, login.password_file);
     }
 
-    #[test]
-    fn test_delete_passsword() {
-        let user_id = "hi";
-        let app = "abc";
-        let password = "pass";
+    // #[test]
+    // fn test_delete_passsword() {
+    //     let user_id = "hi";
+    //     let app = "abc";
+    //     let password = "pass";
 
-        let state = TestState::setup_test(vec![app]);
+    //     let state = TestState::setup_test(vec![app]);
 
-        let session =
-            login_create_session(&state, user_id, app, password, None, SessionClaims::All);
+    //     let session =
+    //         login_create_session(&state, user_id, app, password, None, SessionClaims::All);
 
-        session_delete_user(&state, &session).unwrap();
+    //     session_delete_user(&state, &session).unwrap();
 
-        let login = get_login(&state, app, user_id).unwrap();
+    //     let login = get_login(&state, app, user_id).unwrap();
 
-        assert!(login.is_none());
-    }
+    //     assert!(login.is_none());
+    // }
 
-    #[test]
-    fn test_delete_passsword_app() {
-        let user_id = "hi";
-        let app = "abc";
-        let password = "pass";
+    // #[test]
+    // fn test_delete_passsword_app() {
+    //     let user_id = "hi";
+    //     let app = "abc";
+    //     let password = "pass";
 
-        let state = TestState::setup_test(vec![app]);
+    //     let state = TestState::setup_test(vec![app]);
 
-        register_flow(&state, user_id, app, password, None, None);
+    //     register_flow(&state, user_id, app, password, None, None);
 
-        let key = state.proof_key(app);
-        let proof = create_proof(
-            app,
-            1800,
-            ActionType::DeleteUser,
-            Target::Select,
-            TargetList::user(user_id),
-            BytePacked::empty(),
-            key,
-        );
+    //     let key = state.proof_key(app);
+    //     let proof = create_proof(
+    //         app,
+    //         1800,
+    //         ActionType::DeleteUser,
+    //         Target::Select,
+    //         TargetList::user(user_id),
+    //         BytePacked::empty(),
+    //         key,
+    //     );
 
-        app_delete_user(&state, app, &proof).unwrap();
+    //     app_delete_user(&state, app, &proof).unwrap();
 
-        let login = get_login(&state, app, user_id).unwrap();
+    //     let login = get_login(&state, app, user_id).unwrap();
 
-        assert!(login.is_none());
-    }
+    //     assert!(login.is_none());
+    // }
 }

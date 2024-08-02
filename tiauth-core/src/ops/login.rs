@@ -12,10 +12,8 @@ use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
 use crate::proof::PasswordFileHash;
 use crate::state::State;
+use crate::store::users;
 use crate::store::StoreError;
-use crate::store::{
-    users
-};
 use crate::util::nonce_384;
 use crate::util::nonce_384_bytes;
 use crate::AppState;
@@ -29,11 +27,11 @@ use opaque_borink::Error as OpaqueError;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use redb::Error as DbError;
-use thiserror::Error;
 use std::borrow::Borrow;
 use std::str;
 use std::time::SystemTime;
 use terrors::OneOf;
+use thiserror::Error;
 
 // TODO implement fake credential, also if password file is empty
 pub fn login_start(
@@ -41,7 +39,9 @@ pub fn login_start(
     request: &str,
     user_id: &str,
 ) -> Result<(String, Ephemeral<String>), OneOf<(StoreError, OpaqueError)>> {
-    let read_login = users::get_login(state.store(), user_id).to_one_of().map_err(OneOf::broaden)?;
+    let read_login = users::get_login(state.store(), user_id)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
     let read_login = if let Some(read_login) = read_login {
         read_login
@@ -55,7 +55,8 @@ pub fn login_start(
         request,
         user_id,
     )
-    .to_one_of().map_err(OneOf::broaden)?;
+    .to_one_of()
+    .map_err(OneOf::broaden)?;
 
     let time = state.time();
 
@@ -63,9 +64,20 @@ pub fn login_start(
 
     let eph_type = EphemeralType::Login;
     let expires = time + COUNTER_EXPIRES;
-    let state_input = EphemeralLoginState { expires, count: state.counter_next(user_id, expires), password_file: read_login.password_file };
+    let state_input = EphemeralLoginState {
+        expires,
+        count: state.counter_next(user_id, expires),
+        password_file: read_login.password_file,
+    };
     let data = <String as ByteSerial>::serialize(&state_data);
-    let eph = Ephemeral::create_expires(&key, user_id, state_input, eph_type, expires, data.as_packed());
+    let eph = Ephemeral::create_expires(
+        &key,
+        user_id,
+        state_input,
+        eph_type,
+        expires,
+        data.as_packed(),
+    );
 
     Ok((response, eph))
 }
@@ -77,14 +89,19 @@ fn login_finish(
     state: &impl State,
     request: &str,
     nonce: &Ephemeral<String>,
-) -> Result<(String, String, PasswordFileHash), OneOf<(OpaqueError, InvalidEphemeral, StoreError)>> {
-
+) -> Result<(String, String, PasswordFileHash), OneOf<(OpaqueError, InvalidEphemeral, StoreError)>>
+{
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
-    let eph_decrypted = nonce.decrypt(&verify_keys).to_one_of().map_err(OneOf::broaden)?;
+    let eph_decrypted = nonce
+        .decrypt(&verify_keys)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
     let entry = eph_decrypted.read();
 
-    let read_login = users::get_login(state.store(), entry.user_id).to_one_of().map_err(OneOf::broaden)?;
+    let read_login = users::get_login(state.store(), entry.user_id)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
     let read_login = if let Some(read_login) = read_login {
         read_login
@@ -96,16 +113,23 @@ fn login_finish(
 
     let time = state.time();
 
-    let opaque_state = entry.verify_state::<EphemeralLoginState, _>(time, |(count, expires, pw_file_hash)| {
-        if state.counter_used(entry.user_id, count, expires, time) || new_pw_file_hash != pw_file_hash {
-            return Err(InvalidEphemeral)
-        }
+    let opaque_state = entry
+        .verify_state::<EphemeralLoginState, _>(time, |(count, expires, pw_file_hash)| {
+            if state.counter_used(entry.user_id, count, expires, time)
+                || new_pw_file_hash != pw_file_hash
+            {
+                return Err(InvalidEphemeral);
+            }
 
-        Ok(())
-    }).to_one_of().map_err(OneOf::broaden)?;
+            Ok(())
+        })
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
     // TODO check if OPAQUE login state can be revealed to the client
-    let secret = login_server_finish(request, opaque_state).to_one_of().map_err(OneOf::broaden)?;
+    let secret = login_server_finish(request, opaque_state)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
     Ok((secret, entry.user_id.to_owned(), new_pw_file_hash))
 }
@@ -113,7 +137,7 @@ fn login_finish(
 #[derive(Error, Debug)]
 pub enum LoginError {
     #[error("User no longer exists!")]
-    NotFound
+    NotFound,
 }
 
 pub fn login_session(
@@ -123,19 +147,30 @@ pub fn login_session(
     secret: &str,
     requested_claims: SessionClaims,
 ) -> Result<Session, OneOf<(StoreError, OpaqueError, InvalidEphemeral, LoginError)>> {
-    let (server_secret, user_id, pw_file_hash) = login_finish(state, request, nonce).map_err(OneOf::broaden)?;
+    let (server_secret, user_id, pw_file_hash) =
+        login_finish(state, request, nonce).map_err(OneOf::broaden)?;
 
     if secret != server_secret {
         panic!("Secrets do not match, invalid login!")
     }
 
-    let claims = users::get_login_claims_bytes(state.store(), &user_id, requested_claims)
-        .to_one_of().map_err(OneOf::broaden)?.ok_or(OneOf::new(LoginError::NotFound))?;
+    // TODO deal with missed claims
+    let (claims, _missed_claims) =
+        users::get_login_claims_bytes(state.store(), &user_id, &requested_claims)
+            .to_one_of()
+            .map_err(OneOf::broaden)?;
 
     let key = state.keys().session_key();
 
     let time = state.time();
-    let session = Session::create(&user_id, EXPIRE_TIME, pw_file_hash, claims.borrow(), key, time);
+    let session = Session::create(
+        &user_id,
+        EXPIRE_TIME,
+        pw_file_hash,
+        claims.borrow(),
+        key,
+        time,
+    );
 
     Ok(session)
 }
@@ -170,14 +205,7 @@ pub mod test_util {
 
         // time_server += Instant::now().duration_since(before).as_secs_f64()*1000f64;
         // println!("server time: {} ms", time_server);
-        login_session(
-            state,
-            &request,
-            &nonce,
-            &secret,
-            session_claims,
-        )
-        .unwrap()
+        login_session(state, &request, &nonce, &secret, session_claims).unwrap()
     }
 }
 
@@ -207,7 +235,8 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let (secret_server, login_user_id, pw_file_hash) = login_finish(&state, &request, &nonce).unwrap();
+        let (secret_server, login_user_id, pw_file_hash) =
+            login_finish(&state, &request, &nonce).unwrap();
 
         assert_eq!(secret, secret_server);
         assert_eq!(user_id, login_user_id);

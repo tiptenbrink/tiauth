@@ -1,6 +1,7 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 use thiserror::Error;
 
+use crate::data::empty_packed;
 use crate::data::Claims;
 use crate::data::UserPassword;
 use crate::encoded::Encodable;
@@ -42,7 +43,7 @@ pub fn start_register(
         EphemeralEmptyState,
         EphemeralType::NewUser,
         time,
-        BytePacked::<()>::empty(),
+        empty_packed(),
     );
 
     Ok((response, ephemeral))
@@ -60,19 +61,14 @@ pub enum SetLoginError {
     NotFound,
 }
 
-type FinishError = OneOf<(
-    StoreError,
-    OpaqueError,
-    SetLoginError,
-    InvalidEphemeral,
-)>;
+type FinishError = OneOf<(StoreError, OpaqueError, SetLoginError, InvalidEphemeral)>;
 
 fn user_change_ephemeral<T: ByteSerial>(
     entry: &EphemeralContent<T>,
     time: u64,
     old_login_bytes: Option<&[u8]>,
     password_file: String,
-) -> Result<UserPassword, OneOf<(SetLoginError, InvalidEphemeral,)>> {
+) -> Result<UserPassword, OneOf<(SetLoginError, InvalidEphemeral)>> {
     let login = match entry.eph_type {
         EphemeralType::NewUser => {
             // TODO check if we want AlreadyExists error
@@ -84,7 +80,9 @@ fn user_change_ephemeral<T: ByteSerial>(
             // }
             // Note that the content is verified, so the state and data are not user-determined
             // It's a programming error if they are non-empty for the NewUser type
-            entry.verify_state_equal::<EphemeralEmptyState>(time, EphemeralEmptyState).unwrap();
+            entry
+                .verify_state_equal::<EphemeralEmptyState>(time, EphemeralEmptyState)
+                .unwrap();
 
             UserPassword {
                 user_id: entry.user_id.to_owned(),
@@ -98,8 +96,14 @@ fn user_change_ephemeral<T: ByteSerial>(
                 return Err(OneOf::new(SetLoginError::NotFound));
             };
             let login = UserPassword::deserialize(old_login_bytes);
-            entry.verify_state_equal::<EphemeralChangePasswordState>(time, EphemeralChangePasswordState { password_file: login.password_file.to_owned() })
-            .map_err(|_| OneOf::new(SetLoginError::StateMismatch))?;
+            entry
+                .verify_state_equal::<EphemeralChangePasswordState>(
+                    time,
+                    EphemeralChangePasswordState {
+                        password_file: login.password_file.to_owned(),
+                    },
+                )
+                .map_err(|_| OneOf::new(SetLoginError::StateMismatch))?;
 
             // Some programming error must have occurred if this happens
             assert_eq!(login.user_id, entry.user_id);
@@ -108,7 +112,7 @@ fn user_change_ephemeral<T: ByteSerial>(
                 user_id: entry.user_id.to_owned(),
                 password_file,
             }
-        },
+        }
         // Incorrect type
         _ => return Err(OneOf::new(InvalidEphemeral)),
     };
@@ -127,7 +131,8 @@ pub fn register_finish(
 
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
-    let eph_decrypted = register_eph.decrypt(&verify_keys)
+    let eph_decrypted = register_eph
+        .decrypt(&verify_keys)
         .to_one_of()
         .map_err(OneOf::broaden)?;
     let content = eph_decrypted.read();
@@ -135,12 +140,11 @@ pub fn register_finish(
     let store = state.store();
     let tx = store.open_write().to_one_of().map_err(OneOf::broaden)?;
     {
-        let mut table = tx.user_table()
-            .to_one_of().map_err(OneOf::broaden)?;
-
+        let mut table = tx.user_table().to_one_of().map_err(OneOf::broaden)?;
 
         let new_login_bytes = {
-            let guarded_option = table.get(content.user_id)
+            let guarded_option = table
+                .get(content.user_id)
                 .to_one_of()
                 .map_err(OneOf::broaden)?;
             // The `as_ref` here allows us to make this work
@@ -155,7 +159,7 @@ pub fn register_finish(
         //     .to_one_of()
         //     .map_err(OneOf::broaden)?
         // {
-            
+
         // } else {
         //     user_change_ephemeral(&content, None, password_file)
         //         .map_err(OneOf::broaden)?
@@ -168,10 +172,7 @@ pub fn register_finish(
             .map_err(OneOf::broaden)?;
     };
 
-    tx
-        .commit()
-        .to_one_of()
-        .map_err(OneOf::broaden)?;
+    tx.commit().to_one_of().map_err(OneOf::broaden)?;
 
     Ok(())
 }
@@ -181,7 +182,11 @@ pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
     use crate::{
-        data::{UserClaims, UserPassword}, encoded::Encoded, state::test_util::TestState, store::users, ByteSerial
+        data::{UserClaims, UserPassword},
+        encoded::Encoded,
+        state::test_util::TestState,
+        store::users,
+        ByteSerial,
     };
 
     use super::*;
@@ -195,8 +200,7 @@ pub mod test_util {
         claims_set: Option<Claims>,
     ) {
         let (request, client_state) = client_register(password).unwrap();
-        let (server_response, nonce) =
-            start_register(state, &request, user_id).unwrap();
+        let (server_response, nonce) = start_register(state, &request, user_id).unwrap();
         let request = client_register_finish(&client_state, password, &server_response).unwrap();
         // Use alternative if provided
         let nonce = alt_eph.unwrap_or(nonce);
@@ -220,7 +224,9 @@ pub mod test_util {
 mod tests {
     use crate::{
         data::{ByteSerial, Claims, UserPassword},
-        state::test_util::TestState, store::users, AppState,
+        state::test_util::TestState,
+        store::users,
+        AppState,
     };
 
     use super::test_util::*;
@@ -242,7 +248,9 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id).unwrap().unwrap();
+        let read_login = users::get_login(&state.store(), &value.user_id)
+            .unwrap()
+            .unwrap();
 
         assert_ne!(value.password_file, read_login.password_file)
     }
@@ -264,16 +272,18 @@ mod tests {
 
         register_flow(&state, user_id, app, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id).unwrap().unwrap();
+        let read_login = users::get_login(&state.store(), &value.user_id)
+            .unwrap()
+            .unwrap();
         let initial_pw_file = read_login.password_file;
 
         // Registering the second time should be a noop
         register_flow(&state, user_id, app, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id).unwrap().unwrap();
+        let read_login = users::get_login(&state.store(), &value.user_id)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(read_login.password_file, initial_pw_file)
     }
-
-    
 }

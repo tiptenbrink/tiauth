@@ -1,8 +1,8 @@
-use crate::crypto::{self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey};
-use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
-use crate::data::{
-     ByteSerial, SerializedAs,
+use crate::crypto::{
+    self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey,
 };
+use crate::data::{ByteSerial, SerializedAs};
+use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
 use crate::encoded::Encodable;
 use crate::error::OneOfTo;
 use crate::util::{combine_encode, cursor_slice, rmp_read_bin, rmp_read_str};
@@ -12,16 +12,14 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 use std::collections::HashSet;
 use std::error::Error;
 use std::io::Cursor;
 use std::marker::PhantomData;
 use terrors::OneOf;
+use thiserror::Error;
 
-
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum ActionType {
     ResetPassword,
     DeleteClaims,
@@ -54,7 +52,7 @@ impl Target {
             "select" => Self::Select,
             "range" => Self::Range,
             "all" => Self::All,
-            _ => return Err(InvalidProof)
+            _ => return Err(InvalidProof),
         })
     }
 }
@@ -75,17 +73,17 @@ impl ActionType {
 
     fn from_name(name: &str) -> Result<Self, InvalidProof> {
         Ok(match name {
-            "reset_password" => ActionType::ResetPassword ,
-            "delete_claims" => ActionType::DeleteClaims ,
-            "set_claims" => ActionType::SetClaims ,
-            "add_claims" => ActionType::AddClaims ,
-            "merge_claims" => ActionType::MergeClaims ,
-             "read_users" => ActionType::ReadUsers,
-        "read_password" => ActionType::ReadPassword,
-             "delete_user" => ActionType::DeleteUser,
+            "reset_password" => ActionType::ResetPassword,
+            "delete_claims" => ActionType::DeleteClaims,
+            "set_claims" => ActionType::SetClaims,
+            "add_claims" => ActionType::AddClaims,
+            "merge_claims" => ActionType::MergeClaims,
+            "read_users" => ActionType::ReadUsers,
+            "read_password" => ActionType::ReadPassword,
+            "delete_user" => ActionType::DeleteUser,
             _ => {
                 eprintln!("ActionType {} does not exist!", name);
-                return Err(InvalidProof)
+                return Err(InvalidProof);
             }
         })
     }
@@ -112,14 +110,18 @@ pub struct ProofSingleTarget;
 
 impl ProofTarget for ProofSingleTarget {
     type Output = String;
-    
-    fn validate(self, target: Target, mut target_data: TargetList) -> Result<Self::Output, InvalidProof> {
+
+    fn validate(
+        self,
+        target: Target,
+        mut target_data: TargetList,
+    ) -> Result<Self::Output, InvalidProof> {
         Ok(match target {
             Target::Select => {
                 if target_data.0.len() == 1 {
                     target_data.0.pop().unwrap()
                 } else {
-                    return Err(InvalidProof)
+                    return Err(InvalidProof);
                 }
             }
             _ => return Err(InvalidProof),
@@ -130,23 +132,53 @@ impl ProofTarget for ProofSingleTarget {
 pub trait ProofTarget {
     type Output;
 
-    fn validate(self, target: Target, target_data: TargetList) -> Result<Self::Output, InvalidProof>;
+    fn validate(
+        self,
+        target: Target,
+        target_data: TargetList,
+    ) -> Result<Self::Output, InvalidProof>;
 }
 
 pub struct UnvalidatedProofObject<'a, T: ByteSerial> {
-    action: ActionType,
-    target:Target,
+    pub action: ActionType,
+    pub target: Target,
     target_data: TargetList,
-    data: &'a BytePacked<T>
+    data: &'a BytePacked<T>,
+}
+
+pub trait ValidAction {
+    fn action_valid(&self, action: ActionType) -> Result<(), InvalidProof> {
+        if !self.is_action_valid(action) {
+            return Err(InvalidProof);
+        }
+
+        Ok(())
+    }
+
+    fn is_action_valid(&self, action: ActionType) -> bool;
+}
+
+impl ValidAction for ActionType {
+    fn is_action_valid(&self, action: ActionType) -> bool {
+        self == &action
+    }
+}
+
+impl ValidAction for Vec<ActionType> {
+    fn is_action_valid(&self, action: ActionType) -> bool {
+        self.contains(&action)
+    }
 }
 
 impl<'a, T: ByteSerial> UnvalidatedProofObject<'a, T> {
-    pub fn validate<P: ProofTarget>(self, action: ActionType, proof_target: P) -> Result<(T::Deserialized<'a>, P::Output), InvalidProof> {
+    pub fn validate<P: ProofTarget>(
+        self,
+        action: impl ValidAction,
+        proof_target: P,
+    ) -> Result<(T::Deserialized<'a>, P::Output), InvalidProof> {
         let target_output = proof_target.validate(self.target, self.target_data)?;
 
-        if self.action != action {
-            return Err(InvalidProof)
-        }
+        action.action_valid(self.action)?;
 
         let data = self.data.try_deserialize().map_err(|_| InvalidProof)?;
 
@@ -186,14 +218,24 @@ impl<'a, T: ByteSerial> UnvalidatedProofObject<'a, T> {
 pub struct ProofAction {
     action: ActionType,
     target: Target,
-    target_data: TargetList
+    target_data: TargetList,
+}
+
+impl ProofAction {
+    pub fn new(action: ActionType, target: Target, target_data: TargetList) -> Self {
+        Self {
+            action,
+            target,
+            target_data,
+        }
+    }
 }
 
 impl<'a, T> ProofContent<'a, T>
 where
     T: ByteSerial,
 {
-    pub fn new(
+    fn new(
         expires: u64,
         action: ProofAction,
         ephemeral: &'a BytePacked<Ephemeral<()>>,
@@ -216,13 +258,12 @@ where
     //     //     println!("bad action");
     //     //     return Err(OneOf::new(InvalidProof {}));
     //     // }
-    
+
     //     if time >= self.expires + LEEWAY {
     //         eprintln!("expired proof");
     //         return Err(InvalidProof);
     //     };
-    
-        
+
     // }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -246,15 +287,15 @@ where
         let mut cursor = Cursor::new(bytes);
         let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
         if array_len != 6 {
-            return Err(InvalidProof)
+            return Err(InvalidProof);
         }
         let action = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
         let action = ActionType::from_name(action)?;
         let target = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
         let target = Target::from_name(target)?;
-        
+
         let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
-        let mut targets = Vec::with_capacity((array_len as usize));
+        let mut targets = Vec::with_capacity(array_len as usize);
         for _ in 0..array_len {
             let target = rmp_read_str(bytes, &mut cursor).map_err(|_| InvalidProof {})?;
             targets.push(target.to_owned())
@@ -339,7 +380,7 @@ impl TargetList {
 // }
 
 #[derive(Debug)]
-/// A proof is issued by the application using their private key and verified using the public key stored inside `tiauth`. 
+/// A proof is issued by the application using their private key and verified using the public key stored inside `tiauth`.
 pub struct Proof<T> {
     phantom: PhantomData<T>,
     content: Vec<u8>,
@@ -347,6 +388,26 @@ pub struct Proof<T> {
 }
 
 impl<T: ByteSerial> Proof<T> {
+    pub fn create(
+        key: &Key,
+        expires: u64,
+        action: ProofAction,
+        ephemeral: &BytePacked<Ephemeral<()>>,
+        data: &BytePacked<T>,
+    ) -> Self {
+        let proof_content = ProofContent::new(expires, action, ephemeral, data);
+
+        let content = proof_content.serialize();
+
+        let signature = sign_data(key, &content);
+
+        Self {
+            content,
+            signature,
+            phantom: PhantomData,
+        }
+    }
+
     // pub fn verify<F>(&self, time: u64, signature: &[u8], public_key: &PublicKey, used: F) -> Result<(), InvalidProof>
     //     where F: FnOnce(&Ephemeral<()>) -> Result<(), InvalidProof>
     // {
@@ -354,26 +415,34 @@ impl<T: ByteSerial> Proof<T> {
     //     //     println!("bad action");
     //     //     return Err(OneOf::new(InvalidProof {}));
     //     // }
-    
+
     //     if time >= self.expires + LEEWAY {
     //         eprintln!("expired proof");
     //         return Err(InvalidProof);
     //     };
-    pub fn verify<'a, F>(&'a self, public_key: &PublicKey, time: u64, used: F) -> Result<UnvalidatedProofObject<'a, T>, InvalidProof> 
-        where F: FnOnce(&EphemeralView<()>) -> Result<(), InvalidProof>
+    pub fn verify<'a, F>(
+        &'a self,
+        public_key: &PublicKey,
+        time: u64,
+        used: F,
+    ) -> Result<UnvalidatedProofObject<'a, T>, InvalidProof>
+    where
+        F: FnOnce(&EphemeralView<()>) -> Result<(), InvalidProof>,
     {
         let content = ProofContent::<T>::deserialize(&self.content)?;
 
         if time >= content.expires + LEEWAY {
-            return Err(InvalidProof)
+            return Err(InvalidProof);
         }
-        
+
         if !verify_signature(&self.content, &self.signature, public_key) {
             eprintln!("invalid sig");
-            return Err(InvalidProof)
+            return Err(InvalidProof);
         }
-        
-        let ephemeral = content.ephemeral.try_deserialize()
+
+        let ephemeral = content
+            .ephemeral
+            .try_deserialize()
             .map_err(|_| InvalidProof)?;
         used(&ephemeral)?;
 
@@ -381,7 +450,7 @@ impl<T: ByteSerial> Proof<T> {
             action: content.action,
             target: content.target,
             target_data: content.target_data,
-            data: content.data
+            data: content.data,
         })
     }
 }
@@ -433,8 +502,6 @@ impl<T> Encodable for Proof<T> {
     }
 }
 
-
-
 // pub fn create_proof<T: ByteSerial>(
 //     expires_in: u64,
 //     action: ActionType,
@@ -470,9 +537,6 @@ impl<T> Encodable for Proof<T> {
 //     }
 // }
 
-
-
-
 #[derive(Debug, PartialEq)]
 pub struct Session {
     encrypted: Vec<u8>,
@@ -487,9 +551,7 @@ trait SessionVerifyStatus {
         let decrypted = crypto::symmetric_decrypt(self.encrypted_bytes(), keys)
             .map_err(|_e| InvalidSession {})?;
 
-        Ok(DecryptedSession {
-            decrypted
-        })
+        Ok(DecryptedSession { decrypted })
     }
 }
 
@@ -510,9 +572,13 @@ impl Session {
             pw_file_hash,
             session_claims.serialized(),
         );
-    
+
         Self {
-            encrypted: crypto::symmetric_encrypt(&content.to_bytes(), key, &mut StdRng::from_entropy()),
+            encrypted: crypto::symmetric_encrypt(
+                &content.to_bytes(),
+                key,
+                &mut StdRng::from_entropy(),
+            ),
         }
     }
 
@@ -520,8 +586,17 @@ impl Session {
         &self.encrypted
     }
 
-    pub fn decrypt<E, F, FE>(&self, time: u64, keys: &[SessionKey], status: F, convert: FE) -> Result<DecryptedSession, E> 
-        where E: std::fmt::Debug, FE: Fn(InvalidSession) -> E, F: FnOnce(&Self) -> Result<SessionStatus, E>
+    pub fn decrypt<E, F, FE>(
+        &self,
+        time: u64,
+        keys: &[SessionKey],
+        status: F,
+        convert: FE,
+    ) -> Result<DecryptedSession, E>
+    where
+        E: std::fmt::Debug,
+        FE: Fn(InvalidSession) -> E,
+        F: FnOnce(&Self) -> Result<SessionStatus, E>,
     {
         let status = status(&self)?;
 
@@ -530,16 +605,13 @@ impl Session {
         let decrypted = crypto::symmetric_decrypt(&self.encrypted, keys)
             .map_err(|_| convert(InvalidSession))?;
 
-        Ok(DecryptedSession {
-            decrypted
-        })
+        Ok(DecryptedSession { decrypted })
     }
 }
 
 pub struct DecryptedSession {
-    decrypted: Vec<u8>
+    decrypted: Vec<u8>,
 }
-
 
 impl DecryptedSession {
     /// Note that the Session has not yet been verified, it might be expired or revoked!
@@ -587,7 +659,7 @@ impl EphemeralKey {
         ref_time: u64,
         amount_valid: u32,
     ) -> Vec<Self> {
-        let key_amount = (amount_valid as u64).min((now - ref_time)/INTERVAL + 1);
+        let key_amount = (amount_valid as u64).min((now - ref_time) / INTERVAL + 1);
 
         (0..(key_amount))
             .rev()
@@ -602,7 +674,7 @@ pub enum EphemeralType {
     ChangePassword,
     SetPassword,
     Login,
-    ProofToken
+    ProofToken,
 }
 
 #[derive(Error, Debug)]
@@ -614,7 +686,7 @@ pub trait EphemeralStateType {
 
     fn valid_type(eph_type: &EphemeralType) -> Result<(), InvalidEphemeral> {
         if !Self::is_valid_type(eph_type) {
-            return Err(InvalidEphemeral)
+            return Err(InvalidEphemeral);
         }
 
         Ok(())
@@ -632,16 +704,16 @@ pub trait EphemeralStateType {
 pub struct EphemeralLoginState {
     pub count: u64,
     pub expires: u64,
-    pub password_file: String
+    pub password_file: String,
 }
 
 pub struct EphemeralProofTokenState {
     pub count: u64,
-    pub expires: u64
+    pub expires: u64,
 }
 
 pub struct EphemeralChangePasswordState {
-    pub password_file: String
+    pub password_file: String,
 }
 
 pub struct EphemeralEmptyState;
@@ -694,23 +766,26 @@ impl EphemeralStateType for EphemeralLoginState {
         let expires_bytes: [u8; 8] = state[8..16].try_into().unwrap();
         let pw_file_hash_bytes = &state[16..];
 
-        (u64::from_le_bytes(counter_bytes), u64::from_le_bytes(expires_bytes), PasswordFileHash::from_bytes(pw_file_hash_bytes))
+        (
+            u64::from_le_bytes(counter_bytes),
+            u64::from_le_bytes(expires_bytes),
+            PasswordFileHash::from_bytes(pw_file_hash_bytes),
+        )
     }
-    
+
     fn create_state(self) -> impl AsRef<[u8]> {
         let mut state_bytes = [0u8; 48];
 
         state_bytes[0..8].copy_from_slice(&self.count.to_le_bytes());
         state_bytes[8..16].copy_from_slice(&self.expires.to_le_bytes());
-        
+
         let pw_file_hash = PasswordFileHash::create(&self.password_file);
         state_bytes[16..].copy_from_slice(pw_file_hash.as_bytes());
 
         state_bytes
     }
-    
+
     type VerifyType<'a> = (u64, u64, PasswordFileHash);
-    
 }
 
 impl EphemeralStateType for EphemeralProofTokenState {
@@ -724,9 +799,12 @@ impl EphemeralStateType for EphemeralProofTokenState {
         let counter_bytes: [u8; 8] = state[0..8].try_into().unwrap();
         let expires_bytes: [u8; 8] = state[8..16].try_into().unwrap();
 
-        Self { count: u64::from_le_bytes(counter_bytes), expires: u64::from_le_bytes(expires_bytes) }
+        Self {
+            count: u64::from_le_bytes(counter_bytes),
+            expires: u64::from_le_bytes(expires_bytes),
+        }
     }
-    
+
     fn create_state(self) -> impl AsRef<[u8]> {
         let mut state_bytes = [0u8; 16];
         state_bytes[0..8].copy_from_slice(&self.count.to_le_bytes());
@@ -734,28 +812,26 @@ impl EphemeralStateType for EphemeralProofTokenState {
 
         state_bytes
     }
-    
+
     type VerifyType<'a> = Self;
-    
 }
 
 impl EphemeralStateType for EphemeralChangePasswordState {
     fn is_valid_type(eph_type: &EphemeralType) -> bool {
         eph_type == &EphemeralType::ChangePassword
     }
-    
+
     type VerifyType<'a> = &'a [u8];
-    
+
     fn get_state<'a>(state: &'a [u8]) -> Self::VerifyType<'a> {
         state
     }
-    
+
     fn create_state(self) -> impl AsRef<[u8]> {
         let mut hasher = Sha256::new();
         hasher.update(self.password_file.as_bytes());
         hasher.finalize()
     }
-
 }
 
 impl EphemeralType {
@@ -763,7 +839,10 @@ impl EphemeralType {
         |t: &EphemeralType| t.key_name() == self.key_name()
     }
 
-    fn try_get_state<'a, S: EphemeralStateType>(&self, state: &'a [u8]) -> Result<S::VerifyType<'a>, InvalidEphemeral> {
+    fn try_get_state<'a, S: EphemeralStateType>(
+        &self,
+        state: &'a [u8],
+    ) -> Result<S::VerifyType<'a>, InvalidEphemeral> {
         S::valid_type(&self)?;
 
         Ok(S::get_state(state))
@@ -775,7 +854,7 @@ impl EphemeralType {
             Self::ChangePassword => "change_pass",
             Self::SetPassword => "set_pass",
             Self::Login => "login",
-            Self::ProofToken => "proof_token"
+            Self::ProofToken => "proof_token",
         }
     }
 
@@ -801,9 +880,8 @@ pub struct Ephemeral<T: ByteSerial> {
 
 pub struct EphemeralView<'a, T: ByteSerial> {
     encrypted: &'a [u8],
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
 }
-
 
 impl<'a, T: ByteSerial> EphemeralView<'a, T> {
     pub fn decrypt(
@@ -824,7 +902,8 @@ impl<T: ByteSerial + 'static> ByteSerial for Ephemeral<T> {
 
     fn serialize(&self) -> crate::ByteOwned<Self>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         // let mut bytes = self.content.clone();
         // bytes.extend_from_slice(&self.tag);
         ByteOwned::new(self.encrypted.clone())
@@ -840,13 +919,14 @@ impl<T: ByteSerial + 'static> ByteSerial for Ephemeral<T> {
 
         Ok(Self::Deserialized {
             phantom: PhantomData,
-            encrypted: bytes
+            encrypted: bytes,
         })
     }
 
     fn try_deserialize_owned(bytes: &[u8]) -> Result<Self, Self::DeserializeErr>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         // if bytes.len() < 32 {
         //     return Err(InvalidEphemeral)
         // }
@@ -854,16 +934,17 @@ impl<T: ByteSerial + 'static> ByteSerial for Ephemeral<T> {
         // let (content, tag) = bytes.split_at(bytes.len()-32);
         // let tag: [u8; 32] = tag.try_into().unwrap();
 
-        Ok(Self { phantom: PhantomData, encrypted: bytes.to_vec() })
-
+        Ok(Self {
+            phantom: PhantomData,
+            encrypted: bytes.to_vec(),
+        })
     }
 }
 
 impl<T: ByteSerial> Encodable for Ephemeral<T> {
     type Error = InvalidEphemeral;
 
-    fn decode(encoded: &str) -> Result<Self, Self::Error>
-    {
+    fn decode(encoded: &str) -> Result<Self, Self::Error> {
         let bytes = match b64::URL_SAFE_NO_PAD.decode(encoded) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -892,7 +973,7 @@ impl<T: ByteSerial> Encodable for Ephemeral<T> {
 
         Ok(Self {
             phantom: PhantomData,
-            encrypted: bytes
+            encrypted: bytes,
         })
     }
 
@@ -933,10 +1014,10 @@ impl<T: ByteSerial> Ephemeral<T> {
 
         Self {
             phantom: PhantomData,
-            encrypted
+            encrypted,
         }
     }
-    
+
     pub fn create<S: EphemeralStateType>(
         key: &EphemeralKey,
         user_id: &str,
@@ -966,17 +1047,22 @@ impl<T: ByteSerial> Ephemeral<T> {
     //     Ok(content)
     // }
 
-    fn decrypt_bytes(bytes: &[u8], keys: &[EphemeralKey]) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
-        let decrypted = crypto::symmetric_decrypt(bytes, keys)
-            .map_err(|_| InvalidEphemeral)?;
+    fn decrypt_bytes(
+        bytes: &[u8],
+        keys: &[EphemeralKey],
+    ) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
+        let decrypted = crypto::symmetric_decrypt(bytes, keys).map_err(|_| InvalidEphemeral)?;
 
         Ok(DecryptedEphemeral {
             decrypted,
-            phantom: PhantomData
+            phantom: PhantomData,
         })
     }
 
-    pub fn decrypt(&self, keys: &[EphemeralKey]) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
+    pub fn decrypt(
+        &self,
+        keys: &[EphemeralKey],
+    ) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
         Self::decrypt_bytes(&self.encrypted, keys)
     }
 
@@ -994,15 +1080,14 @@ impl<T: ByteSerial> Ephemeral<T> {
 
 pub struct DecryptedEphemeral<T> {
     decrypted: Vec<u8>,
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
 }
 
 impl<T: ByteSerial> DecryptedEphemeral<T> {
-    
     pub fn read<'a>(&'a self) -> EphemeralContent<'a, T> {
         // Since it's encrypted, we know the structure must be correct so we just unwrap here
         EphemeralContent::deserialize(&self.decrypted).unwrap()
-    } 
+    }
 }
 
 #[derive(Debug)]
@@ -1039,12 +1124,19 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
     //     }
     // }
 
-    pub fn verify_state<S: EphemeralStateType, F: FnOnce(S::VerifyType<'a>) -> Result<(), InvalidEphemeral>>(&self, time: u64, verify: F) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+    pub fn verify_state<
+        S: EphemeralStateType,
+        F: FnOnce(S::VerifyType<'a>) -> Result<(), InvalidEphemeral>,
+    >(
+        &self,
+        time: u64,
+        verify: F,
+    ) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
         if time >= self.expires + LEEWAY {
-            return Err(InvalidEphemeral)
+            return Err(InvalidEphemeral);
         }
-        
-        // This also checks if the eph_type is valid       
+
+        // This also checks if the eph_type is valid
         let s: S::VerifyType<'a> = self.eph_type.try_get_state::<S>(&self.state)?;
 
         verify(s)?;
@@ -1052,17 +1144,21 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         Ok(self.data.deserialize())
     }
 
-    pub fn verify_state_equal<S: EphemeralStateType>(&self, time: u64, current_state_input: S) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
+    pub fn verify_state_equal<S: EphemeralStateType>(
+        &self,
+        time: u64,
+        current_state_input: S,
+    ) -> Result<T::Deserialized<'a>, InvalidEphemeral> {
         if time >= self.expires + LEEWAY {
-            return Err(InvalidEphemeral)
+            return Err(InvalidEphemeral);
         }
-        
+
         S::valid_type(&self.eph_type)?;
-        
+
         let current_state = current_state_input.create_state();
 
         if current_state.as_ref() != self.state {
-            return Err(InvalidEphemeral)
+            return Err(InvalidEphemeral);
         }
 
         Ok(self.data.deserialize())
@@ -1141,25 +1237,34 @@ impl<'a> SessionContent<'a> {
         }
     }
 
-    pub fn verify(&self, time: u64, password_file: &str) -> Result<&BytePacked<Claims>, InvalidSession> {
+    pub fn verify(
+        &self,
+        time: u64,
+        password_file: &str,
+    ) -> Result<&BytePacked<Claims>, InvalidSession> {
         let pw_file_hash = PasswordFileHash::create(password_file);
 
         if self.pw_file_hash != pw_file_hash {
-            return Err(InvalidSession)
+            return Err(InvalidSession);
         }
 
         if time >= self.expires + LEEWAY {
-            return Err(InvalidSession)
+            return Err(InvalidSession);
         }
 
         Ok(&self.session_claims)
     }
 
-    pub fn verify_max_age(&self, time: u64, password_file: &str, max_age: u64) -> Result<&BytePacked<Claims>, InvalidSession> {
+    pub fn verify_max_age(
+        &self,
+        time: u64,
+        password_file: &str,
+        max_age: u64,
+    ) -> Result<&BytePacked<Claims>, InvalidSession> {
         if time > self.issued + max_age {
-            return Err(InvalidSession)
+            return Err(InvalidSession);
         }
-        
+
         self.verify(time, password_file)
     }
 

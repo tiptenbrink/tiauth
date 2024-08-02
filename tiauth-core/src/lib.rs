@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
+mod counter;
 pub mod crypto;
 mod data;
 pub mod encoded;
 pub mod error;
 mod proof;
 mod util;
-mod counter;
 
 #[cfg(feature = "action")]
 mod ops;
@@ -15,13 +15,13 @@ mod state;
 #[cfg(feature = "action")]
 mod store;
 
-pub use crate::proof::ActionType;
 pub use crate::data::Application;
 pub use crate::data::Claims;
 pub use crate::data::SessionClaims;
+pub use crate::data::{ByteOwned, BytePacked, ByteSerial};
+pub use crate::proof::ActionType;
 pub use crate::proof::Target;
 pub use crate::proof::TargetList;
-pub use crate::data::{ByteOwned, BytePacked, ByteSerial};
 pub use crate::proof::{Proof, Session};
 
 #[cfg(feature = "action")]
@@ -43,10 +43,9 @@ mod action {
     // pub use crate::state::CoreKeyState;
     // pub use crate::state::CoreState;
     // pub use crate::state::GovernorState;
+    pub use crate::state::AppState;
     pub use crate::state::KeyState;
     pub use crate::state::State;
-    pub use crate::state::AppState;
-
 
     // pub use crate::store::Tables;
 }
@@ -55,7 +54,6 @@ pub use action::*;
 
 #[cfg(feature = "app")]
 //pub mod app;
-
 #[cfg(feature = "test")]
 pub mod test {
     //pub use super::ops::login::test_util::*;
