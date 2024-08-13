@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose as b64, Engine as _};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use redb::{
     AccessGuard, CommitError, Database, Error as DbError, Key, ReadOnlyTable, ReadTransaction,
     ReadableTable as DbReadableTable, StorageError, Table, TableDefinition, TableError,
@@ -285,9 +285,8 @@ impl From<TableError> for StoreError {
     }
 }
 
-#[derive(Clone)]
 pub struct Store {
-    database: Arc<Database>,
+    database: Database,
 }
 
 pub enum StoreType {
@@ -319,7 +318,7 @@ impl Store {
         tx.commit()?;
 
         Ok(Self {
-            database: Arc::new(db),
+            database: db,
         })
     }
 
@@ -344,11 +343,24 @@ impl Store {
     }
 }
 
-pub struct StoreAddress(String);
+#[derive(Clone)]
+pub struct StoreAddress(Utf8PathBuf);
 
 impl StoreAddress {
     pub fn from_path<P: AsRef<Utf8Path>>(p: P) -> Self {
-        Self(p.as_ref().as_str().to_owned())
+        let path = p.as_ref().to_path_buf();
+        Self(path)
+    }
+
+    pub fn join_name(&self, name: &str) -> Self {
+        let file_stem = self.0.file_stem().unwrap();
+        let file_suffix = self.0.file_name().unwrap().strip_prefix(file_stem).unwrap();
+        let new_file_name = format!("{}.{}.{}", file_stem, name, file_suffix);
+        let new_path = match self.0.parent() {
+            Some(parent) => parent.join(new_file_name),
+            None => Utf8PathBuf::from(new_file_name)
+        };
+        Self(new_path)
     }
 }
 

@@ -3,7 +3,6 @@ use crate::functions;
 use crate::model::{
     LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, GetUsers
 };
-use crate::state::ServerState;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -11,8 +10,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use blocking::unblock;
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use crate::state::{ServerState};
+use std::ops::Deref;
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
 
@@ -73,31 +75,35 @@ async fn start_register(
     ExtractState(state): ExtractState<ServerState>,
     Json(request): Json<PakeRequest>,
 ) -> Json<PakeResponse> {
-    Json(functions::start_register(&state, request))
+    
+    Json(unblock(move || {
+        let app_state = state.app(&request.application);        
+        functions::start_register(app_state.deref(), request)
+    }).await)
 }
 
-async fn register_finish(
-    ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<RegisterFinishRequest>,
-) -> Result<(), ErrorResponse> {
-    functions::register_finish(&state, payload);
+// async fn register_finish(
+//     ExtractState(state): ExtractState<ServerState>,
+//     Json(payload): Json<RegisterFinishRequest>,
+// ) -> Result<(), ErrorResponse> {
+//     functions::register_finish(&state, payload);
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-async fn start_login(
-    ExtractState(state): ExtractState<ServerState>,
-    Json(request): Json<PakeRequest>,
-) -> Json<PakeResponse> {
-    Json(functions::start_login(&state, request))
-}
+// async fn start_login(
+//     ExtractState(state): ExtractState<ServerState>,
+//     Json(request): Json<PakeRequest>,
+// ) -> Json<PakeResponse> {
+//     Json(functions::start_login(&state, request))
+// }
 
-async fn login_session(
-    ExtractState(state): ExtractState<ServerState>,
-    Json(payload): Json<LoginFinishRequest>,
-) -> Json<SessionResponse> {
-    Json(functions::login_session(&state, payload))
-}
+// async fn login_session(
+//     ExtractState(state): ExtractState<ServerState>,
+//     Json(payload): Json<LoginFinishRequest>,
+// ) -> Json<SessionResponse> {
+//     Json(functions::login_session(&state, payload))
+// }
 
 // async fn admin_get_users_encoded(
 //     ExtractState(state): ExtractState<ServerState>,
@@ -113,9 +119,9 @@ where
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/register/start", post(start_register))
-        .route("/register/finish", post(register_finish))
-        .route("/login/start", post(start_login))
-        .route("/login/session", post(login_session))
+        // .route("/register/finish", post(register_finish))
+        // .route("/login/start", post(start_login))
+        // .route("/login/session", post(login_session))
         //.route("/admin/users", post(admin_get_users_encoded))
         .with_state(state)
         .layer((TimeoutLayer::new(Duration::from_secs(15)),))

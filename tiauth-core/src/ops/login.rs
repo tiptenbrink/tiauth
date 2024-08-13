@@ -186,13 +186,12 @@ pub mod test_util {
     pub fn login_create_session(
         state: &TestState,
         user_id: &str,
-        application: &str,
         password: &str,
         claims: Option<Claims>,
         // empty vec is no claims, none is all claims (default)
         session_claims: SessionClaims,
     ) -> Session {
-        register_flow(state, user_id, application, password, None, claims);
+        register_flow(state, user_id, password, None, claims);
 
         let (request, client_state) = client_login(password).unwrap();
         //let mut time_server = 0f64;
@@ -227,7 +226,7 @@ mod tests {
 
         let state = TestState::setup_test(&app);
 
-        register_flow(&state, user_id, app, password, None, None);
+        register_flow(&state, user_id, password, None, None);
 
         let (request, client_state) = client_login(password).unwrap();
 
@@ -253,7 +252,7 @@ mod tests {
 
         let state = TestState::setup_test(&app);
 
-        register_flow(&state, user_id, app, password, None, Some(claims));
+        register_flow(&state, user_id, password, None, Some(claims));
 
         let (request, client_state) = client_login(password).unwrap();
 

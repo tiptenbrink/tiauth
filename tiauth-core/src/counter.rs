@@ -13,10 +13,10 @@ use std::{
 
 use crate::util::rmp_read_bin;
 
-#[derive(Clone)]
+
 /// A simple counter with concurrent access.
 pub struct Counter {
-    counter: Arc<AtomicU64>,
+    counter: AtomicU64,
 }
 
 impl Counter {
@@ -24,7 +24,7 @@ impl Counter {
     pub fn new() -> Self {
         Self {
             // Since we use zero as "empty" in CompactSet, the first value must be 1
-            counter: Arc::new(AtomicU64::new(1)),
+            counter: AtomicU64::new(1),
         }
     }
 
@@ -47,12 +47,12 @@ impl Counter {
         let value = u64::from_le_bytes(bytes);
 
         Self {
-            counter: Arc::new(AtomicU64::new(value)),
+            counter: AtomicU64::new(value),
         }
     }
 }
 
-#[derive(Clone)]
+
 /// A data structure that tracks whether it has already seen a u64 value with as little space as possible.
 /// Probabilistic data structures (like a Bloom filter) need 10+ bits per element if you want a decent error rate, but
 /// our values are in a small(ish) and predictable range. It's designed to use less space than a bit arrray in the case
@@ -61,7 +61,7 @@ impl Counter {
 /// Until real-world data can be gathered, it will be difficult to evaluate. Currently, the structure is hidden behind
 /// a Mutex to allow access from multiple threads.  
 pub struct CompactSet {
-    ranges: Arc<Mutex<VecDeque<Range<64>>>>,
+    ranges: Mutex<VecDeque<Range<64>>>,
 }
 
 impl CompactSet {
@@ -70,7 +70,7 @@ impl CompactSet {
         ranges.push_back(Range::new(1));
 
         Self {
-            ranges: Arc::new(Mutex::new(ranges)),
+            ranges: Mutex::new(ranges),
         }
     }
 
@@ -112,7 +112,7 @@ impl CompactSet {
         }
 
         Self {
-            ranges: Arc::new(Mutex::new(ranges)),
+            ranges: Mutex::new(ranges),
         }
     }
 }
@@ -697,7 +697,7 @@ mod test {
 
             let mut compact_set = CompactSet::new();
 
-            compact_set.ranges = Arc::new(Mutex::new(ranges));
+            compact_set.ranges = Mutex::new(ranges);
 
             let mut time = 0;
 

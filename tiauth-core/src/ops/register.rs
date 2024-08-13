@@ -194,7 +194,6 @@ pub mod test_util {
     pub fn register_flow(
         state: &TestState,
         user_id: &str,
-        application: &str,
         password: &str,
         alt_eph: Option<Ephemeral<()>>,
         claims_set: Option<Claims>,
@@ -246,7 +245,7 @@ mod tests {
 
         let state = TestState::setup_test(&app);
 
-        register_flow(&state, user_id, app, password, None, None);
+        register_flow(&state, user_id, password, None, None);
 
         let read_login = users::get_login(&state.store(), &value.user_id)
             .unwrap()
@@ -270,7 +269,7 @@ mod tests {
 
         let state = TestState::setup_test(&app);
 
-        register_flow(&state, user_id, app, password, None, None);
+        register_flow(&state, user_id, password, None, None);
 
         let read_login = users::get_login(&state.store(), &value.user_id)
             .unwrap()
@@ -278,7 +277,7 @@ mod tests {
         let initial_pw_file = read_login.password_file;
 
         // Registering the second time should be a noop
-        register_flow(&state, user_id, app, password, None, None);
+        register_flow(&state, user_id, password, None, None);
 
         let read_login = users::get_login(&state.store(), &value.user_id)
             .unwrap()

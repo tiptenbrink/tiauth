@@ -420,3 +420,7 @@ took 1.911458 ms.
 binary split par extend: 1818.6095 ops.
 took 0.55707395 ms.
 ```
+
+### Mutability
+
+We can open databases only once

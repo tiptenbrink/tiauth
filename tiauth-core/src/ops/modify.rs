@@ -464,7 +464,7 @@ mod tests {
 
         let state = TestState::setup_test(app);
 
-        register_flow(&state, user_id, app, password, None, None);
+        register_flow(&state, user_id, password, None, None);
         let key = state.private_key();
         let time = state.time();
         let eph = proof_token(&state, time).serialize();
@@ -486,7 +486,7 @@ mod tests {
 
         let start_pass = login.password_file;
 
-        register_flow(&state, user_id, app, password, Some(nonce), None);
+        register_flow(&state, user_id, password, Some(nonce), None);
 
         let login = users::get_login(state.store(), user_id).unwrap().unwrap();
 
@@ -502,7 +502,7 @@ mod tests {
         let state = TestState::setup_test(app);
 
         let session =
-            login_create_session(&state, user_id, app, password, None, SessionClaims::All);
+            login_create_session(&state, user_id, password, None, SessionClaims::All);
 
         let nonce = change_password(&state, &session).unwrap();
 
@@ -511,7 +511,7 @@ mod tests {
 
         assert_ne!(initial_pw_file, "");
 
-        register_flow(&state, user_id, app, password, Some(nonce), None);
+        register_flow(&state, user_id, password, Some(nonce), None);
 
         let login = users::get_login(state.store(), user_id).unwrap().unwrap();
 

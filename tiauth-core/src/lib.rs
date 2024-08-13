@@ -7,6 +7,8 @@ pub mod encoded;
 pub mod error;
 mod proof;
 mod util;
+pub mod versionmap;
+pub mod versionmap2;
 
 #[cfg(feature = "action")]
 mod ops;
@@ -31,6 +33,9 @@ pub mod state_impl {
     // pub use crate::store::AppTable;
     // pub use crate::store::MapTables;
     // pub use crate::store::TableStore;
+    //pub use crate::state::ServerStateImpl;
+    pub use crate::state::AppStateImpl;
+    //pub use crate::state::{OnceVec, OnceList};
 }
 
 #[cfg(feature = "action")]
@@ -44,10 +49,16 @@ mod _action {
     // pub use crate::state::CoreKeyState;
     // pub use crate::state::CoreState;
     // pub use crate::state::GovernorState;
+    pub use crate::store::Store;
+    pub use crate::state::CounterState;
+    pub use crate::state::DriverState;
     pub use crate::state::AppState;
     pub use crate::state::KeyState;
     pub use crate::state::State;
-
+    pub use crate::state::ServerState;
+    pub use crate::state::ambassador_impl_AppState;
+    pub use crate::state::ambassador_impl_DriverState;
+    pub use crate::state::ambassador_impl_CounterState;
     // pub use crate::store::Tables;
 }
 #[cfg(feature = "action")]
