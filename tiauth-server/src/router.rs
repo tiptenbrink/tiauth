@@ -75,11 +75,10 @@ async fn start_register(
     ExtractState(state): ExtractState<ServerState>,
     Json(request): Json<PakeRequest>,
 ) -> Json<PakeResponse> {
-    
-    Json(unblock(move || {
-        let app_state = state.app(&request.application);        
-        functions::start_register(app_state.deref(), request)
-    }).await)
+
+    Json(state.app(request.application.clone(), move |state| {
+        functions::start_register(state, request)
+    }).await.unwrap())
 }
 
 // async fn register_finish(

@@ -8,7 +8,6 @@ pub mod error;
 mod proof;
 mod util;
 pub mod versionmap;
-pub mod versionmap2;
 
 #[cfg(feature = "action")]
 mod ops;

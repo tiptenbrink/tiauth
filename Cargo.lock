@@ -2297,6 +2297,7 @@ dependencies = [
  "base64",
  "blocking",
  "bytes",
+ "crossbeam",
  "parking_lot",
  "rand",
  "redb",

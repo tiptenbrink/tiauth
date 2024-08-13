@@ -91,7 +91,7 @@ impl CompactSet {
         let mut buf = Vec::new();
         let ranges = self.ranges.lock().unwrap();
 
-        rmp::encode::write_array_len(&mut buf, ranges.len() as u32);
+        rmp::encode::write_array_len(&mut buf, ranges.len() as u32).unwrap();
         for r in ranges.iter() {
             rmp::encode::write_bin(&mut buf, &r.serialize()).unwrap();
         }
