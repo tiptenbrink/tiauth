@@ -99,7 +99,6 @@ use crate::store::{
 // }
 
 pub trait GovernorAppState: AppState {
-    type Readonly;
 
     // fn app_tables(&self, application: &str) -> AppTable;
 
@@ -131,12 +130,6 @@ pub trait GovernorAppState: AppState {
 
     //     Ok(state)
     // }
-}
-
-pub trait ServerState {
-    fn app(&self, application: String) -> &impl State;
-
-    fn apps(&self) -> Vec<&String>;
 }
 
 pub trait State: DriverState + AppState + CounterState {}
@@ -374,46 +367,48 @@ pub struct AppStateImpl {
     pub time: AtomicU64,
 }
 
-fn load_app_state(
-    application: &str,
-    address: StoreAddress,
-    public_key: Option<PublicKey>,
-    now: u64,
-) -> Result<AppStateImpl, StoreError> {
-    let store = Store::load(address, StoreType::Application)?;
-
-    let AppInitState {
-        opaque,
-        ephemeral_secret,
-        public_key,
-        session_keys,
-        ephemeral_valid,
-        ephemeral_time,
-    } = init_app_state(&store, public_key, &mut StdRng::from_entropy(), now)?;
-
-    let key_state = KeyStateImpl {
-        opaque,
-        valid_session_keys: session_keys,
-        ephemeral_secret,
-        ephemeral_valid,
-        ephemeral_time,
-    };
-
-    let counter = Counter::new();
-    let compact_set = CompactSet::new();
-    let time = AtomicU64::new(now);
-
-    let app_state = AppStateImpl {
-        application: application.to_owned(),
-        public_key,
-        counter,
-        compact_set,
-        store: store,
-        key_state,
-        time,
-    };
-
-    Ok(app_state)
+impl AppStateImpl {
+    pub fn load_app_state(
+        application: &str,
+        address: StoreAddress,
+        public_key: Option<PublicKey>,
+        now: u64,
+    ) -> Result<AppStateImpl, StoreError> {
+        let store = Store::load(address, StoreType::Application)?;
+    
+        let AppInitState {
+            opaque,
+            ephemeral_secret,
+            public_key,
+            session_keys,
+            ephemeral_valid,
+            ephemeral_time,
+        } = init_app_state(&store, public_key, &mut StdRng::from_entropy(), now)?;
+    
+        let key_state = KeyStateImpl {
+            opaque,
+            valid_session_keys: session_keys,
+            ephemeral_secret,
+            ephemeral_valid,
+            ephemeral_time,
+        };
+    
+        let counter = Counter::new();
+        let compact_set = CompactSet::new();
+        let time = AtomicU64::new(now);
+    
+        let app_state = AppStateImpl {
+            application: application.to_owned(),
+            public_key,
+            counter,
+            compact_set,
+            store: store,
+            key_state,
+            time,
+        };
+    
+        Ok(app_state)
+    }
 }
 
 // fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
@@ -473,7 +468,6 @@ impl DriverState for AppStateImpl {
 impl State for AppStateImpl {}
 
 impl GovernorAppState for AppStateImpl {
-    type Readonly = AppStateImpl;
 
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
         &mut self.key_state
@@ -784,7 +778,7 @@ pub mod test_util {
                 .as_secs()
                 - (86400 * 15);
 
-            let state = load_app_state(
+            let state = AppStateImpl::load_app_state(
                 app_name,
                 StoreAddress::from_path(tmp_path),
                 Some(key.to_public_key()),

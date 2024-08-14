@@ -1,29 +1,30 @@
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tiauth_core::crypto::load_public_key;
+use tiauth_core::StoreAddress;
 use tiauth_core::{crypto::SavedPublicKey, Application, State};
-use tiauth_core::{CoreState, GovernorState};
-use tiauth_server::state::ReadonlyState;
-use tiauth_server::{router::create_router, state::ServerState};
+use tiauth_core::state_impl::AppStateImpl;
+use tiauth_server::{router::create_router, state::ServerState, state::GovernorServerState};
 use tiny_http::{Method, Response};
 
 use tokio::runtime;
 use tokio::sync::watch::{self, Receiver, Sender};
 
-fn init_state() -> CoreState {
+fn init_state() -> GovernorServerState {
+    let mut state = GovernorServerState::new(8);
+
+   
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let mut state = CoreState::setup("server.redb", now).unwrap();
 
     let public_key_pem = "-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
 -----END PUBLIC KEY-----"
         .to_owned();
+    let public_key = load_public_key(&public_key_pem).unwrap();
 
-    let app = Application::new(
-        SavedPublicKey::validate_pem(&public_key_pem).unwrap(),
-        "some_app",
-    );
+    let app_state = AppStateImpl::load_app_state("some_app", StoreAddress::from_path("server.redb"), Some(public_key), now).unwrap();
 
-    state.register_application(&app).unwrap();
+    state.load_application(app_state);
 
     state
 }
@@ -31,7 +32,7 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
 /// The 'governor' (as opposed to admin, which is per app) allows registration and deregistration of applications. It runs as a separate tiny-http server in a single loop
 /// so that we can have mutable state. To avoid mutexes in the state used by the main server, ServerState cannot be mutable. So updating it means recreating the entire
 /// server. So when the state is updated by the governor, the axum server shuts down gracefully and restarts.
-fn governor_loop(sender: Sender<ServerState>, mut state: CoreState) {
+fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();

@@ -3,6 +3,7 @@ use blocking::unblock;
 use tiauth_core::{ambassador_impl_AppState, ambassador_impl_CounterState, ambassador_impl_DriverState, CounterState};
 use redb::Database;
 use tiauth_core::state_impl::AppStateImpl;
+use tiauth_core::GovernorAppState;
 use tiauth_core::versionmap::{VersionMap, VersionMapView};
 use parking_lot::{RwLock, RwLockReadGuard};
 use std::collections::HashMap;
@@ -15,6 +16,37 @@ use tiauth_core::{AppState, KeyState, State, Store, DriverState};
 use tokio::sync::watch::{self, Receiver, Sender};
 
 type States = VersionMapView<String, RwLock<AppStateImpl>>;
+
+pub struct GovernorServerState {
+    states: VersionMap<String, RwLock<AppStateImpl>>
+}
+
+impl GovernorServerState {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            states: VersionMap::new(capacity)
+        }
+    }
+
+    pub fn load_application(&mut self, state: AppStateImpl) {
+        let previous = self.states.insert(state.application.clone(), RwLock::new(state)).unwrap();
+        if previous.is_some() {
+            panic!("Can only add each application once! Use the RwLock to modify it.")
+        }
+    }
+
+    pub fn modify_app(&self, application: &str) {
+        let a = self.states.get(application).unwrap();
+
+        let mut c = a.write();
+
+        let z = c.keys_mut();
+    }
+
+    pub fn view(&self) -> States {
+        self.states.view()
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -64,6 +96,7 @@ pub struct ApplicationNotFound;
 // }
 
 impl ServerState {
+
     pub fn app_blocking<T, F: FnOnce(&AppStateImpl) -> T>(self, application: &str, f: F) -> Result<T, ApplicationNotFound> {
         match self.states.get(application) {
             Ok(Some(lock)) => Ok(f(lock.read().deref())),

@@ -49,12 +49,14 @@ mod _action {
     // pub use crate::state::CoreState;
     // pub use crate::state::GovernorState;
     pub use crate::store::Store;
+    pub use crate::store::StoreAddress;
     pub use crate::state::CounterState;
     pub use crate::state::DriverState;
     pub use crate::state::AppState;
     pub use crate::state::KeyState;
     pub use crate::state::State;
-    pub use crate::state::ServerState;
+    pub use crate::state::GovernorAppState;
+    pub use crate::state::GovernorKeyState;
     pub use crate::state::ambassador_impl_AppState;
     pub use crate::state::ambassador_impl_DriverState;
     pub use crate::state::ambassador_impl_CounterState;

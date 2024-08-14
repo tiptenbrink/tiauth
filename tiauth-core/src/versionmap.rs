@@ -36,6 +36,10 @@ fn get_from_elements<T>(elements: &Arc<[OnceLock<T>]>, i: usize) -> Option<&T> {
     })
 }
 
+pub trait ReadableVector<T> {
+    fn get(&self, i: usize) -> Option<&T>;
+}
+
 impl<T> AppendOnlyArcVec<T> {
     fn new(capacity: usize) -> Self {
         // We do the below to ensure we do not overflow the stack while creating the Vector, because otherwise we would have to first create an array on the stack
@@ -69,12 +73,18 @@ impl<T> AppendOnlyArcVec<T> {
         Ok(i)
     }
 
+    
+
+    // Since [T] is unsized, we can't do into_inner on the Arc to recover what's inside
+}
+
+impl<T> ReadableVector<T> for AppendOnlyArcVec<T> {
     fn get(&self, i: usize) -> Option<&T> {
         get_from_elements(&self.elements, i)
     }
 }
 
-impl<T> VectorView<T> {
+impl<T> ReadableVector<T> for VectorView<T> {
     fn get(&self, i: usize) -> Option<&T> {
         get_from_elements(&self.elements, i)
     }
@@ -173,6 +183,18 @@ impl<K, V> VersionMap<K, V> {
         self.map = Arc::new(new_map);
         Ok(())
     }
+
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q> + Eq + Hash,
+        Q: Eq + Hash + ?Sized {
+        let value = self.map.get(key);
+        if let Some(i) = value {
+            self.vec.get(*i)
+        } else {
+            None
+        }
+    }
 }
 
 impl<K, V> VersionMapView<K, V> {
@@ -182,7 +204,7 @@ impl<K, V> VersionMapView<K, V> {
     pub fn outdated(&self) -> bool {
         self.version.load(atomic::Ordering::Acquire) > self.current
     }
-    
+
     /// Gets the value for the given key at the index known by this view. If the version is outdated, it will return 
     /// the value for the previously known index in an Err. It is up to the caller to fetch a new view, or decide to 
     /// continue using the old one. It is possible that the version has been incremented without any changes being 
@@ -191,16 +213,19 @@ impl<K, V> VersionMapView<K, V> {
     pub fn get<Q>(&self, key: &Q) -> Result<Option<&V>, Option<&V>>
     where
         K: Borrow<Q> + Eq + Hash,
-        Q: Eq + Hash + ?Sized
+        Q: Eq + Hash + ?Sized 
     {
-        let value = self.map.get(key).and_then(|i| {
+        let value = self.map.get(key);
+        let value = if let Some(i) = value {
             self.vec.get(*i)
-        });
-
+        } else {
+            None
+        };
+    
         if self.version.load(atomic::Ordering::Acquire) > self.current {
             return Err(value)
         }
-
+    
         Ok(value)
     }
 }
