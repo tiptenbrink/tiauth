@@ -4,11 +4,15 @@ use tiauth_core::crypto::load_public_key;
 use tiauth_core::StoreAddress;
 use tiauth_core::{crypto::SavedPublicKey, Application, State};
 use tiauth_core::state_impl::AppStateImpl;
-use tiauth_server::{router::create_router, state::ServerState, state::GovernorServerState};
+use tiauth_server::{router::create_router, state::{ServerState as GenServerState}, state::{GovernorServerState as GenGovernorServerState}, state::{AppStates as GenAppStates}};
 use tiny_http::{Method, Response};
 
 use tokio::runtime;
 use tokio::sync::watch::{self, Receiver, Sender};
+
+type AppStates = GenAppStates<AppStateImpl>;
+type ServerState = GenServerState<AppStateImpl>;
+type GovernorServerState = GenGovernorServerState<AppStateImpl>;
 
 fn init_state() -> GovernorServerState {
     let mut state = GovernorServerState::new(8);
@@ -32,7 +36,7 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
 /// The 'governor' (as opposed to admin, which is per app) allows registration and deregistration of applications. It runs as a separate tiny-http server in a single loop
 /// so that we can have mutable state. To avoid mutexes in the state used by the main server, ServerState cannot be mutable. So updating it means recreating the entire
 /// server. So when the state is updated by the governor, the axum server shuts down gracefully and restarts.
-fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState) {
+fn governor_loop(sender: Sender<AppStates>, receiver: Receiver<AppStates>, mut state: GovernorServerState) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -64,7 +68,7 @@ fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState) {
             }
             println!("Restarting...");
             rt.block_on(async {
-                sender.send_replace(state.readonly_state());
+                sender.send_replace(state.view());
             });
         } else if request_url.starts_with("/register") {
             if *request.method() != Method::Post {

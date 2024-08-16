@@ -8,6 +8,8 @@ pub mod error;
 mod proof;
 mod util;
 pub mod versionmap;
+// insert only map??
+pub mod appendonlymap;
 
 #[cfg(feature = "action")]
 mod ops;
@@ -55,7 +57,7 @@ mod _action {
     pub use crate::state::AppState;
     pub use crate::state::KeyState;
     pub use crate::state::State;
-    pub use crate::state::GovernorAppState;
+    pub use crate::state::GovernorState;
     pub use crate::state::GovernorKeyState;
     pub use crate::state::ambassador_impl_AppState;
     pub use crate::state::ambassador_impl_DriverState;

@@ -98,7 +98,7 @@ use crate::store::{
 //     }
 // }
 
-pub trait GovernorAppState: AppState {
+pub trait GovernorState: State {
 
     // fn app_tables(&self, application: &str) -> AppTable;
 
@@ -132,7 +132,7 @@ pub trait GovernorAppState: AppState {
     // }
 }
 
-pub trait State: DriverState + AppState + CounterState {}
+pub trait State: DriverState + AppState + CounterState + Send + Sync + 'static {}
 
 #[delegatable_trait]
 pub trait DriverState {
@@ -467,7 +467,7 @@ impl DriverState for AppStateImpl {
 
 impl State for AppStateImpl {}
 
-impl GovernorAppState for AppStateImpl {
+impl GovernorState for AppStateImpl {
 
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
         &mut self.key_state
@@ -718,7 +718,7 @@ pub mod test_util {
     /// TestState also contains application private keys for easier testing.
     pub struct TestState {
         pub state: AppStateImpl,
-        pub time: RefCell<u64>,
+        pub time: AtomicU64,
         key: Key,
     }
 
@@ -752,11 +752,11 @@ pub mod test_util {
 
     impl DriverState for TestState {
         fn time(&self) -> u64 {
-            *(self.time.borrow())
+            self.time.load(atomic::Ordering::Relaxed)
         }
 
         fn drive_time(&self, time: u64) {
-            self.time.replace(time);
+            self.time.store(time, atomic::Ordering::Relaxed);
         }
     }
 
@@ -789,7 +789,7 @@ pub mod test_util {
             Self {
                 state,
                 key,
-                time: RefCell::new(now),
+                time: AtomicU64::new(now),
             }
         }
     }

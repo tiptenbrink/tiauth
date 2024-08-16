@@ -13,6 +13,7 @@ use axum::{
 use blocking::unblock;
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tiauth_core::State;
 use crate::state::{ServerState};
 use std::ops::Deref;
 use std::time::Duration;
@@ -71,8 +72,8 @@ where
     }
 }
 
-async fn start_register(
-    ExtractState(state): ExtractState<ServerState>,
+async fn start_register<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<PakeRequest>,
 ) -> Json<PakeResponse> {
 
@@ -111,9 +112,7 @@ async fn start_register(
 //     admin::get_users_encoded(&state, payload).await
 // }
 
-pub fn create_router<S>(state: ServerState) -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
+pub fn create_router<S: State + Clone>(state: ServerState<S>) -> Router<ServerState<S>>
 {
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))

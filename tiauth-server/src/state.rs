@@ -1,13 +1,12 @@
 use ambassador::{delegatable_trait, delegate_to_methods, Delegate};
 use blocking::unblock;
-use tiauth_core::{ambassador_impl_AppState, ambassador_impl_CounterState, ambassador_impl_DriverState, CounterState};
+use tiauth_core::{ambassador_impl_AppState, ambassador_impl_CounterState, ambassador_impl_DriverState, CounterState, GovernorState};
 use redb::Database;
 use tiauth_core::state_impl::AppStateImpl;
-use tiauth_core::GovernorAppState;
-use tiauth_core::versionmap::{VersionMap, VersionMapView};
+use tiauth_core::appendonlymap::{AppendOnlyArcMap, MapView};
 use parking_lot::{RwLock, RwLockReadGuard};
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc};
 use tiauth_core::crypto::PublicKey;
 // use tiauth_core::state_impl::{AppTable, PrivateState, TableStore};
@@ -15,43 +14,44 @@ use tiauth_core::crypto::PublicKey;
 use tiauth_core::{AppState, KeyState, State, Store, DriverState};
 use tokio::sync::watch::{self, Receiver, Sender};
 
-type States = VersionMapView<String, RwLock<AppStateImpl>>;
+pub type AppStates<S: State> = MapView<String, RwLock<S>>;
 
-pub struct GovernorServerState {
-    states: VersionMap<String, RwLock<AppStateImpl>>
+pub struct GovernorServerState<S: GovernorState> {
+    states: AppendOnlyArcMap<String, RwLock<S>>
 }
 
-impl GovernorServerState {
+impl<S: GovernorState> GovernorServerState<S> {
     pub fn new(capacity: usize) -> Self {
         Self {
-            states: VersionMap::new(capacity)
+            states: AppendOnlyArcMap::new(capacity)
         }
     }
 
-    pub fn load_application(&mut self, state: AppStateImpl) {
-        let previous = self.states.insert(state.application.clone(), RwLock::new(state)).unwrap();
+    pub fn load_application(&mut self, state: S) {
+        let previous = self.states.insert(state.application().to_owned(), RwLock::new(state)).unwrap();
         if previous.is_some() {
             panic!("Can only add each application once! Use the RwLock to modify it.")
         }
     }
 
-    pub fn modify_app(&self, application: &str) {
-        let a = self.states.get(application).unwrap();
-
-        let mut c = a.write();
-
-        let z = c.keys_mut();
+    pub fn app_mut_blocking<T, F: FnOnce(&mut S) -> T>(&self, application: &str, f: F) -> Result<T, ApplicationNotFound> {
+        let state = self.states.get(application).ok_or(ApplicationNotFound)?;
+        Ok(f(state.write().deref_mut()))
     }
 
-    pub fn view(&self) -> States {
+    pub async fn app_mut<T: Send + 'static, F: FnOnce(&mut S) -> T + Send + 'static>(self, application: String, f: F) -> Result<T, ApplicationNotFound> {
+        unblock(move || self.app_mut_blocking(&application, f)).await
+    }
+
+    pub fn view(&self) -> AppStates<S> {
         self.states.view()
     }
 }
 
 #[derive(Clone)]
-pub struct ServerState {
-    receiver: Receiver<States>,
-    states: States
+pub struct ServerState<S: State> {
+    receiver: Receiver<AppStates<S>>,
+    states: AppStates<S>
 }
 
 #[derive(Debug)]
@@ -95,9 +95,9 @@ pub struct ApplicationNotFound;
 //     }
 // }
 
-impl ServerState {
+impl<S: State + Sync + Send + 'static> ServerState<S> {
 
-    pub fn app_blocking<T, F: FnOnce(&AppStateImpl) -> T>(self, application: &str, f: F) -> Result<T, ApplicationNotFound> {
+    pub fn app_blocking<T, F: FnOnce(&S) -> T>(self, application: &str, f: F) -> Result<T, ApplicationNotFound> {
         match self.states.get(application) {
             Ok(Some(lock)) => Ok(f(lock.read().deref())),
             Err(Some(lock)) => Ok(f(lock.read().deref())),
@@ -108,7 +108,7 @@ impl ServerState {
         
     }
 
-    pub async fn app<T: Send + 'static, F: FnOnce(&AppStateImpl) -> T + Send + 'static>(self, application: String, f: F) -> Result<T, ApplicationNotFound> {
+    pub async fn app<T: Send + 'static, F: FnOnce(&S) -> T + Send + 'static>(self, application: String, f: F) -> Result<T, ApplicationNotFound> {
         unblock(move || self.app_blocking(&application, f)).await
     }
 
