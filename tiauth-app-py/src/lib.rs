@@ -2,19 +2,45 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyBytes, PyDict, PyString};
+use tiauth_app::now_expires;
 use tiauth_core::encoded::Encodable;
 use std::cmp::Ordering;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use tiauth_core::app::ProofBaseView;
 use tiauth_core::crypto::{load_key, Key};
-use tiauth_core::Claims;
+use tiauth_core::{Claims, Ephemeral};
 use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
 
 #[pyclass(frozen)]
 struct ProofKey {
     key: Key,
 }
+
+
+struct TypedPyBytes<T: ByteSerial> {
+    bytes: PyBackedBytes,
+    phantom: PhantomData<T>
+}
+
+impl<T: ByteSerial> TypedPyBytes<T> {
+    fn from_bytes(bytes: PyBackedBytes) -> Self {
+        Self { bytes, phantom: PhantomData }
+    }
+
+    fn as_packed(&self) -> &BytePacked<T> {
+        BytePacked::new(&self.bytes.deref())
+    }
+}
+
+// enum Python
+
+#[pyclass(frozen)]
+struct ProofToken {
+    ephemeral: TypedPyBytes<Ephemeral<()>>,
+}
+
 
 #[pyclass(frozen)]
 struct AppClient {
@@ -30,16 +56,20 @@ pub struct ApplicationLogin {
 
 #[pyclass(frozen)]
 pub struct ApplicationRegister {
-    // We use an Mutex<Option<T>> to ensure it is used once while avoiding the need to copy the proof, which can be quite large
-    inner: Arc<Mutex<Option<tiauth_app::ApplicationRegister>>>
+    inner: Arc<tiauth_app::ApplicationRegister>
+}
+
+#[pyclass(frozen)]
+pub struct ApplicationClaimsProof {
+    inner: Arc<tiauth_app::ApplicationClaimsProof>
 }
 
 #[pymethods]
 impl AppClient {
     #[new]
-    #[pyo3(signature = (application, private_key_pem, proof_expiration=None))]
-    fn new(application: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
-        let inner = Arc::new(tiauth_app::AppClient::new(application, private_key_pem, proof_expiration));
+    #[pyo3(signature = (application, tiauth_url, private_key_pem, proof_expiration=None))]
+    fn new(application: &str, tiauth_url: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
+        let inner = Arc::new(tiauth_app::AppClient::new(application, tiauth_url, private_key_pem, proof_expiration));
 
         Self {
             inner
@@ -55,15 +85,29 @@ impl AppClient {
         }
     }
 
-    #[pyo3(signature = (user_id, set_claims=None))]
-    pub fn prepare_register(&self, user_id: &str, set_claims: Option<ClaimsSerialized>) -> ApplicationRegister {
-        let set_claims = set_claims.as_ref().map(|c| c.as_bytes());
+    #[pyo3(signature = (user_id,))]
+    pub fn prepare_register(&self, user_id: &str) -> ApplicationRegister {
+        // let set_claims = set_claims.as_ref().map(|c| c.as_bytes());
 
-        let inner = self.inner.prepare_register(user_id, set_claims);
+        let inner = self.inner.prepare_register(user_id);
 
         ApplicationRegister {
-            inner: Arc::new(Mutex::new(Some(inner)))
+            inner: Arc::new(inner)
         }
+    }
+
+    pub fn load_tokens(&self) {
+        self.inner.load_tokens_blocking();
+    }
+
+    pub fn prepare_set_claims(&self, user_id: &str, set_claims: ClaimsSerialized) -> PyResult<ApplicationClaimsProof> {
+        let inner = self.inner.prepare_set_claims(user_id, set_claims.as_bytes()).map_err(|e| {
+            PyValueError::new_err(e.to_string())
+        })?;
+
+        Ok(ApplicationClaimsProof {
+            inner: Arc::new(inner)
+        })
     }
 }
 
@@ -89,14 +133,8 @@ impl UserClient {
     /// So until then we want to have the owned value without cloning, so we must consume the given value. This is done by
     /// taking it out of an Option inside a Mutex. You cannot reuse the ApplicationRegister.
     pub fn register_user(&self, app_register: &ApplicationRegister, password: &str) -> PyResult<()> {
-        let app_register = {
-            // We use a scope to ensure the Mutex is dropped before we call unwrap below
-            app_register.inner.lock().unwrap().take().ok_or_else(|| {
-                PyValueError::new_err("ApplicationRegister can only be used once! Create a new value and do not reuse it.")
-            })?
-        };
 
-        self.inner.register_user_blocking(app_register, password).unwrap();
+        self.inner.register_user_blocking(app_register.inner.as_ref().clone(), password).unwrap();
 
         Ok(())
     }
@@ -108,6 +146,14 @@ impl UserClient {
 
         self.inner.login_user_blocking(app_login, password).unwrap()
     }
+}
+
+#[pyfunction]
+fn proof_token_from_bytes(bytes: PyBackedBytes) -> PyResult<ProofToken> {
+    let ephemeral = TypedPyBytes::from_bytes(bytes);
+
+
+    Ok(ProofToken { ephemeral })
 }
 
 #[pyfunction]
@@ -124,12 +170,14 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_private_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(public_from_private_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(create_set_claims_proof, m)?)?;
-    m.add_function(wrap_pyfunction!(create_reset_proof, m)?)?;
+    // m.add_function(wrap_pyfunction!(create_reset_proof, m)?)?;
     m.add_function(wrap_pyfunction!(create_read_all_proof, m)?)?;
     m.add_function(wrap_pyfunction!(load_key_from_pem, m)?)?;
-    m.add_function(wrap_pyfunction!(create_read_some_proof, m)?)?;
-    m.add_function(wrap_pyfunction!(create_read_range_proof, m)?)?;
+    // m.add_function(wrap_pyfunction!(create_read_some_proof, m)?)?;
+    // m.add_function(wrap_pyfunction!(create_read_range_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(proof_token_from_bytes, m)?)?;
     m.add_class::<ProofKey>()?;
+    m.add_class::<ProofToken>()?;
     m.add_class::<UserClient>()?;
     m.add_class::<AppClient>()?;
     m.add_class::<ApplicationLogin>()?;
@@ -219,60 +267,71 @@ impl ClaimsSerialized {
     }
 }
 
+fn proof_base<'a>(application: &'a str, key: &'a Bound<'_, ProofKey>, token: &'a Bound<'_, ProofToken>) -> ProofBaseView<'a> {
+    let now = now_expires();
+
+    ProofBaseView::new(application, &key.get().key, now, token.get().ephemeral.as_packed())
+}
+
 #[pyfunction]
 fn create_set_claims_proof(
     py: Python<'_>,
     application: &str,
     key: &Bound<'_, ProofKey>,
+    token: &Bound<'_, ProofToken>,
     user_id: &str,
     claims: ClaimsSerialized,
 ) -> PyResult<String> {
-    let key = &key.get().key;
+    let proof_base = proof_base(application, key, token);
+
     // The claim bytes are immutable, so we can use them even from outside the GIL,
     let proof = py.allow_threads(|| {
-        let proof_base = ProofBaseView::new(application, key);
         app::create_set_claims_proof(proof_base, user_id, claims.as_bytes())
     });
 
     Ok(proof.encode())
 }
 
-#[pyfunction]
-fn create_reset_proof(
-    application: &str,
-    key: &Bound<'_, ProofKey>,
-    user_id: &str,
-) -> PyResult<String> {
-    let proof_base = ProofBaseView::new(application, &key.get().key);
+// #[pyfunction]
+// fn create_reset_proof(
+//     application: &str,
+//     key: &Bound<'_, ProofKey>,
+//     user_id: &str,
+// ) -> PyResult<String> {
+//     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_reset_proof(proof_base, user_id).encode())
-}
-
-#[pyfunction]
-fn create_read_all_proof(application: &str, key: &Bound<'_, ProofKey>) -> PyResult<String> {
-    let proof_base = ProofBaseView::new(application, &key.get().key);
-
-    Ok(app::create_read_all_proof(proof_base).encode())
-}
+//     Ok(app::create_reset_proof(proof_base, user_id).encode())
+// }
 
 #[pyfunction]
-fn create_read_some_proof(
-    application: &str,
-    key: &Bound<'_, ProofKey>,
-    selection: Vec<String>,
-) -> PyResult<String> {
-    let proof_base = ProofBaseView::new(application, &key.get().key);
+fn create_read_all_proof(py: Python<'_>, application: &str, key: &Bound<'_, ProofKey>, token: &Bound<'_, ProofToken>) -> PyResult<String> {
+    let proof_base = proof_base(application, key, token);
 
-    Ok(app::create_read_some_proof(proof_base, selection).encode())
+    let proof = py.allow_threads(|| {
+        app::create_read_all_proof(proof_base).encode()
+    });
+
+    Ok(proof)
 }
 
-#[pyfunction]
-fn create_read_range_proof(
-    application: &str,
-    key: &Bound<'_, ProofKey>,
-    selection: Vec<String>,
-) -> PyResult<String> {
-    let proof_base = ProofBaseView::new(application, &key.get().key);
+// #[pyfunction]
+// fn create_read_some_proof(
+//     application: &str,
+//     key: &Bound<'_, ProofKey>,
+//     selection: Vec<String>,
+// ) -> PyResult<String> {
+//     let proof_base = ProofBaseView::new(application, &key.get().key);
 
-    Ok(app::create_read_range_proof(proof_base, selection).encode())
-}
+//     Ok(app::create_read_some_proof(proof_base, selection).encode())
+// }
+
+// #[pyfunction]
+// fn create_read_range_proof(
+//     application: &str,
+//     key: &Bound<'_, ProofKey>,
+//     selection: Vec<String>,
+// ) -> PyResult<String> {
+//     let proof_base = ProofBaseView::new(application, &key.get().key);
+
+//     Ok(app::create_read_range_proof(proof_base, selection).encode())
+// }

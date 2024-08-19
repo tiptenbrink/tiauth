@@ -9,8 +9,8 @@ mod proof;
 mod util;
 pub mod versionmap;
 // insert only map??
-pub mod appendonlymap;
-
+pub mod appendonly;
+//pub mod datatype;
 #[cfg(feature = "action")]
 mod ops;
 #[cfg(feature = "action")]
@@ -41,12 +41,11 @@ pub mod state_impl {
 
 #[cfg(feature = "action")]
 mod _action {
-    //pub use crate::ops::admin;
+    pub use crate::ops::admin;
     pub use crate::ops::register;
     pub use crate::ops::login;
     pub use crate::ops::modify;
-    
-    // pub use crate::ops::verify;
+    pub use crate::ops::verify;
     // pub use crate::state::CoreKeyState;
     // pub use crate::state::CoreState;
     // pub use crate::state::GovernorState;
@@ -59,9 +58,6 @@ mod _action {
     pub use crate::state::State;
     pub use crate::state::GovernorState;
     pub use crate::state::GovernorKeyState;
-    pub use crate::state::ambassador_impl_AppState;
-    pub use crate::state::ambassador_impl_DriverState;
-    pub use crate::state::ambassador_impl_CounterState;
     // pub use crate::store::Tables;
 }
 #[cfg(feature = "action")]

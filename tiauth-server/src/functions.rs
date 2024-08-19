@@ -1,18 +1,24 @@
-use tiauth_core::encoded::{Encodable, Encoded};
+use tiauth_core::{encoded::{Encodable, Encoded}, ByteOwned, ByteSerial};
 use serde::{Deserialize, Serialize};
-use tiauth_core::{login, register, modify, Claims, Proof, SessionClaims, State};
+use tiauth_core::{login, register, verify, modify, Claims, Proof, SessionClaims, State};
 use crate::model::*;
 use blocking::unblock;
 
-pub fn start_register(state: &impl State, request: PakeRequest) -> PakeResponse {
+pub fn proof_token(state: &impl State, _: ProofTokenRequest) -> ProofTokenResponse {
+    let eph = verify::proof_token(state);
+
+    ProofTokenResponse { tokens: eph.serialize().as_encoded() }
+}
+
+pub fn start_register(state: &impl State, request: PakeRequest) -> StartRegisterResponse {
     match register::start_register(
         state,
         &request.opaque_request,
         &request.user_id,
     ) {
-        Ok((opaque_response, start_nonce)) => PakeResponse {
+        Ok((opaque_response, start_nonce)) => StartRegisterResponse {
             opaque_response,
-            start_nonce: start_nonce.encode(),
+            start_nonce: start_nonce.as_encoded(),
         },
         Err(e) => match e.to_enum() {
             terrors::E1::A(_) => todo!(),
@@ -38,15 +44,15 @@ pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
     }
 }
 
-pub fn start_login(state: &impl State, request: PakeRequest) -> PakeResponse {
+pub fn start_login(state: &impl State, request: PakeRequest) -> StartLoginResponse {
     match login::login_start(
         state,
         &request.opaque_request,
         &request.user_id,
     ) {
-        Ok((opaque_response, start_nonce)) => PakeResponse {
+        Ok((opaque_response, start_nonce)) => StartLoginResponse {
             opaque_response,
-            start_nonce: start_nonce.encode(),
+            start_nonce: start_nonce.as_encoded(),
         },
         Err(e) => match e.to_enum() {
             terrors::E2::A(_e) => todo!(),

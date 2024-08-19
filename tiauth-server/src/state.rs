@@ -1,10 +1,11 @@
 use ambassador::{delegatable_trait, delegate_to_methods, Delegate};
 use blocking::unblock;
-use tiauth_core::{ambassador_impl_AppState, ambassador_impl_CounterState, ambassador_impl_DriverState, CounterState, GovernorState};
+use tiauth_core::{CounterState, GovernorState};
 use redb::Database;
 use tiauth_core::state_impl::AppStateImpl;
-use tiauth_core::appendonlymap::{AppendOnlyArcMap, MapView};
+use tiauth_core::appendonly::{AppendOnlyArcMap, MapView};
 use parking_lot::{RwLock, RwLockReadGuard};
+use tracing::debug_span;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc};
@@ -13,8 +14,6 @@ use tiauth_core::crypto::PublicKey;
 // use tiauth_core::{CoreKeyState, CoreState, KeyState};
 use tiauth_core::{AppState, KeyState, State, Store, DriverState};
 use tokio::sync::watch::{self, Receiver, Sender};
-
-pub type AppStates<S: State> = MapView<String, RwLock<S>>;
 
 pub struct GovernorServerState<S: GovernorState> {
     states: AppendOnlyArcMap<String, RwLock<S>>
@@ -43,15 +42,19 @@ impl<S: GovernorState> GovernorServerState<S> {
         unblock(move || self.app_mut_blocking(&application, f)).await
     }
 
-    pub fn view(&self) -> AppStates<S> {
-        self.states.view()
+    pub fn view(&self) -> ServerState<S> {
+        ServerState { states: self.states.view() }
     }
 }
 
-#[derive(Clone)]
 pub struct ServerState<S: State> {
-    receiver: Receiver<AppStates<S>>,
-    states: AppStates<S>
+    states: MapView<String, RwLock<S>>
+}
+
+impl<S: State> Clone for ServerState<S> {
+    fn clone(&self) -> Self {
+        Self { states: self.states.clone() }
+    }
 }
 
 #[derive(Debug)]
@@ -95,21 +98,22 @@ pub struct ApplicationNotFound;
 //     }
 // }
 
-impl<S: State + Sync + Send + 'static> ServerState<S> {
+impl<S: State> ServerState<S> {
 
     pub fn app_blocking<T, F: FnOnce(&S) -> T>(self, application: &str, f: F) -> Result<T, ApplicationNotFound> {
+        let span = debug_span!("app", application);
+        let _enter = span.enter();
         match self.states.get(application) {
-            Ok(Some(lock)) => Ok(f(lock.read().deref())),
-            Err(Some(lock)) => Ok(f(lock.read().deref())),
-
-            Err(None) => Self { states: self.receiver.borrow().clone(), receiver: self.receiver.clone() }.app_blocking(application, f),
-            Ok(None) => Err(ApplicationNotFound)
+            Some(lock) => Ok(f(lock.read().deref())),
+            None => Err(ApplicationNotFound)
         }
         
     }
 
     pub async fn app<T: Send + 'static, F: FnOnce(&S) -> T + Send + 'static>(self, application: String, f: F) -> Result<T, ApplicationNotFound> {
-        unblock(move || self.app_blocking(&application, f)).await
+        unblock(move || {
+            self.app_blocking(&application, f)
+        }).await
     }
 
     // pub fn with_app(self, application: &str) -> AppResult {

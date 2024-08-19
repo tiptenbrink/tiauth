@@ -30,8 +30,9 @@ crossbeam = "0.8.4"
 ctrlc = "3.4.4"
 bitflags = "2.6.0"
 camino = "1.1.7"
-typed-arena = "2.0.2"
-ambassador = "0.4.1"
+tracing = "=0.1.40"
+tracing-subscriber = "=0.3.18"
+tracing-error = "=0.2.0"
 
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

@@ -10,11 +10,18 @@ use crate::store::{sessions, users, Store, StoreError};
 use crate::{AppState, BytePacked, Claims, KeyState, Proof, Session};
 use base64::{engine::general_purpose as b64, Engine as _};
 use terrors::OneOf;
+use tracing::debug;
 
-pub fn proof_token(state: &impl State, time: u64) -> Ephemeral<()> {
+pub fn proof_token(state: &impl State) -> Ephemeral<()> {
+    proof_token_at(state, state.time())
+}
+
+pub fn proof_token_at(state: &impl State, time: u64) -> Ephemeral<()> {
+    debug!("Creating ephemeral proof token...");
     let expires = time + (EPHEMERAL_INTERVAL * 2);
     let count = state.counter_next("", expires);
     let key = state.keys().ephemeral_key(time);
+    debug!("Used key {:?}", key);
     let eph = Ephemeral::create(
         &key,
         "",
@@ -115,18 +122,23 @@ pub fn verify_proof<'a, T: ByteSerial>(
 ) -> Result<UnvalidatedProofObject<'a, T>, OneOf<(InvalidProof,)>>
 where
 {
+    debug!("Verifying proof...");
     let public_key = state.public_key();
 
     let proof_ob = proof
         .verify(public_key, time, |eph| {
             let keys = state.keys().eph_veri_keys(time);
 
-            let decrypted_eph = eph.decrypt(&keys).map_err(|_| InvalidProof)?;
+            let decrypted_eph = eph.decrypt(&keys).map_err(|_| {
+                debug!("Failed to decrypt ephemeral.");
+                InvalidProof
+            })?;
             let eph = decrypted_eph.read();
             eph.verify_state::<EphemeralProofTokenState, _>(
                 time,
                 |EphemeralProofTokenState { count, expires }| {
                     if state.counter_used(eph.user_id, count, expires, time) {
+                        debug!("Ephemeral has already been used.");
                         return Err(InvalidEphemeral);
                     }
 
@@ -161,7 +173,7 @@ pub mod test_util {
     ) -> Proof<Claims> {
         let key = state.private_key();
         let expires = now + expires_in.unwrap_or(1800);
-        let eph = proof_token(state, now).serialize();
+        let eph = proof_token_at(state, now).serialize();
         Proof::create(
             key,
             expires,

@@ -1,3 +1,4 @@
+from base64 import urlsafe_b64decode
 from dataclasses import dataclass
 from typing import Generator
 from uuid import uuid4
@@ -8,9 +9,9 @@ import pytest
 from msgspec import json, msgpack
 import random
 
-from tiauth_app_py.app import create_read_all_proof, create_read_some_proof, load_key_from_pem, public_from_private_key_pem
+from tiauth_app_py.app import ProofToken, load_key_from_pem, public_from_private_key_pem, proof_token_from_bytes, create_read_all_proof
 from tiauth_app_py.app import AppClient, UserClient, ApplicationLogin, ApplicationRegister
-from tiauth_app_py.model import GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, UserClaims, UserList
+from tiauth_app_py.model import GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, ProofTokenRequest, ProofTokenResponse, RegisterFinishRequest, SessionResponse, UserList, UserPasswords
 
 TIAUTH_URL = "http://localhost:3000"
 GOV_URL = "http://localhost:3001"
@@ -29,22 +30,22 @@ def mod_app(gov_client: Client) -> Generator[str, None, None]:
     n = random.randint(0, 1000000000)
     app_name = f"app_{n}"
 
-    gov_client.post(f"/register/{app_name}", content=public.encode('utf-8'))
+    gov_client.post(f"/load/{app_name}", content=public.encode('utf-8'))
 
     yield app_name
 
-    gov_client.post(f"/deregister/{app_name}")
+    gov_client.post(f"/delete/{app_name}")
 
 @pytest.fixture
 def once_app(gov_client: Client) -> Generator[str, None, None]:
     n = random.randint(0, 1000000000)
     app_name = f"app_{n}"
 
-    gov_client.post(f"/register/{app_name}", content=public.encode('utf-8'))
+    gov_client.post(f"/load/{app_name}", content=public.encode('utf-8'))
 
     yield app_name
 
-    gov_client.post(f"/deregister/{app_name}")
+    gov_client.post(f"/delete/{app_name}")
 
 @dataclass
 class RegisteredUser:
@@ -124,7 +125,7 @@ def make_user_client(app_name: str):
     return UserClient(app_name, TIAUTH_URL)
 
 def make_app_client(app_name: str):
-    return AppClient(app_name, private)
+    return AppClient(app_name, TIAUTH_URL, private)
 
 @pytest.fixture(scope="module")
 def app_client(mod_app: str):
@@ -164,6 +165,25 @@ def test_client_register(app_client: AppClient, user_client: UserClient, json_cl
     make_user_session(json_client, registered_user, mod_app)
 
 
+def dec_b64url(s: str) -> bytes:
+    while len(s) % 4 != 0:
+        s += "="
+    return urlsafe_b64decode(s.encode("utf-8"))
+
+
+def make_proof_token(json_client: Client, app_name: str) -> ProofToken:
+    req = ProofTokenRequest(app_name)
+
+    r: Response = json_client.post("/proof/token", content=json.encode(req))
+    
+    token_res = json.decode(r.content, type=ProofTokenResponse)
+    token_bytes = dec_b64url(token_res.tokens)
+
+    token = proof_token_from_bytes(token_bytes)
+
+    return token
+
+
 private = """
 -----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
@@ -187,10 +207,10 @@ public = public_from_private_key_pem(private)
 #         u = msgpack.decode(u_encoded, type=UserClaims)
 #         # user_ids.append(u.user_id)
 
-def get_all_users(json_client: Client, app_name: str) -> list[str]:
+def get_all_users(json_client: Client, app_name: str, proof_token: ProofToken) -> list[str]:
     key = load_key_from_pem(private)
 
-    proof = create_read_all_proof(app_name, key)
+    proof = create_read_all_proof(app_name, key, proof_token)
     req = GetUsers(app_name, proof, True)
 
     r: Response = json_client.post("/admin/users", content=json.encode(req))
@@ -199,7 +219,7 @@ def get_all_users(json_client: Client, app_name: str) -> list[str]:
 
     user_ids: list[str] = []
     for u_encoded in structs.users:
-        u = msgpack.decode(u_encoded, type=UserClaims)
+        u = msgpack.decode(u_encoded, type=UserPasswords)
         user_ids.append(u.user_id)
 
     return user_ids
@@ -208,8 +228,8 @@ def get_all_users(json_client: Client, app_name: str) -> list[str]:
 def test_has_users(json_client: Client, once_app: str):
     user_1 = make_registered_user(json_client, once_app, "user1", "pass")
     user_2 = make_registered_user(json_client, once_app, "user2", "pass")
-
-    user_ids = get_all_users(json_client, once_app)
+    proof_token = make_proof_token(json_client, once_app)
+    user_ids = get_all_users(json_client, once_app, proof_token)
 
     assert len(user_ids) == 2
     assert user_1.user_id in user_ids

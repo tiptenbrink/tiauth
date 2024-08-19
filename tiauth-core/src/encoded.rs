@@ -5,6 +5,8 @@ use serde::{
 };
 use std::{fmt::Display, marker::PhantomData};
 
+use crate::{ByteOwned, ByteSerial};
+
 pub trait Encodable {
     type Error: Display;
 
@@ -13,6 +15,10 @@ pub trait Encodable {
         Self: Sized;
 
     fn encode(&self) -> String;
+
+    fn as_encoded(self) -> Encoded<Self> where Self: Sized {
+        Encoded::from_encodable(self)
+    }
 }
 
 /// Simple newtype that implements Serialize and Deserialize for Encodable types. This means those types don't have to

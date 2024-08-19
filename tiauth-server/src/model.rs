@@ -1,4 +1,4 @@
-use tiauth_core::{encoded::Encoded, Ephemeral};
+use tiauth_core::{encoded::Encoded, ByteOwned, Ephemeral};
 use serde::{Deserialize, Serialize};
 use tiauth_core::{Claims, Proof};
 
@@ -10,9 +10,15 @@ pub struct PakeRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PakeResponse {
+pub struct StartLoginResponse {
     pub opaque_response: String,
-    pub start_nonce: String,
+    pub start_nonce: Encoded<Ephemeral<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartRegisterResponse {
+    pub opaque_response: String,
+    pub start_nonce: Encoded<Ephemeral<()>>,
 }
 
 
@@ -49,4 +55,14 @@ pub struct GetUsers {
 pub struct ResetPasswordRequest {
     pub application: String,
     pub reset_proof: Encoded<Proof<()>>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProofTokenRequest {
+    pub application: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProofTokenResponse {
+    pub tokens: Encoded<ByteOwned<Ephemeral<()>>>
 }

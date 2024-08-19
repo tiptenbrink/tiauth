@@ -26,8 +26,7 @@ type ClaimsProof = str
 class RegisterFinishRequest(Struct):
     application: str
     opaque_request: str
-    start_nonce: str
-    claims_proof: Optional[ClaimsProof] = None
+    action_nonce: str
 
 type ReadAllProof = str
 """Proof obtained using `create_read_all_proof`"""
@@ -49,9 +48,9 @@ class UserList(Struct):
 class User(Struct, array_like=True):
     user_id: str
 
-class UserClaims(Struct, array_like=True):
+class UserPasswords(Struct, array_like=True):
     user_id: str
-    claims: bytes
+    password_file: str
 
 class LoginFinishRequest(Struct):
     application: str
@@ -63,3 +62,9 @@ class LoginFinishRequest(Struct):
 
 class SessionResponse(Struct):
     session: Session
+
+class ProofTokenRequest(Struct):
+    application: str
+
+class ProofTokenResponse(Struct):
+    tokens: str

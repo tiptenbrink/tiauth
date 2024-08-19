@@ -1,8 +1,6 @@
-//use crate::admin;
+use crate::admin;
 use crate::functions;
-use crate::model::{
-    LoginFinishRequest, PakeRequest, PakeResponse, RegisterFinishRequest, SessionResponse, GetUsers
-};
+use crate::model::*;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -72,55 +70,76 @@ where
     }
 }
 
+async fn proof_token<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<ProofTokenRequest>,
+) -> Json<ProofTokenResponse> {
+
+    Json(state.app(request.application.clone(), move |state| {
+        functions::proof_token(state, request)
+    }).await.unwrap())
+}
+
 async fn start_register<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<PakeRequest>,
-) -> Json<PakeResponse> {
+) -> Json<StartRegisterResponse> {
 
     Json(state.app(request.application.clone(), move |state| {
         functions::start_register(state, request)
     }).await.unwrap())
 }
 
-// async fn register_finish(
-//     ExtractState(state): ExtractState<ServerState>,
-//     Json(payload): Json<RegisterFinishRequest>,
-// ) -> Result<(), ErrorResponse> {
-//     functions::register_finish(&state, payload);
+async fn register_finish<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<RegisterFinishRequest>,
+) -> Result<(), ErrorResponse> {
+    state.app(request.application.clone(), move |state| {
+        functions::register_finish(state, request);
+    }).await.unwrap();
 
-//     Ok(())
-// }
+    Ok(())
+}
 
-// async fn start_login(
-//     ExtractState(state): ExtractState<ServerState>,
-//     Json(request): Json<PakeRequest>,
-// ) -> Json<PakeResponse> {
-//     Json(functions::start_login(&state, request))
-// }
+async fn start_login<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<PakeRequest>,
+) -> Json<StartLoginResponse> {
+    Json(state.app(request.application.clone(), move |state| {
+        functions::start_login(state, request)
+    }).await.unwrap())
+}
 
-// async fn login_session(
-//     ExtractState(state): ExtractState<ServerState>,
-//     Json(payload): Json<LoginFinishRequest>,
-// ) -> Json<SessionResponse> {
-//     Json(functions::login_session(&state, payload))
-// }
+async fn login_session<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<LoginFinishRequest>,
+) -> Json<SessionResponse> {
+    Json(state.app(request.application.clone(), move |state| {
+        functions::login_session(state, request)
+    }).await.unwrap())
+}
 
-// async fn admin_get_users_encoded(
-//     ExtractState(state): ExtractState<ServerState>,
-//     Json(payload): Json<GetUsers>,
-// ) -> Vec<u8> {
-//     admin::get_users_encoded(&state, payload).await
-// }
+async fn admin_get_users_encoded<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<GetUsers>,
+) -> Vec<u8> {
 
-pub fn create_router<S: State + Clone>(state: ServerState<S>) -> Router<ServerState<S>>
+    state.app(request.application.clone(), move |state| {
+        admin::get_users_encoded(state, request)
+    }).await.unwrap()
+    
+}
+
+pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(state: ServerState<S>) -> Router<Z>
 {
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/register/start", post(start_register))
-        // .route("/register/finish", post(register_finish))
-        // .route("/login/start", post(start_login))
-        // .route("/login/session", post(login_session))
-        //.route("/admin/users", post(admin_get_users_encoded))
+        .route("/register/finish", post(register_finish))
+        .route("/login/start", post(start_login))
+        .route("/login/session", post(login_session))
+        .route("/admin/users", post(admin_get_users_encoded))
+        .route("/proof/token", post(proof_token))
         .with_state(state)
         .layer((TimeoutLayer::new(Duration::from_secs(15)),))
 }

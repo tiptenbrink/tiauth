@@ -454,6 +454,7 @@ mod tests {
     use crate::proof::ProofAction;
     use crate::state::test_util::TestState;
     use crate::state::DriverState;
+    use crate::verify::proof_token_at;
     use crate::{AppState, Target, TargetList};
 
     #[test]
@@ -467,7 +468,7 @@ mod tests {
         register_flow(&state, user_id, password, None, None);
         let key = state.private_key();
         let time = state.time();
-        let eph = proof_token(&state, time).serialize();
+        let eph = proof_token_at(&state, time).serialize();
         let proof = Proof::create(
             key,
             time + 1800,

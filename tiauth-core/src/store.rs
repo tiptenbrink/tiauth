@@ -7,18 +7,7 @@ use redb::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    fmt::{write, Display},
-    io::Cursor,
-    marker::PhantomData,
-    num::ParseIntError,
-    ops::RangeBounds,
-    path::Path,
-    str::Utf8Error,
-    string::FromUtf8Error,
-    sync::Arc,
-    time::SystemTime,
+    borrow::Borrow, collections::HashMap, fmt::{write, Display}, fs, io::Cursor, marker::PhantomData, num::ParseIntError, ops::RangeBounds, path::Path, str::Utf8Error, string::FromUtf8Error, sync::Arc, time::SystemTime
 };
 use terrors::OneOf;
 use thiserror::Error;
@@ -286,6 +275,7 @@ impl From<TableError> for StoreError {
 }
 
 pub struct Store {
+    address: StoreAddress,
     database: Database,
 }
 
@@ -318,6 +308,7 @@ impl Store {
         tx.commit()?;
 
         Ok(Self {
+            address,
             database: db,
         })
     }
@@ -341,6 +332,10 @@ impl Store {
             // tables: TxTables::default()
         })
     }
+
+    pub fn address(&self) -> &StoreAddress {
+        &self.address
+    }
 }
 
 #[derive(Clone)]
@@ -361,6 +356,10 @@ impl StoreAddress {
             None => Utf8PathBuf::from(new_file_name)
         };
         Self(new_path)
+    }
+
+    pub fn destroy(&self) {
+        fs::remove_file(&self.0).unwrap()
     }
 }
 
@@ -647,6 +646,8 @@ pub trait ReadableTable<K: Key + 'static, V: Value + 'static> {
         &'tbl self,
         range: impl RangeBounds<KB> + 'k,
     ) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
+
+    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
 }
 
 // impl<'tx> ReadableTable<UsersK, UsersV> for UserTable<'tx> {
@@ -720,6 +721,14 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for WriteTable<'tx, T> {
 
         Ok(range_result?)
     }
+    
+    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let result: Result<Vec<_>, _> = self.table.iter()?.into_iter().map(|kv| {
+            kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v)))
+        }).collect();
+
+        Ok(result?)
+    }
 }
 
 impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
@@ -742,6 +751,14 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
             .collect();
 
         Ok(range_result?)
+    }
+    
+    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
+        let result: Result<Vec<_>, _> = self.table.iter()?.into_iter().map(|kv| {
+            kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v)))
+        }).collect();
+
+        Ok(result?)
     }
 }
 

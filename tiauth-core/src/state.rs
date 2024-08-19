@@ -1,8 +1,4 @@
 #![allow(dead_code)]
-use ambassador::delegatable_trait;
-use base64::{engine::general_purpose as b64, Engine as _};
-use redb::Database;
-use typed_arena::Arena;
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
@@ -19,9 +15,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::counter::{CompactSet, Counter};
 use crate::crypto::{
@@ -134,7 +130,6 @@ pub trait GovernorState: State {
 
 pub trait State: DriverState + AppState + CounterState + Send + Sync + 'static {}
 
-#[delegatable_trait]
 pub trait DriverState {
     // Seconds since the epoch
     fn time(&self) -> u64;
@@ -142,15 +137,15 @@ pub trait DriverState {
     fn drive_time(&self, time: u64);
 }
 
-#[delegatable_trait]
 pub trait CounterState {
     fn counter_next(&self, key: &str, expires: u64) -> u64;
 
     fn counter_used(&self, key: &str, num: u64, expires: u64, time: u64) -> bool;
 }
 
-#[delegatable_trait]
 pub trait AppState {
+    fn active(&self) -> bool;
+
     fn application(&self) -> &str;
 
     fn public_key(&self) -> &PublicKey;
@@ -354,6 +349,7 @@ pub struct ServerThreadState {
 
 
 pub struct AppStateImpl {
+    pub active: bool,
     pub application: String,
     // Public key used to verify proof signatures
     pub public_key: PublicKey,
@@ -398,6 +394,7 @@ impl AppStateImpl {
         let time = AtomicU64::new(now);
     
         let app_state = AppStateImpl {
+            active: true,
             application: application.to_owned(),
             public_key,
             counter,
@@ -441,6 +438,10 @@ impl AppState for AppStateImpl {
 
     fn application(&self) -> &str {
         &self.application
+    }
+    
+    fn active(&self) -> bool {
+        todo!()
     }
 }
 
@@ -738,6 +739,10 @@ pub mod test_util {
         fn keys(&self) -> &impl KeyState<2> {
             self.state.keys()
         }
+        
+        fn active(&self) -> bool {
+            self.state.active()
+        }
     }
 
     impl CounterState for TestState {
@@ -945,201 +950,4 @@ pub mod test_util {
     //         &mut self.key_state
     //     }
     // }
-}
-
-
-pub struct OnceList<K, V, F: Fn() -> V> {
-    head: OnceListElement<K, V>,
-    f: F
-}
-
-
-impl<K, V, F: Fn() -> V> OnceList<K, V, F> {
-    pub const fn new(f: F) -> Self {
-        OnceList { head: OnceListElement::new(), f }
-    }
-
-    pub fn insert(&self, key: K)
-    where
-        K: Eq,
-    {
-        // We don't care if it already exists, since they are all created with the same function
-        self.head.insert(key, (self.f)()).ok();
-    }
-
-    pub fn get<Q>(&self, key: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: Eq + ?Sized,
-    {
-        self.head.get(key)
-    }
-}
-
-struct OnceListElement<K, V> {
-    data: OnceLock<(K, V)>,
-    next: OnceLock<Box<OnceListElement<K, V>>>,
-}
-
-impl<K, V> OnceListElement<K, V> {
-    const fn new() -> OnceListElement<K, V> {
-        OnceListElement { data: OnceLock::new(), next: OnceLock::new() }
-    }
-
-    fn insert(&self, key: K, value: V) -> Result<(), V>
-    where
-        K: Eq,
-    {
-        if let Err((key, value)) = self.data.set((key, value)) {
-            return if self.data.get().unwrap().0 != key {
-                let next = self.next.get_or_init(|| Box::new(OnceListElement::new()));
-                next.insert(key, value)
-            } else {
-                Err(value)
-            }
-        };
-
-        Ok(())
-    }
-    fn get<Q>(&self, key: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: Eq + ?Sized
-    {
-        let mut element = self;
-        loop {
-            let next = if let Some((element_key, value)) = element.data.get() {
-                if key == element_key.borrow() {
-                    return Some(value)
-                }
-
-                element.next.get()
-            } else {
-                return None
-            };
-
-            if let Some(next) = next {
-                element = next.as_ref()
-            } else {
-                return None
-            }
-        }
-        
-    }
-}
-
-pub struct OnceVec<T> {
-    index: usize,
-    data: OnceLock<T>,
-    next: OnceLock<Box<OnceVec<T>>>,
-}
-
-impl<T> OnceVec<T> {
-    pub const fn new() -> OnceVec<T> {
-        OnceVec { index: 0, data: OnceLock::new(), next: OnceLock::new() }
-    }
-    fn with_index(index: usize) -> OnceVec<T> {
-        OnceVec { index, data: OnceLock::new(), next: OnceLock::new() }
-    }
-    pub fn push(&self, value: T) -> usize {
-        if let Err(value) = self.data.set(value) {
-            let next = self.next.get_or_init(|| Box::new(OnceVec::with_index(self.index+1)));
-            next.push(value)
-        } else {
-            self.index
-        }
-    }
-    pub fn get(&self, index: usize) -> Option<&T>
-    {
-        if self.index == index {
-            self.data.get()
-        } else {
-            self.next.get().and_then(|next| next.get(index))
-        }
-    }
-}
-
-struct SimpleState {
-    name: String,
-    db: Store
-}
-
-struct States {
-    indexes: Arc<OnceList<String, AtomicU64, fn() -> AtomicU64>>,
-    stores: Arc<OnceVec<SimpleState>>
-}
-
-impl States {
-    fn get_state(&self, app: &str) -> &SimpleState {
-        let a = self.indexes.get(app).unwrap();
-        let index = a.load(atomic::Ordering::Relaxed);
-        self.stores.get(index as usize).unwrap()
-    }
-
-    fn new_state<F: Fn(SimpleState) -> SimpleState>(&self, app: &str, f: F) -> &SimpleState {
-        let a = self.indexes.get(app).unwrap();
-        let index = a.load(atomic::Ordering::Relaxed);
-        self.stores.get(index as usize).unwrap()
-    }
-}
-
-struct Dbs {
-    dbs: Vec<Store>
-}
-
-// fn ab(db: Arc<Database>) {
-//     Location
-// }
-
-
-struct GState {
-    data: Arena<SimpleState>
-}
-
-struct GStateView<'a> {
-    data: Vec<&'a SimpleState>
-}
-
-impl<'a> GStateView<'a> {
-    fn get_app_state(&self, name: &str) -> &SimpleState {
-        for s in &self.data {
-            if s.name == name {
-                return s
-            }
-        }
-        panic!("name should exist!")
-    }
-}
-
-struct SimpleStateX {
-    a: Weak<SimpleAppState>
-}
-
-struct SimpleAppState {
-    
-}
-
-impl SimpleStateX {
-    fn get_app_state(self) -> Arc<SimpleAppState> {
-        self.a.upgrade().unwrap()
-    }
-}
-
-// struct RefHolder {
-//     s: Arc<SimpleState>
-//     b: RwLock<>
-// }
-
-// fn make_from_r(s: SimpleState) {
-//     let a = Arc::new(s);
-//     Arc::new_cyclic
-//     ()
-// }
-
-struct AState {
-    
-}
-
-impl AState {
-
 }

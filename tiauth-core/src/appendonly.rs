@@ -6,7 +6,7 @@ pub struct PushMode;
 
 pub struct SetMode;
 
-trait VecMode {
+pub trait VecMode {
 
 }
 
@@ -21,7 +21,7 @@ impl VecMode for SetMode {}
 /// 
 /// Depending on its mode, it is either pushed to, where it returns the index, or it is set to, which means its
 /// indexes must be managed elsewhere. Regardless of the mode, it will return an Error when its capacity is reached.
-struct AppendOnlyArcVec<T, M: VecMode> {
+pub struct AppendOnlyArcVec<T, M: VecMode> {
     capacity: usize,
     used: usize,
     elements: Arc<[OnceLock<T>]>,
@@ -30,7 +30,7 @@ struct AppendOnlyArcVec<T, M: VecMode> {
 
 /// A view into a group of elements stored on the heap. The view is cheaply clonable, as the elements are stored
 /// behind an Arc.
-struct VectorView<T> {
+pub struct VectorView<T> {
     elements: Arc<[OnceLock<T>]>
 }
 
@@ -53,10 +53,12 @@ fn get_from_elements<T>(elements: &Arc<[OnceLock<T>]>, i: usize) -> Option<&T> {
 
 pub trait ReadableVector<T> {
     fn get(&self, i: usize) -> Option<&T>;
+
+    fn iter(&self) -> Iter<'_, T>;
 }
 
 impl<T, M: VecMode> AppendOnlyArcVec<T, M> {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         // We do the below to ensure we do not overflow the stack while creating the Vector, because otherwise we would have to first create an array on the stack
         let mut vec: Vec<OnceLock<T>> = Vec::with_capacity(capacity);
         for _ in 0..capacity {
@@ -71,7 +73,7 @@ impl<T, M: VecMode> AppendOnlyArcVec<T, M> {
         }
     }
 
-    fn view(&self) -> VectorView<T> {
+    pub fn view(&self) -> VectorView<T> {
         VectorView {
             elements: self.elements.clone()
         }
@@ -81,7 +83,7 @@ impl<T, M: VecMode> AppendOnlyArcVec<T, M> {
 }
 
 impl<T> AppendOnlyArcVec<T, PushMode> {
-    fn push(&mut self, value: T) -> Result<usize, CapacityError> {
+    pub fn push(&mut self, value: T) -> Result<usize, CapacityError> {
         let i = self.used;
         if i >= self.capacity {
             return Err(CapacityError)
@@ -95,7 +97,7 @@ impl<T> AppendOnlyArcVec<T, PushMode> {
 }
 
 impl<T> AppendOnlyArcVec<T, SetMode> {
-    fn set(&mut self, value: T, i: usize) -> Result<(), CapacityError> {
+    pub fn set(&mut self, value: T, i: usize) -> Result<(), CapacityError> {
         if self.used >= self.capacity {
             return Err(CapacityError)
         }
@@ -110,11 +112,51 @@ impl<T, M: VecMode> ReadableVector<T> for AppendOnlyArcVec<T, M> {
     fn get(&self, i: usize) -> Option<&T> {
         get_from_elements(&self.elements, i)
     }
+
+    fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            elements: &self.elements,
+            index: 0,
+            max_index: self.elements.len()-1
+        }
+    }
 }
 
 impl<T> ReadableVector<T> for VectorView<T> {
     fn get(&self, i: usize) -> Option<&T> {
         get_from_elements(&self.elements, i)
+    }
+
+    fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            elements: &self.elements,
+            index: 0,
+            max_index: self.elements.len()-1
+        }
+    }
+}
+
+pub struct Iter<'a, T> {
+    elements: &'a Arc<[OnceLock<T>]>,
+    index: usize,
+    max_index: usize
+}
+
+impl<'a, T: 'a> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index < self.max_index {
+            let i = self.index;
+            self.index += 1;
+            let element = get_from_elements(&self.elements, i);
+
+            if let Some(element) = element {
+                return Some(element)
+            }
+        }
+        
+        None
     }
 }
 

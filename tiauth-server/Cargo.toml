@@ -22,6 +22,7 @@ blocking = "1.6.1"
 ambassador = "0.4.1"
 parking_lot = "0.12.3"
 crossbeam = "0.8.4"
+tracing = "=0.1.40"
 
 [features]
 default = ["router"]

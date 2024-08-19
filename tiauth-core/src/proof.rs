@@ -1,6 +1,7 @@
 use crate::crypto::{
-    self, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey,
+    self, debug_secret_bytes, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey
 };
+use std::fmt::Debug;
 use crate::data::{ByteSerial, SerializedAs};
 use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
 use crate::encoded::Encodable;
@@ -12,10 +13,13 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::debug;
+use tracing_subscriber::fmt::format::debug_fn;
 use std::collections::HashSet;
 use std::error::Error;
 use std::io::Cursor;
 use std::marker::PhantomData;
+use std::path::Display;
 use terrors::OneOf;
 use thiserror::Error;
 
@@ -116,6 +120,7 @@ impl ProofTarget for ProofSingleTarget {
         target: Target,
         mut target_data: TargetList,
     ) -> Result<Self::Output, InvalidProof> {
+        debug!("Validating proof target for single target...");
         Ok(match target {
             Target::Select => {
                 if target_data.0.len() == 1 {
@@ -123,6 +128,47 @@ impl ProofTarget for ProofSingleTarget {
                 } else {
                     return Err(InvalidProof);
                 }
+            }
+            _ => return Err(InvalidProof),
+        })
+    }
+}
+
+pub struct ProofTargetAny;
+
+pub enum ProofTargetOut {
+    Range((String, String)),
+    Select(Vec<String>),
+    All
+}
+
+impl ProofTarget for ProofTargetAny {
+    type Output = ProofTargetOut;
+
+    fn validate(
+        self,
+        target: Target,
+        mut target_data: TargetList,
+    ) -> Result<Self::Output, InvalidProof> {
+        debug!("Validating proof target for any target...");
+        Ok(match target {
+            Target::All => {
+                if target_data.0.len() != 0 {
+                    return Err(InvalidProof);
+                }
+
+                ProofTargetOut::All
+            },
+            Target::Range => {
+                if target_data.0.len() != 2 {
+                    return Err(InvalidProof);
+                }
+                let last = target_data.0.pop().unwrap();
+                let first = target_data.0.pop().unwrap();
+                ProofTargetOut::Range((first, last))
+            },
+            Target::Select => {
+                ProofTargetOut::Select(target_data.0)
             }
             _ => return Err(InvalidProof),
         })
@@ -149,6 +195,7 @@ pub struct UnvalidatedProofObject<'a, T: ByteSerial> {
 pub trait ValidAction {
     fn action_valid(&self, action: ActionType) -> Result<(), InvalidProof> {
         if !self.is_action_valid(action) {
+            debug!("Action for proof is not valid!");
             return Err(InvalidProof);
         }
 
@@ -176,6 +223,7 @@ impl<'a, T: ByteSerial> UnvalidatedProofObject<'a, T> {
         action: impl ValidAction,
         proof_target: P,
     ) -> Result<(T::Deserialized<'a>, P::Output), InvalidProof> {
+        debug!("Validating action and proof target.");
         let target_output = proof_target.validate(self.target, self.target_data)?;
 
         action.action_valid(self.action)?;
@@ -231,6 +279,8 @@ impl ProofAction {
     }
 }
 
+
+
 impl<'a, T> ProofContent<'a, T>
 where
     T: ByteSerial,
@@ -283,6 +333,7 @@ where
     }
 
     pub fn deserialize(bytes: &'a [u8]) -> Result<Self, InvalidProof> {
+        debug!("Deserializing proof content...");
         // let mut cursor = Cursor::new(bytes);
         let mut cursor = Cursor::new(bytes);
         let array_len = rmp::decode::read_array_len(&mut cursor).map_err(|_| InvalidProof {})?;
@@ -432,11 +483,12 @@ impl<T: ByteSerial> Proof<T> {
         let content = ProofContent::<T>::deserialize(&self.content)?;
 
         if time >= content.expires + LEEWAY {
+            debug!("Proof has expired, time={}, expires={}", time, content.expires);
             return Err(InvalidProof);
         }
 
         if !verify_signature(&self.content, &self.signature, public_key) {
-            eprintln!("invalid sig");
+            debug!("Proof has invalid signature.");
             return Err(InvalidProof);
         }
 
@@ -444,6 +496,9 @@ impl<T: ByteSerial> Proof<T> {
             .ephemeral
             .try_deserialize()
             .map_err(|_| InvalidProof)?;
+
+        debug!("Content and signature are valid, not expired, checking if proof is used.");
+
         used(&ephemeral)?;
 
         Ok(UnvalidatedProofObject {
@@ -654,6 +709,12 @@ pub struct InvalidSession;
 
 pub struct EphemeralKey(SymmetricKey);
 
+impl Debug for EphemeralKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EphemeralKey").field(&self.0).finish()
+    }
+}
+
 impl AsSymmetricKey for EphemeralKey {
     fn as_symmetric_key(&self) -> &SymmetricKey {
         &self.0
@@ -662,6 +723,8 @@ impl AsSymmetricKey for EphemeralKey {
 
 impl EphemeralKey {
     pub fn compute<const INTERVAL: u64>(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
+        debug!("Computing ephemeral key for base secret: sha256={} at {} for ref {}", debug_secret_bytes(&base_secret), now, ref_time);
+        
         let passed = now - ref_time;
 
         let intervals_passed = passed / INTERVAL;

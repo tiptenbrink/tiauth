@@ -4,6 +4,7 @@ use crate::crypto::{
     create_symmetric_key, load_public_key, AsSymmetricKey, KeyError, PublicKey, SavedPublicKey,
     SymmetricKey,
 };
+use crate::encoded::Encodable;
 use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession, PasswordFileHash};
 use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
 use rand::rngs::StdRng;
@@ -21,7 +22,7 @@ use std::str::{self, Utf8Error};
 use std::sync::OnceLock;
 use terrors::OneOf;
 use thiserror::Error;
-
+use base64::{engine::general_purpose as b64, Engine as _};
 use zerovec::vecs::Index32;
 use zerovec::VarZeroVec;
 
@@ -827,8 +828,8 @@ impl Application {
     }
 }
 
-// This means an Ephemeral is valid up to 10 and 20 minutes
-pub const EPHEMERAL_INTERVAL: u64 = 10 * 60;
+// This means an Ephemeral is valid up to 6 and 12 hours (could be less for lower expiry of individual Ephemeral)
+pub const EPHEMERAL_INTERVAL: u64 = 6 * 60 * 60;
 
 // 1 minute
 pub const COUNTER_EXPIRES: u64 = 60;
@@ -843,6 +844,25 @@ pub const DELETE_AGE: u64 = 600;
 
 // Can only change password with session that is less than 10 minutes old
 pub const CHANGE_AGE: u64 = 600;
+
+impl<T> Encodable for ByteOwned<T>
+where
+    T: ByteSerial
+{
+    type Error = base64::DecodeError;
+
+    fn decode(encoded: &str) -> Result<Self, Self::Error>
+    where
+        Self: Sized {
+        let bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
+
+        Ok(ByteOwned::new(bytes))
+    }
+
+    fn encode(&self) -> String {
+        b64::URL_SAFE_NO_PAD.encode(&self.as_packed().bytes)
+    }
+}
 
 #[cfg(test)]
 mod test {
