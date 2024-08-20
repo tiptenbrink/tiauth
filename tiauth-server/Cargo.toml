@@ -7,7 +7,8 @@ edition = "2021"
 tiauth-core = { path="../tiauth-core", default-features = false }
 redb = { version = "2.1.1", optional = true }
 axum = { version = "0.7.5", features = ["macros"], optional = true}
-tower-http = { version = "0.5.2", features = ["timeout"], optional = true}
+tower = "0.4.13"
+tower-http = { version = "0.5.2", features = ["timeout", "trace"], optional = true}
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"], optional = true}
 rand = "0.8"
 terrors = "=0.3.0"

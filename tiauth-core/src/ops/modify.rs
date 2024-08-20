@@ -1,4 +1,4 @@
-use crate::data::{empty_packed, ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE};
+use crate::data::{empty_packed, ClaimKeys, ClaimsUnsortedError, ModifyClaimError, UserClaims, UserPassword, CHANGE_AGE};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
 use crate::proof::{
@@ -8,7 +8,7 @@ use crate::proof::{
 use crate::state::State;
 use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
-use crate::{ActionType, KeyState, Proof, Session};
+use crate::{ActionType, ByteSerial, Claims, KeyState, Proof, Session};
 use terrors::OneOf;
 
 use super::verify::{decrypt_session, verify_proof, verify_session};
@@ -142,6 +142,38 @@ fn change_password(
     );
 
     Ok(change_entry)
+}
+
+pub fn user_set_claims(state: &impl State, claims_proof: &Proof<Claims>) -> Result<(), OneOf<(StoreError, InvalidProof, ClaimsUnsortedError)>>{
+    let time = state.time();
+    let proof_unvalidated = verify_proof(state, claims_proof, time).map_err(OneOf::broaden)?;
+
+    let (claims, user_id) = proof_unvalidated
+        .validate(ActionType::SetClaims, ProofSingleTarget)
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
+
+    // We check if they are sorted
+    let claims = claims.to_claims_sorted().to_one_of().map_err(OneOf::broaden)?;
+    let claims = claims.serialize();
+
+    let tx = state
+        .store()
+        .open_write()
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
+
+    {
+        let mut table = tx.claims_table().to_one_of().map_err(OneOf::broaden)?;
+        
+        let user_claims = UserClaims { user_id, claims: claims.as_packed() };
+
+        table.insert(user_claims.user_id.as_str(), user_claims.serialize().as_slice()).to_one_of().map_err(OneOf::broaden)?;
+    }
+
+    tx.commit().to_one_of().map_err(OneOf::broaden)?;
+
+    Ok(())
 }
 
 // fn session_delete_user(

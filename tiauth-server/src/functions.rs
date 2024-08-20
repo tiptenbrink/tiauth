@@ -3,7 +3,7 @@ use serde::Serialize;
 use tiauth_core::{
     encoded::Encodable, ByteSerial,
 };
-use tiauth_core::{login, register, verify, SessionClaims, State};
+use tiauth_core::{login, modify, register, verify, SessionClaims, State};
 
 pub fn proof_token(state: &impl State, _: ProofTokenRequest) -> ProofTokenResponse {
     let eph = verify::proof_token(state);
@@ -74,6 +74,17 @@ pub fn login_session(state: &impl State, request: LoginFinishRequest) -> Session
             terrors::E4::B(_) => todo!(),
             terrors::E4::C(_) => todo!(),
             terrors::E4::D(_) => todo!(),
+        },
+    }
+}
+
+pub fn user_set_claims(state: &impl State, request: SetClaimsRequest) {
+    match modify::user_set_claims(state, &request.claims_proof.get()) {
+        Ok(()) => (),
+        Err(e) => match e.to_enum() {
+            terrors::E3::A(_) => todo!(),
+            terrors::E3::B(_) => todo!(),
+            terrors::E3::C(_) => todo!(),
         },
     }
 }

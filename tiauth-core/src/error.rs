@@ -51,3 +51,28 @@ where
         self.map_err(|e| OneOf::new(I::from(e)))
     }
 }
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Context<T> {
+    pub b: Box<T>,
+}
+
+impl<T> Context<T> {
+    pub fn new(inner: T) -> Self {
+        Self { b: Box::new(inner) }
+    }
+}
+
+impl Context<InnerStringContext> {
+    pub fn new_str<S: Into<String>>(s: S) -> Self {
+        Self { b: Box::new(InnerStringContext { inner: s.into() })}
+    }
+}
+
+#[derive(Debug)]
+pub struct InnerStringContext {
+    pub inner: String,
+}
+
+pub type StringContext = Context<InnerStringContext>;

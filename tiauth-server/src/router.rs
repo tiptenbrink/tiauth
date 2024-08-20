@@ -2,6 +2,8 @@ use crate::admin;
 use crate::functions;
 use crate::model::*;
 use crate::state::ServerState;
+use axum::middleware;
+use axum::middleware::Next;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -10,7 +12,16 @@ use axum::{
     Router,
 };
 use bytes::Bytes;
+use rand::distributions::Alphanumeric;
+use rand::thread_rng;
+use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tower::ServiceBuilder;
+use tower_http::trace::DefaultMakeSpan;
+use tower_http::trace::TraceLayer;
+use tracing::debug;
+use tracing::debug_span;
+use tracing::Instrument;
 use std::time::Duration;
 use tiauth_core::State;
 use tower_http::timeout::TimeoutLayer;
@@ -138,6 +149,20 @@ async fn login_session<S: State>(
     )
 }
 
+async fn user_set_claims<S: State>(
+    ExtractState(state): ExtractState<ServerState<S>>,
+    Json(request): Json<SetClaimsRequest>,
+) -> Result<(), ErrorResponse> {
+    state
+        .app(request.application.clone(), move |state| {
+            functions::user_set_claims(state, request);
+        })
+        .await
+        .unwrap();
+
+    Ok(())
+}
+
 async fn admin_get_users_encoded<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<GetUsers>,
@@ -150,6 +175,36 @@ async fn admin_get_users_encoded<S: State>(
         .unwrap()
 }
 
+fn uid() -> String {
+    let mut rng = thread_rng();
+    let random_string: String = (0..6)
+        .map(|_| rng.sample(Alphanumeric) as char)
+        .collect();
+    random_string
+}
+
+async fn wtf() {
+    debug!("ttttt");
+}
+
+// #[tracing::instrument(name = "req", level = "debug", skip_all, fields(req_id=uid()))]
+async fn my_middleware(
+    request: Request,
+    next: Next,
+) -> Response {
+    let span = debug_span!("req", req_id=uid());
+    let response = next.run(request).instrument(span).await;
+    let span2 = debug_span!("req2", req_id2=uid());
+    wtf().instrument(span2).await;
+    // do something with `request`...
+    // debug!("huhh?");
+    // let response = 
+    // debug!("huhh fini?");
+    // do something with `response`...
+
+    response
+}
+
 pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(
     state: ServerState<S>,
 ) -> Router<Z> {
@@ -159,8 +214,18 @@ pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(
         .route("/register/finish", post(register_finish))
         .route("/login/start", post(start_login))
         .route("/login/session", post(login_session))
+        .route("/user/claims/set", post(user_set_claims))
         .route("/admin/users", post(admin_get_users_encoded))
         .route("/proof/token", post(proof_token))
         .with_state(state)
-        .layer((TimeoutLayer::new(Duration::from_secs(15)),))
+        .layer(
+            ServiceBuilder::new()
+                .layer(
+                    TraceLayer::new_for_http()
+                )
+                .layer(middleware::from_fn(my_middleware))
+
+            
+        )
+        //.layer((TimeoutLayer::new(Duration::from_secs(15)),))
 }

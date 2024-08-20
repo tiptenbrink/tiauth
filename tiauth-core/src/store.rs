@@ -12,75 +12,8 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    crypto::KeyError,
-    data::{empty_claim_bytes, ByteOwned, ByteSerial, SessionClaims},
-    Claims,
+    crypto::KeyError, data::{empty_claim_bytes, ByteOwned, ByteSerial, SessionClaims}, error, Claims
 };
-
-// pub type TableStore = (String, String, String);
-
-// pub struct AppTable<'a> {
-//     store: &'a TableStore,
-// }
-
-// impl<'a> AppTable<'a> {
-//     pub fn new(store: &'a TableStore) -> Self {
-//         Self { store }
-//     }
-
-//     pub fn sessions(&self) -> TableDefinition<'_, &'static [u8], &'static str> {
-//         let table_name = &self.store.0;
-
-//         TableDefinition::new(table_name)
-//     }
-
-//     pub fn users(&self) -> TableDefinition<'_, &'static str, &'static [u8]> {
-//         let table_name = &self.store.1;
-
-//         TableDefinition::new(table_name)
-//     }
-
-//     pub fn ephemeral(&self) -> TableDefinition<'_, &'static str, &'static str> {
-//         let table_name = &self.store.2;
-
-//         TableDefinition::new(table_name)
-//     }
-
-//     pub fn all(&self) -> Vec<String> {
-//         let store = self.store.clone();
-//         vec![store.0, store.1, store.2]
-//     }
-// }
-
-// pub trait Tables {
-//     fn app(&self, application: &str) -> AppTable;
-// }
-
-// #[derive(Debug, Clone)]
-// pub struct MapTables {
-//     tables: HashMap<String, TableStore>,
-// }
-
-// impl Default for MapTables {
-//     fn default() -> Self {
-//         Self::new()
-//     }
-// }
-
-// impl MapTables {
-//     pub fn new() -> Self {
-//         Self {
-//             tables: HashMap::new(),
-//         }
-//     }
-// }
-
-// impl Tables for MapTables {
-//     fn app(&self, application: &str) -> AppTable {
-//         let store = self.tables.get(application).unwrap();
-//         AppTable::new(store)
-//     }
-// }
 
 fn open_db<P: AsRef<Path>>(path: P) -> std::result::Result<Database, DbError> {
     Ok(Database::create(path)?)
@@ -98,10 +31,6 @@ struct LoadContext {
     inner: String,
 }
 
-#[derive(Debug)]
-struct InnerStringContext {
-    inner: String,
-}
 
 #[derive(Debug)]
 struct DataDeserializationContext {
@@ -109,7 +38,7 @@ struct DataDeserializationContext {
     inner: String,
 }
 
-type StringContext = Context<InnerStringContext>;
+
 
 #[derive(Error, Debug)]
 pub enum DataDeserializationErrorSource {
@@ -189,37 +118,27 @@ impl<T, U> WrapVecTryFromError<T> for Result<T, Vec<U>> {
     }
 }
 
-#[derive(Debug)]
-#[repr(transparent)]
-struct Context<T> {
-    b: Box<T>,
-}
 
-impl<T> Context<T> {
-    fn new(inner: T) -> Self {
-        Self { b: Box::new(inner) }
-    }
-}
 
 #[derive(Error, Debug)]
 pub enum StoreError {
     #[error("Failed to load database at address {} due to underlying error: {}", .0.b.address, .0.b.inner)]
-    Load(Context<LoadContext>),
+    Load(error::Context<LoadContext>),
     #[error("Failed to open transaction due to underlying error: {}", .0.b.inner)]
-    OpenTransaction(StringContext),
+    OpenTransaction(error::StringContext),
     #[error("Failed to open table due to error: {}", .0.b.inner)]
-    Table(StringContext),
+    Table(error::StringContext),
     #[error("Failed to perform action due to underlying storage error: {}", .0.b.inner)]
-    Storage(StringContext),
+    Storage(error::StringContext),
     #[error("{}", .0.b)]
-    DataDeserialization(Context<DataDeserializationError>),
+    DataDeserialization(error::Context<DataDeserializationError>),
     #[error("Invariant failed to hold during initialization: {}", .0.b.inner)]
-    Init(StringContext),
+    Init(error::StringContext),
 }
 
 impl StoreError {
     pub fn new_init<S: Into<String>>(failed_invariant: S) -> Self {
-        Self::Init(Context::new(InnerStringContext {
+        Self::Init(error::Context::new(error::InnerStringContext {
             inner: failed_invariant.into(),
         }))
     }
@@ -227,13 +146,13 @@ impl StoreError {
 
 impl From<DataDeserializationError> for StoreError {
     fn from(value: DataDeserializationError) -> Self {
-        Self::DataDeserialization(Context::new(value))
+        Self::DataDeserialization(error::Context::new(value))
     }
 }
 
 impl From<TransactionError> for StoreError {
     fn from(value: TransactionError) -> Self {
-        Self::OpenTransaction(Context::new(InnerStringContext {
+        Self::OpenTransaction(error::Context::new(error::InnerStringContext {
             inner: value.to_string(),
         }))
     }
@@ -241,7 +160,7 @@ impl From<TransactionError> for StoreError {
 
 impl From<CommitError> for StoreError {
     fn from(value: CommitError) -> Self {
-        Self::Storage(Context::new(InnerStringContext {
+        Self::Storage(error::Context::new(error::InnerStringContext {
             inner: value.to_string(),
         }))
     }
@@ -249,7 +168,7 @@ impl From<CommitError> for StoreError {
 
 impl From<StorageError> for StoreError {
     fn from(value: StorageError) -> Self {
-        Self::Storage(Context::new(InnerStringContext {
+        Self::Storage(error::Context::new(error::InnerStringContext {
             inner: value.to_string(),
         }))
     }
@@ -258,10 +177,10 @@ impl From<StorageError> for StoreError {
 impl From<TableError> for StoreError {
     fn from(value: TableError) -> Self {
         match value {
-            TableError::Storage(value) => Self::Storage(Context::new(InnerStringContext {
+            TableError::Storage(value) => Self::Storage(error::Context::new(error::InnerStringContext {
                 inner: value.to_string(),
             })),
-            _ => Self::Table(Context::new(InnerStringContext {
+            _ => Self::Table(error::Context::new(error::InnerStringContext {
                 inner: value.to_string(),
             })),
         }
@@ -281,7 +200,7 @@ pub enum StoreType {
 impl Store {
     pub fn load(address: StoreAddress, store_type: StoreType) -> Result<Self, StoreError> {
         let db = open_db(&address.0).map_err(|e| {
-            StoreError::Load(Context::new(LoadContext {
+            StoreError::Load(error::Context::new(LoadContext {
                 address: address.to_string(),
                 inner: e.to_string(),
             }))

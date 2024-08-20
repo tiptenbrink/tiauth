@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 use std::ops::{Deref, DerefMut};
 use tiauth_core::appendonly::{AppendOnlyArcMap, MapView};
 use tiauth_core::GovernorState;
-use tracing::debug_span;
+use tracing::{debug, debug_span, Instrument};
 // use tiauth_core::state_impl::{AppTable, PrivateState, TableStore};
 // use tiauth_core::{CoreKeyState, CoreState, KeyState};
 use tiauth_core::{AppState, State};
@@ -110,9 +110,10 @@ impl<S: State> ServerState<S> {
     pub fn app_blocking<T, F: FnOnce(&S) -> T>(
         self,
         application: &str,
+        id: &str,
         f: F,
     ) -> Result<T, ApplicationNotFound> {
-        let span = debug_span!("app", application);
+        let span = debug_span!("app", app=application, id=id);
         let _enter = span.enter();
         match self.states.get(application) {
             Some(lock) => Ok(f(lock.read().deref())),
@@ -123,9 +124,12 @@ impl<S: State> ServerState<S> {
     pub async fn app<T: Send + 'static, F: FnOnce(&S) -> T + Send + 'static>(
         self,
         application: String,
+        id: String,
         f: F,
     ) -> Result<T, ApplicationNotFound> {
-        unblock(move || self.app_blocking(&application, f)).await
+        debug!("unblocking..");
+        let sp1 = debug_span!("testting..");
+        unblock(move || self.app_blocking(&application, &id, f)).instrument(sp1).await
     }
 
     // pub fn with_app(self, application: &str) -> AppResult {

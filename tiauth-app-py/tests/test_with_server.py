@@ -9,9 +9,9 @@ import pytest
 from msgspec import json, msgpack
 import random
 
-from tiauth_app_py.app import ProofToken, load_key_from_pem, public_from_private_key_pem, proof_token_from_bytes, create_read_all_proof
+from tiauth_app_py.app import ProofToken, create_set_claims_proof, load_key_from_pem, public_from_private_key_pem, proof_token_from_bytes, create_read_all_proof
 from tiauth_app_py.app import AppClient, UserClient, ApplicationLogin, ApplicationRegister
-from tiauth_app_py.model import GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, ProofTokenRequest, ProofTokenResponse, RegisterFinishRequest, SessionResponse, UserList, UserPasswords
+from tiauth_app_py.model import ClaimsProof, GetUsers, LoginFinishRequest, PakeRequest, PakeResponse, ProofTokenRequest, ProofTokenResponse, RegisterFinishRequest, SessionResponse, SetClaimsRequest, UserList
 
 TIAUTH_URL = "http://localhost:3000"
 GOV_URL = "http://localhost:3001"
@@ -207,7 +207,7 @@ public = public_from_private_key_pem(private)
 #         u = msgpack.decode(u_encoded, type=UserClaims)
 #         # user_ids.append(u.user_id)
 
-def get_all_users(json_client: Client, app_name: str, proof_token: ProofToken) -> list[str]:
+def get_all_users(json_client: Client, app_name: str, proof_token: ProofToken) -> UserList:
     key = load_key_from_pem(private)
 
     proof = create_read_all_proof(app_name, key, proof_token)
@@ -215,23 +215,42 @@ def get_all_users(json_client: Client, app_name: str, proof_token: ProofToken) -
 
     r: Response = json_client.post("/admin/users", content=json.encode(req))
 
-    structs = msgpack.decode(r.content, type=UserList)
+    users = msgpack.decode(r.content, type=UserList)
 
-    user_ids: list[str] = []
-    for u_encoded in structs.users:
-        u = msgpack.decode(u_encoded, type=UserPasswords)
-        user_ids.append(u.user_id)
-
-    return user_ids
+    return users
 
 
 def test_has_users(json_client: Client, once_app: str):
     user_1 = make_registered_user(json_client, once_app, "user1", "pass")
     user_2 = make_registered_user(json_client, once_app, "user2", "pass")
     proof_token = make_proof_token(json_client, once_app)
-    user_ids = get_all_users(json_client, once_app, proof_token)
+    users = get_all_users(json_client, once_app, proof_token).users
 
-    assert len(user_ids) == 2
+    assert len(users) == 2
+    user_ids = list(map(lambda u: u.user_id, users))
     assert user_1.user_id in user_ids
     assert user_2.user_id in user_ids
 
+
+def make_set_claims(json_client: Client, app_name: str, proof: ClaimsProof):
+    req = SetClaimsRequest(app_name, proof)
+
+    r: Response = json_client.post("/user/claims/set", content=json.encode(req))
+
+    assert r.status_code == 200
+
+
+
+def test_user_set_claims(json_client: Client, mod_app: str):
+    user_id = str(uuid4())
+    password = "my_pass"
+
+    make_registered_user(json_client, mod_app, user_id, password)
+
+    key = load_key_from_pem(private)
+    proof_token = make_proof_token(json_client, mod_app)
+    proof = create_set_claims_proof(mod_app, key, proof_token, user_id, {"email": f"{user_id}@email.com".encode('utf-8'), "zclaim": b"abcd"})
+
+    make_set_claims(json_client, mod_app, proof)
+
+    # make_set_claims(json_client, mod_app, proof)

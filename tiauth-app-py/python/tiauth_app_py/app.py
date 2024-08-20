@@ -20,7 +20,7 @@ def public_from_private_key_pem(private_key_pem: str) -> str:
 def load_key_from_pem(private_key_pem: str) -> ProofKey:
    return  _internal.load_key_from_pem(private_key_pem)
 
-def create_set_claims_proof(application: str, key: ProofKey, token: ProofToken, user_id: str, claims: Claims | ClaimsBytes) -> str:
+def create_set_claims_proof(application: str, key: ProofKey, token: ProofToken, user_id: str, claims: Claims | ClaimsBytes) -> ClaimsProof:
    return  _internal.create_set_claims_proof(application, key, token, user_id, claims)
 
 # def create_reset_proof(application: str, key: ProofKey, user_id: str) -> ClaimsProof:

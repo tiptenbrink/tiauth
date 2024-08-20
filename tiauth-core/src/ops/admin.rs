@@ -1,37 +1,161 @@
-use crate::data::UserPassword;
-use crate::error::OneOfTo;
+use crate::data::{UserPassword, UserClaims};
+use crate::error::{self, Context, OneOfTo};
 use crate::proof::{InvalidProof, ProofTargetAny, ProofTargetOut};
 use crate::state::State;
-use crate::store::ReadableTable;
+use crate::store::{ClaimsTableType, ReadTable, ReadTx, ReadableTable, TableType, UserTableType};
 use crate::{error::WrapErrorOneOf, store::StoreError};
-use crate::{ActionType, Proof};
+use crate::{ActionType, ByteOwned, Claims, Proof};
+use itertools::{EitherOrBoth, Itertools};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use terrors::OneOf;
+use thiserror::Error;
 
 use super::verify::verify_proof;
 
 #[derive(Debug, Serialize)]
 pub struct UserList {
-    users: Vec<ByteBuf>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct User<'a> {
-    user_id: &'a str,
+    users: Vec<User>,
 }
 
 #[derive(Debug, Serialize)]
-struct UserClaims<'a> {
-    user_id: &'a str,
-    #[serde(with = "serde_bytes")]
-    claims: &'a [u8],
+struct User {
+    user_id: String,
+    password_file: Option<String>,
+    claims: Option<ByteBuf>
+}
+
+// #[derive(Debug, Serialize)]
+// struct UserClaimsElement<'a> {
+//     claims: &'a [u8],
+// }
+
+#[derive(Debug, Error)]
+#[error("Collection was not sorted: {}", .0.b.inner)]
+pub struct UnsortedError(error::StringContext);
+
+impl UnsortedError {
+    fn new<S: Into<String>>(s: S) -> Self {
+        Self(Context::new_str(s))
+    }
+}
+
+fn select_claims(tx: &ReadTx, targets: &ProofTargetOut) -> Result<Vec<(String, ByteOwned<Claims>)>, OneOf<(StoreError, UnsortedError)>> {
+    let user_table = tx.claims_table().to_one_of_two()?;
+    
+    let mut user_claims: Vec<(String, ByteOwned<Claims>)> = Vec::new();
+    let empty_selection = Vec::new();
+    // Now None user_selection corresponds to not having to check anything in the iter
+    let (iter, filter_selection, user_selection) = match targets {
+        ProofTargetOut::Range(_)| ProofTargetOut::Select(_) => {
+            let (first, last, selection) = match &targets {
+                ProofTargetOut::Range((first, last)) => (first, last, &empty_selection),
+                ProofTargetOut::Select(selection) => (selection.first().unwrap(), selection.last().unwrap(), selection),
+                _ => unreachable!()
+            };
+
+            if first > last {
+                return Err(UnsortedError::new(format!("Target range or selection in proof not sorted: {} > {}", first, last))).to_one_of_twond()
+            }
+
+            (
+                user_table
+                    .range(first.as_str()..=last.as_str()).to_one_of_two()?,
+                selection.len() > 0,
+                selection,
+            )
+        }
+        ProofTargetOut::All => (user_table.iter().to_one_of_two()?, false, &empty_selection),
+    };
+
+    let mut sel_i = 0;
+    for (_, u_value) in iter {
+        let login = UserClaims::deserialize(u_value.value());
+
+        if sel_i < user_selection.len() {
+            let next_selected = user_selection[sel_i].as_str();
+            if sel_i > 0 && user_selection[sel_i - 1].as_str() > next_selected {
+                return Err(UnsortedError::new(format!("Target selection in proof not sorted: {} > {}", user_selection[sel_i - 1].as_str(), next_selected))).to_one_of_twond()
+            }
+
+            if login.user_id != next_selected {
+                // We do not want this user, so continue
+                continue;
+            } else {
+                // Advance
+                sel_i += 1;
+            }
+        } else if filter_selection {
+            // No more to select, we are finished
+            break;
+        }
+        user_claims.push((login.user_id, login.claims.to_owned()));
+    }
+
+    Ok(user_claims)
+}
+
+fn select_users(tx: &ReadTx, targets: &ProofTargetOut, include_passwords: bool) -> Result<Vec<(String, Option<String>)>, OneOf<(StoreError, UnsortedError)>> {
+    let user_table = tx.user_table().to_one_of_two()?;
+
+    let mut user_passwords = Vec::new();
+    let empty_selection = Vec::new();
+    // Now None user_selection corresponds to not having to check anything in the iter
+    let (iter, filter_selection, user_selection) = match targets {
+        ProofTargetOut::Range(_)| ProofTargetOut::Select(_) => {
+            let (first, last, selection) = match &targets {
+                ProofTargetOut::Range((first, last)) => (first, last, &empty_selection),
+                ProofTargetOut::Select(selection) => (selection.first().unwrap(), selection.last().unwrap(), selection),
+                _ => unreachable!()
+            };
+
+            if first > last {
+                return Err(UnsortedError::new(format!("Target range or selection in proof not sorted: {} > {}", first, last))).to_one_of_twond()
+            }
+
+            (
+                user_table
+                    .range(first.as_str()..=last.as_str()).to_one_of_two()?,
+                selection.len() > 0,
+                selection,
+            )
+        }
+        ProofTargetOut::All => (user_table.iter().to_one_of_two()?, false, &empty_selection),
+    };
+
+    let mut sel_i = 0;
+    for (_, u_value) in iter {
+        let login = UserPassword::deserialize(u_value.value());
+
+        if sel_i < user_selection.len() {
+            let next_selected = user_selection[sel_i].as_str();
+            if sel_i > 0 && user_selection[sel_i - 1].as_str() > next_selected {
+                return Err(UnsortedError::new(format!("Target selection in proof not sorted: {} > {}", user_selection[sel_i - 1].as_str(), next_selected))).to_one_of_twond()
+            }
+
+            if login.user_id != next_selected {
+                // We do not want this user, so continue
+                continue;
+            } else {
+                // Advance
+                sel_i += 1;
+            }
+        } else if filter_selection {
+            // No more to select, we are finished
+            break;
+        }
+        user_passwords.push((login.user_id, include_passwords.then_some(login.password_file)));
+    }
+
+    Ok(user_passwords)
 }
 
 pub fn get_users_bytes(
     state: &impl State,
     proof: &Proof<()>,
-) -> Result<UserList, OneOf<(StoreError, InvalidProof)>> {
+    include_claims: bool,
+    include_passords: bool
+) -> Result<UserList, OneOf<(StoreError, InvalidProof, UnsortedError)>> {
     let time = state.time();
     let proof_unvalidated = verify_proof(state, proof, time).map_err(OneOf::broaden)?;
 
@@ -46,55 +170,25 @@ pub fn get_users_bytes(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-    let user_table = tx.user_table().to_one_of().map_err(OneOf::broaden)?;
+    let users = select_users(&tx, &targets, include_passords).map_err(OneOf::broaden)?;
 
-    let mut users: Vec<ByteBuf> = Vec::new();
+    let users: Vec<User> = if include_claims {
+        let claims = select_claims(&tx, &targets).map_err(OneOf::broaden)?;
 
-    // Now None user_selection corresponds to not having to check anything in the iter
-    let (iter, filter_selection, user_selection) = match targets {
-        ProofTargetOut::Range((first, last)) => {
-            if first > last {
-                panic!("Selection or range is not sorted!")
+        users.into_iter().merge_join_by(claims.into_iter(), |(a_id, _), (b_id, _)| {
+            a_id.cmp(b_id)
+        }).map(|z| {
+            match z {
+                EitherOrBoth::Both((user_id, password_file), (_, claims)) => User { user_id, password_file, claims: Some(ByteBuf::from(claims.into_bytes()))},
+                EitherOrBoth::Left((user_id, password_file)) => User { user_id, password_file, claims: None },
+                EitherOrBoth::Right((user_id, _)) => panic!("Orphaned claims in database for user {}", user_id),
             }
-
-            (
-                user_table
-                    .range(first.as_str()..=last.as_str())
-                    .to_one_of_two()?,
-                false,
-                Vec::new(),
-            )
-        }
-        ProofTargetOut::Select(select) => (user_table.iter().to_one_of_two()?, true, select),
-        ProofTargetOut::All => (user_table.iter().to_one_of_two()?, false, Vec::new()),
+        }).collect()
+    } else {
+        users.into_iter().map(|(user_id, password_file)| {
+            User { user_id, password_file, claims: None }
+        }).collect()
     };
-
-    let mut sel_i = 0;
-    for user in iter {
-        let user_value = user.1.value();
-        // If claims is None, then include_claims was false
-        let login = UserPassword::deserialize(user_value);
-
-        if sel_i < user_selection.len() {
-            let next_selected = user_selection[sel_i].as_str();
-            if sel_i > 0 && user_selection[sel_i - 1].as_str() > next_selected {
-                panic!("Selection is not sorted!")
-            }
-
-            if login.user_id != next_selected {
-                // We do not want this user, so continue
-                continue;
-            } else {
-                // Advance
-                sel_i += 1;
-            }
-        } else if filter_selection {
-            // No more to select, we are finished
-            break;
-        }
-
-        users.push(ByteBuf::from(user_value.to_vec()))
-    }
 
     Ok(UserList { users })
 }

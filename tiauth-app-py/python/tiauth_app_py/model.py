@@ -42,15 +42,15 @@ class GetUsers(Struct):
     read_proof: ReadAllProof | ReadSomeProof
     include_claims: Literal[True] | None
 
-class UserList(Struct):
-    users: list[bytes]
+
 
 class User(Struct, array_like=True):
     user_id: str
-
-class UserPasswords(Struct, array_like=True):
-    user_id: str
-    password_file: str
+    password_file: str | None
+    claims: bytes | None
+    
+class UserList(Struct, array_like=True):
+    users: list[User]
 
 class LoginFinishRequest(Struct):
     application: str
@@ -68,3 +68,7 @@ class ProofTokenRequest(Struct):
 
 class ProofTokenResponse(Struct):
     tokens: str
+
+class SetClaimsRequest(Struct):
+    application: str
+    claims_proof: ClaimsProof

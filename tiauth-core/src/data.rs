@@ -13,6 +13,7 @@ use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha2::Digest;
+use tracing::debug;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::io::Cursor;
@@ -148,6 +149,10 @@ where
             bytes,
             phantom: PhantomData,
         }
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 
     pub fn as_packed(&self) -> &BytePacked<T> {
@@ -412,9 +417,7 @@ impl ByteSerial for Claims {
     type Deserialized<'a> = ClaimsView<'a>;
 
     fn serialize(&self) -> ByteOwned<Self> {
-        let view = self.to_view();
-
-        ByteOwned::new(view.to_vec())
+        Self::serialize_view(self.to_view())
     }
 
     type DeserializeErr = InvalidClaimsBytes;
@@ -477,6 +480,10 @@ impl Claims {
         let values: VarZeroVec<[u8], Index32> = VarZeroVec::from(&self.values);
 
         ClaimsView { keys, values }
+    }
+
+    fn serialize_view(view: ClaimsView) -> ByteOwned<Claims> {
+        ByteOwned::new(view.to_vec())
     }
 
     pub fn eq_view(&self, other: &ClaimsView) -> bool {
@@ -729,7 +736,8 @@ impl<'a> ClaimsView<'a> {
             let current = &self.keys[i];
             if i != 0 {
                 let prev = &self.keys[i - 1];
-                if prev < current {
+                if prev > current {
+                    debug!("Unsorted claims: {} < {}", prev, current);
                     return Err(ClaimsUnsortedError);
                 }
             }

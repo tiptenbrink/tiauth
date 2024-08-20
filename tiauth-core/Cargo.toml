@@ -33,6 +33,7 @@ camino = "1.1.7"
 tracing = "=0.1.40"
 tracing-subscriber = "=0.3.18"
 tracing-error = "=0.2.0"
+itertools = "0.13.0"
 
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

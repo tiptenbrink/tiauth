@@ -149,6 +149,7 @@ impl ProofTarget for ProofTargetAny {
         Ok(match target {
             Target::All => {
                 if !target_data.0.is_empty() {
+                    debug!("All target should be empty.");
                     return Err(InvalidProof);
                 }
 
@@ -156,14 +157,20 @@ impl ProofTarget for ProofTargetAny {
             }
             Target::Range => {
                 if target_data.0.len() != 2 {
+                    debug!("Range target should consist of exactly two elements.");
                     return Err(InvalidProof);
                 }
                 let last = target_data.0.pop().unwrap();
                 let first = target_data.0.pop().unwrap();
                 ProofTargetOut::Range((first, last))
             }
-            Target::Select => ProofTargetOut::Select(target_data.0),
-            _ => return Err(InvalidProof),
+            Target::Select => {
+                if target_data.0.is_empty() {
+                    debug!("Select target should consist of at least one element.");
+                    return Err(InvalidProof);
+                }
+                ProofTargetOut::Select(target_data.0)
+            },
         })
     }
 }
@@ -742,6 +749,7 @@ impl EphemeralKey {
     ) -> Vec<Self> {
         let key_amount = (amount_valid as u64).min((now - ref_time) / INTERVAL + 1);
 
+        debug!("Computing last {} valid ephmeral keys...", amount_valid);
         (0..(key_amount))
             .rev()
             .map(|i| Self::compute::<INTERVAL>(base_secret, now - (i * INTERVAL), ref_time))

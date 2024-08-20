@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tiauth_core::{encoded::Encoded, ByteOwned, Ephemeral};
-use tiauth_core::Proof;
+use tiauth_core::{Claims, Proof};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PakeRequest {
@@ -46,6 +46,7 @@ pub struct SessionResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetUsers {
     pub application: String,
+    pub include_password: Option<bool>,
     pub include_claims: Option<bool>,
     pub read_proof: Encoded<Proof<()>>,
 }
@@ -64,4 +65,10 @@ pub struct ProofTokenRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProofTokenResponse {
     pub tokens: Encoded<ByteOwned<Ephemeral<()>>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetClaimsRequest {
+    pub application: String,
+    pub claims_proof: Encoded<Proof<Claims>>,
 }
