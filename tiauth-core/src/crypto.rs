@@ -1,14 +1,12 @@
 use aes_gcm_siv::{self as aead, aead::Aead, KeyInit};
-use base64::{engine::general_purpose as b64, Engine as _};
 use ed25519_compact::{self as ed};
-use hmac::{Hmac, Mac};
-use rand::rngs::StdRng;
+use hmac::Mac;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
+use std::fmt::Debug;
 use thiserror::Error;
 use tracing::debug;
-use std::fmt::Debug;
 
 #[derive(Clone)]
 pub struct Key {
@@ -111,13 +109,15 @@ impl Debug for SymmetricKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hex = debug_secret_bytes(self.raw_bytes());
 
-        f.debug_tuple("SymmetricKey").field(&format!("sha256={}...", hex)).finish()
+        f.debug_tuple("SymmetricKey")
+            .field(&format!("sha256={}...", hex))
+            .finish()
     }
 }
 
 impl AsSymmetricKey for SymmetricKey {
     fn as_symmetric_key(&self) -> &SymmetricKey {
-        &self
+        self
     }
 }
 
@@ -172,7 +172,8 @@ pub fn debug_secret_bytes(bytes: &[u8]) -> String {
     let mut hasher = <Sha256 as Digest>::new();
     hasher.update(bytes);
     let result = hasher.finalize();
-    let hex: String = result[0..4].iter()
+    let hex: String = result[0..4]
+        .iter()
         .map(|b| format!("{:02x?}", b).to_string())
         .collect();
 
@@ -291,16 +292,23 @@ pub fn symmetric_decrypt(
             return Ok(decrypted);
         }
     }
-    debug!("Failed to decrypt with keys: {:?}", keys.into_iter().map(|k| k.as_symmetric_key()).collect::<Vec<_>>());
+    debug!(
+        "Failed to decrypt with keys: {:?}",
+        keys.iter()
+            .map(|k| k.as_symmetric_key())
+            .collect::<Vec<_>>()
+    );
 
     Err(DecryptFailed)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
 
-    use rand::{rngs::OsRng, Rng, SeedableRng};
+    use rand::{
+        rngs::{OsRng, StdRng},
+        Rng,
+    };
 
     use super::*;
 

@@ -4,17 +4,19 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
+use opaque_borink::client::{
+    client_login, client_login_finish, client_register, client_register_finish,
+};
+use opaque_borink::Error as OpqError;
 use reqwest::{RequestBuilder, Url};
+use terrors::OneOf;
 use thiserror::Error;
 use tiauth_core::app::{create_set_claims_proof, ProofBaseView};
 use tiauth_core::crypto::{load_key, Key};
-use tiauth_core::error::OneOfTo;
-use tiauth_core::{ByteOwned, BytePacked, Claims, Ephemeral, Proof, SessionClaims};
 use tiauth_core::encoded::Encoded;
+use tiauth_core::error::OneOfTo;
+use tiauth_core::{ByteOwned, BytePacked, Claims, Ephemeral, Proof};
 use tiauth_server::model::*;
-use opaque_borink::Error as OpqError;
-use opaque_borink::client::{client_login, client_login_finish, client_register, client_register_finish};
-use terrors::OneOf;
 use tokio::runtime::{self, Handle, Runtime};
 
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
@@ -23,21 +25,32 @@ use std::time::SystemTime;
 use web_time::SystemTime;
 
 pub fn now_expires() -> u64 {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    
 
-    now
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[derive(Clone)]
 pub struct ApplicationLogin {
     user_id: String,
     all_claims: Option<bool>,
-    requested_claims: Option<Vec<String>>
+    requested_claims: Option<Vec<String>>,
 }
 
 impl ApplicationLogin {
-    pub fn prepare(user_id: &str, all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> Self {
-        ApplicationLogin { user_id: user_id.to_owned(), all_claims, requested_claims }
+    pub fn prepare(
+        user_id: &str,
+        all_claims: Option<bool>,
+        requested_claims: Option<Vec<String>>,
+    ) -> Self {
+        ApplicationLogin {
+            user_id: user_id.to_owned(),
+            all_claims,
+            requested_claims,
+        }
     }
 }
 
@@ -55,9 +68,8 @@ struct WebClient {
     requester: reqwest::Client,
     base_url: Url,
     handle: Arc<Handle>,
-    runtime: Option<Runtime>
+    runtime: Option<Runtime>,
 }
-
 
 impl WebClient {
     fn new(base_url: &str) -> Self {
@@ -73,7 +85,12 @@ impl WebClient {
         let current = Handle::try_current();
 
         let runtime = if current.is_err() {
-            Some(runtime::Builder::new_multi_thread().enable_all().build().unwrap())
+            Some(
+                runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            )
         } else {
             None
         };
@@ -88,7 +105,7 @@ impl WebClient {
             requester: client,
             base_url: url,
             runtime,
-            handle
+            handle,
         }
     }
 
@@ -113,11 +130,16 @@ pub struct AppClient {
     // We use a Mutex so consumers don't need mutable references to AppClient
     // We only unlock it in operations defined here, so we can use a std Mutex and it is never held across an await point, something which would happen
     // if the consumer had to wrap the entire AppClient in a Mutex
-    token_pool: Mutex<VecDeque<ByteOwned<Ephemeral<()>>>>
+    token_pool: Mutex<VecDeque<ByteOwned<Ephemeral<()>>>>,
 }
 
 impl AppClient {
-    pub fn new(application: &str, tiauth_url: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
+    pub fn new(
+        application: &str,
+        tiauth_url: &str,
+        private_key_pem: &str,
+        proof_expiration: Option<u64>,
+    ) -> Self {
         let key = load_key(private_key_pem).unwrap();
         let client = WebClient::new(tiauth_url);
 
@@ -126,18 +148,23 @@ impl AppClient {
             private_key: key,
             proof_expiration: proof_expiration.unwrap_or(1800),
             client,
-            token_pool: Mutex::new(VecDeque::new())
+            token_pool: Mutex::new(VecDeque::new()),
         }
     }
 
-    pub fn prepare_login(&self, user_id: &str, all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> ApplicationLogin {
+    pub fn prepare_login(
+        &self,
+        user_id: &str,
+        all_claims: Option<bool>,
+        requested_claims: Option<Vec<String>>,
+    ) -> ApplicationLogin {
         ApplicationLogin::prepare(user_id, all_claims, requested_claims)
     }
 
-    pub fn prepare_register(&self, user_id: &str
-        //, eph: &BytePacked<Ephemeral<()>>, set_claims: Option<&BytePacked<Claims>>
+    pub fn prepare_register(
+        &self,
+        user_id: &str, //, eph: &BytePacked<Ephemeral<()>>, set_claims: Option<&BytePacked<Claims>>
     ) -> ApplicationRegister {
-
         // let proof = if let Some(claims) = set_claims {
         //     let proof_base = ProofBaseView {
         //         key: &self.private_key,
@@ -150,14 +177,23 @@ impl AppClient {
         //     None
         // };
 
-        ApplicationRegister { user_id: user_id.to_owned(), 
-            // claims_proof: proof 
+        ApplicationRegister {
+            user_id: user_id.to_owned(),
+            // claims_proof: proof
         }
     }
 
-    pub fn prepare_set_claims(&self, user_id: &str, set_claims: &BytePacked<Claims>,) -> Result<ApplicationClaimsProof, NoTokensLeft> {
+    pub fn prepare_set_claims(
+        &self,
+        user_id: &str,
+        set_claims: &BytePacked<Claims>,
+    ) -> Result<ApplicationClaimsProof, NoTokensLeft> {
         let nonce = {
-            self.token_pool.lock().unwrap().pop_front().ok_or(NoTokensLeft)?
+            self.token_pool
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or(NoTokensLeft)?
         };
 
         let proof_base = ProofBaseView {
@@ -165,7 +201,7 @@ impl AppClient {
             application: &self.application,
             now: now_expires(),
             expires_in: self.proof_expiration,
-            nonce: nonce.as_packed()
+            nonce: nonce.as_packed(),
         };
 
         let proof = create_set_claims_proof(proof_base, user_id, set_claims);
@@ -178,21 +214,30 @@ impl AppClient {
     }
 
     async fn load_tokens(&self) {
-        let token_request = ProofTokenRequest { application: self.application.clone() };
+        let token_request = ProofTokenRequest {
+            application: self.application.clone(),
+        };
 
-        let response = self.client.post_at("proof/token")
-            .json(&token_request).send().await.unwrap();
+        let response = self
+            .client
+            .post_at("proof/token")
+            .json(&token_request)
+            .send()
+            .await
+            .unwrap();
 
         let token_response: ProofTokenResponse = response.json().await.unwrap();
 
-        self.token_pool.lock().unwrap().push_back(token_response.tokens.get());
+        self.token_pool
+            .lock()
+            .unwrap()
+            .push_back(token_response.tokens.get());
     }
 }
 
-
 pub struct UserClient {
     application: String,
-    client: WebClient
+    client: WebClient,
 }
 
 impl UserClient {
@@ -212,22 +257,41 @@ impl UserClient {
         Self::new(&server_client.application, tiauth_url)
     }
 
-    
-    pub fn login_user_blocking(&self, app_login: ApplicationLogin, password: &str) -> Result<String, OneOf<(OpqError,)>> {
-        self.client.handle.block_on(self.login_user(app_login, password))
+    pub fn login_user_blocking(
+        &self,
+        app_login: ApplicationLogin,
+        password: &str,
+    ) -> Result<String, OneOf<(OpqError,)>> {
+        self.client
+            .handle
+            .block_on(self.login_user(app_login, password))
     }
 
-    pub async fn login_user(&self, app_login: ApplicationLogin, password: &str) -> Result<String, OneOf<(OpqError,)>> {
+    pub async fn login_user(
+        &self,
+        app_login: ApplicationLogin,
+        password: &str,
+    ) -> Result<String, OneOf<(OpqError,)>> {
         let (start_request, state) = client_login(password).to_one_of()?;
 
-        let pake_request = PakeRequest { application: self.application.clone(), opaque_request: start_request, user_id: app_login.user_id };
+        let pake_request = PakeRequest {
+            application: self.application.clone(),
+            opaque_request: start_request,
+            user_id: app_login.user_id,
+        };
 
-        let response = self.client.post_at("login/start")
-            .json(&pake_request).send().await.unwrap();
+        let response = self
+            .client
+            .post_at("login/start")
+            .json(&pake_request)
+            .send()
+            .await
+            .unwrap();
 
         let pake_response: StartLoginResponse = response.json().await.unwrap();
 
-        let (finish_request, secret) = client_login_finish(&state, password, &pake_response.opaque_response)?;
+        let (finish_request, secret) =
+            client_login_finish(&state, password, &pake_response.opaque_response)?;
 
         let finish_request = LoginFinishRequest {
             application: self.application.clone(),
@@ -238,8 +302,13 @@ impl UserClient {
             requested_claims: app_login.requested_claims,
         };
 
-        let response = self.client.post_at("login/session")
-            .json(&finish_request).send().await.unwrap();
+        let response = self
+            .client
+            .post_at("login/session")
+            .json(&finish_request)
+            .send()
+            .await
+            .unwrap();
 
         assert!(response.status() == 200);
 
@@ -248,32 +317,57 @@ impl UserClient {
         Ok(session_response.session)
     }
 
-    pub fn register_user_blocking(&self, app_register: ApplicationRegister, password: &str) -> Result<(), OneOf<(OpqError,)>> {
+    pub fn register_user_blocking(
+        &self,
+        app_register: ApplicationRegister,
+        password: &str,
+    ) -> Result<(), OneOf<(OpqError,)>> {
         // Async support in PyO3 and other places is not fully mature, so we just block
         // We still use reqwest/tokio so in the future when support is better we can easily migrate
-        self.client.handle.block_on(self.register_user(app_register, password))
+        self.client
+            .handle
+            .block_on(self.register_user(app_register, password))
     }
 
-    pub async fn register_user(&self, app_register: ApplicationRegister, password: &str) -> Result<(), OneOf<(OpqError,)>> {
+    pub async fn register_user(
+        &self,
+        app_register: ApplicationRegister,
+        password: &str,
+    ) -> Result<(), OneOf<(OpqError,)>> {
         let (start_request, state) = client_register(password).to_one_of()?;
 
-        let pake_request = PakeRequest { application: self.application.clone(), opaque_request: start_request, user_id: app_register.user_id };
+        let pake_request = PakeRequest {
+            application: self.application.clone(),
+            opaque_request: start_request,
+            user_id: app_register.user_id,
+        };
 
-        let response = self.client.post_at("register/start")
-            .json(&pake_request).send().await.unwrap();
+        let response = self
+            .client
+            .post_at("register/start")
+            .json(&pake_request)
+            .send()
+            .await
+            .unwrap();
 
         let pake_response: StartRegisterResponse = response.json().await.unwrap();
 
-        let finish_request = client_register_finish(&state, password, &pake_response.opaque_response)?;
+        let finish_request =
+            client_register_finish(&state, password, &pake_response.opaque_response)?;
 
         let finish_request = RegisterFinishRequest {
             application: self.application.clone(),
             opaque_request: finish_request,
-            action_nonce: pake_response.start_nonce
+            action_nonce: pake_response.start_nonce,
         };
 
-        let response = self.client.post_at("register/finish")
-            .json(&finish_request).send().await.unwrap();
+        let response = self
+            .client
+            .post_at("register/finish")
+            .json(&finish_request)
+            .send()
+            .await
+            .unwrap();
 
         assert!(response.status() == 200);
 
@@ -310,7 +404,9 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
 
         let user_client = UserClient::new(application, "http://localhost:3000");
 
-        user_client.register_user_blocking(register, password).unwrap();
+        user_client
+            .register_user_blocking(register, password)
+            .unwrap();
     }
 
     #[async_test]
@@ -344,7 +440,6 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
         let user_id = "some_user";
 
         register_user(&application, &user_id, "pass").await;
-        
     }
 
     #[test]
@@ -359,7 +454,7 @@ MC4CAQAwBQYDK2VwBCIEIDOQyFXRlMQuTiQ9vFBc5qBXG1U2p79Qa0l40jO+Qlr/
         let user_id = "some_user";
 
         register_user_blocking(application, user_id, "pass");
-        
+
         let login = ApplicationLogin::prepare(user_id, Some(true), None);
 
         let user_client = UserClient::new(application, "http://localhost:3000");

@@ -3,9 +3,7 @@
 use crate::data::SessionClaims;
 use crate::data::COUNTER_EXPIRES;
 use crate::data::EXPIRE_TIME;
-use crate::data::LEEWAY;
 use crate::error::OneOfTo;
-use crate::error::WrapErrorOneOf;
 use crate::proof::Ephemeral;
 use crate::proof::EphemeralLoginState;
 use crate::proof::EphemeralType;
@@ -14,22 +12,14 @@ use crate::proof::PasswordFileHash;
 use crate::state::State;
 use crate::store::users;
 use crate::store::StoreError;
-use crate::util::nonce_384;
-use crate::util::nonce_384_bytes;
 use crate::AppState;
-use crate::ByteOwned;
-use crate::BytePacked;
 use crate::ByteSerial;
 use crate::KeyState;
 use crate::Session;
 use opaque_borink::server::{login_server, login_server_finish};
 use opaque_borink::Error as OpaqueError;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use redb::Error as DbError;
 use std::borrow::Borrow;
 use std::str;
-use std::time::SystemTime;
 use terrors::OneOf;
 use thiserror::Error;
 
@@ -50,7 +40,7 @@ pub fn login_start(
     };
 
     let (response, state_data) = login_server(
-        &state.keys().opaque(),
+        state.keys().opaque(),
         &read_login.password_file,
         request,
         user_id,
@@ -224,7 +214,7 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(&app);
+        let state = TestState::setup_test(app);
 
         register_flow(&state, user_id, password, None, None);
 
@@ -234,7 +224,7 @@ mod tests {
 
         let (request, secret) = client_login_finish(&client_state, password, &response).unwrap();
 
-        let (secret_server, login_user_id, pw_file_hash) =
+        let (secret_server, login_user_id, _pw_file_hash) =
             login_finish(&state, &request, &nonce).unwrap();
 
         assert_eq!(secret, secret_server);
@@ -250,7 +240,7 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(&app);
+        let state = TestState::setup_test(app);
 
         register_flow(&state, user_id, password, None, Some(claims));
 

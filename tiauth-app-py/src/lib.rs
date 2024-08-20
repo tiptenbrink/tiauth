@@ -2,31 +2,33 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyBytes, PyDict, PyString};
-use tiauth_app::now_expires;
-use tiauth_core::encoded::Encodable;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
+use tiauth_app::now_expires;
 use tiauth_core::app::ProofBaseView;
 use tiauth_core::crypto::{load_key, Key};
-use tiauth_core::{Claims, Ephemeral};
+use tiauth_core::encoded::Encodable;
 use tiauth_core::{app, ByteOwned, BytePacked, ByteSerial};
+use tiauth_core::{Claims, Ephemeral};
 
 #[pyclass(frozen)]
 struct ProofKey {
     key: Key,
 }
 
-
 struct TypedPyBytes<T: ByteSerial> {
     bytes: PyBackedBytes,
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
 }
 
 impl<T: ByteSerial> TypedPyBytes<T> {
     fn from_bytes(bytes: PyBackedBytes) -> Self {
-        Self { bytes, phantom: PhantomData }
+        Self {
+            bytes,
+            phantom: PhantomData,
+        }
     }
 
     fn as_packed(&self) -> &BytePacked<T> {
@@ -41,47 +43,59 @@ struct ProofToken {
     ephemeral: TypedPyBytes<Ephemeral<()>>,
 }
 
-
 #[pyclass(frozen)]
 struct AppClient {
-    inner: Arc<tiauth_app::AppClient>
+    inner: Arc<tiauth_app::AppClient>,
 }
-
 
 #[pyclass(frozen)]
 pub struct ApplicationLogin {
-    inner: Arc<tiauth_app::ApplicationLogin>
+    inner: Arc<tiauth_app::ApplicationLogin>,
 }
-
 
 #[pyclass(frozen)]
 pub struct ApplicationRegister {
-    inner: Arc<tiauth_app::ApplicationRegister>
+    inner: Arc<tiauth_app::ApplicationRegister>,
 }
 
 #[pyclass(frozen)]
 pub struct ApplicationClaimsProof {
-    inner: Arc<tiauth_app::ApplicationClaimsProof>
+    inner: Arc<tiauth_app::ApplicationClaimsProof>,
 }
 
 #[pymethods]
 impl AppClient {
     #[new]
     #[pyo3(signature = (application, tiauth_url, private_key_pem, proof_expiration=None))]
-    fn new(application: &str, tiauth_url: &str, private_key_pem: &str, proof_expiration: Option<u64>) -> Self {
-        let inner = Arc::new(tiauth_app::AppClient::new(application, tiauth_url, private_key_pem, proof_expiration));
+    fn new(
+        application: &str,
+        tiauth_url: &str,
+        private_key_pem: &str,
+        proof_expiration: Option<u64>,
+    ) -> Self {
+        let inner = Arc::new(tiauth_app::AppClient::new(
+            application,
+            tiauth_url,
+            private_key_pem,
+            proof_expiration,
+        ));
 
-        Self {
-            inner
-        }
+        Self { inner }
     }
 
     #[pyo3(signature = (user_id, all_claims=None, requested_claims=None))]
-    pub fn prepare_login(&self, user_id: &str, all_claims: Option<bool>, requested_claims: Option<Vec<String>>) -> ApplicationLogin {
-        let inner = self.inner.prepare_login(user_id, all_claims, requested_claims);
+    pub fn prepare_login(
+        &self,
+        user_id: &str,
+        all_claims: Option<bool>,
+        requested_claims: Option<Vec<String>>,
+    ) -> ApplicationLogin {
+        let inner = self
+            .inner
+            .prepare_login(user_id, all_claims, requested_claims);
 
         ApplicationLogin {
-            inner: Arc::new(inner)
+            inner: Arc::new(inner),
         }
     }
 
@@ -92,7 +106,7 @@ impl AppClient {
         let inner = self.inner.prepare_register(user_id);
 
         ApplicationRegister {
-            inner: Arc::new(inner)
+            inner: Arc::new(inner),
         }
     }
 
@@ -100,20 +114,25 @@ impl AppClient {
         self.inner.load_tokens_blocking();
     }
 
-    pub fn prepare_set_claims(&self, user_id: &str, set_claims: ClaimsSerialized) -> PyResult<ApplicationClaimsProof> {
-        let inner = self.inner.prepare_set_claims(user_id, set_claims.as_bytes()).map_err(|e| {
-            PyValueError::new_err(e.to_string())
-        })?;
+    pub fn prepare_set_claims(
+        &self,
+        user_id: &str,
+        set_claims: ClaimsSerialized,
+    ) -> PyResult<ApplicationClaimsProof> {
+        let inner = self
+            .inner
+            .prepare_set_claims(user_id, set_claims.as_bytes())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         Ok(ApplicationClaimsProof {
-            inner: Arc::new(inner)
+            inner: Arc::new(inner),
         })
     }
 }
 
 #[pyclass(frozen)]
 struct UserClient {
-    inner: Arc<tiauth_app::UserClient>
+    inner: Arc<tiauth_app::UserClient>,
 }
 
 #[pymethods]
@@ -122,9 +141,7 @@ impl UserClient {
     fn new(application: &str, tiauth_url: &str) -> Self {
         let inner = Arc::new(tiauth_app::UserClient::new(application, tiauth_url));
 
-        Self {
-            inner
-        }
+        Self { inner }
     }
 
     /// The ApplicationRegister can be quite big as it can contain all claim values. For now we only have an Encoded type
@@ -132,9 +149,14 @@ impl UserClient {
     /// be encoded and serialized from a reference.
     /// So until then we want to have the owned value without cloning, so we must consume the given value. This is done by
     /// taking it out of an Option inside a Mutex. You cannot reuse the ApplicationRegister.
-    pub fn register_user(&self, app_register: &ApplicationRegister, password: &str) -> PyResult<()> {
-
-        self.inner.register_user_blocking(app_register.inner.as_ref().clone(), password).unwrap();
+    pub fn register_user(
+        &self,
+        app_register: &ApplicationRegister,
+        password: &str,
+    ) -> PyResult<()> {
+        self.inner
+            .register_user_blocking(app_register.inner.as_ref().clone(), password)
+            .unwrap();
 
         Ok(())
     }
@@ -151,7 +173,6 @@ impl UserClient {
 #[pyfunction]
 fn proof_token_from_bytes(bytes: PyBackedBytes) -> PyResult<ProofToken> {
     let ephemeral = TypedPyBytes::from_bytes(bytes);
-
 
     Ok(ProofToken { ephemeral })
 }
@@ -267,10 +288,19 @@ impl ClaimsSerialized {
     }
 }
 
-fn proof_base<'a>(application: &'a str, key: &'a Bound<'_, ProofKey>, token: &'a Bound<'_, ProofToken>) -> ProofBaseView<'a> {
+fn proof_base<'a>(
+    application: &'a str,
+    key: &'a Bound<'_, ProofKey>,
+    token: &'a Bound<'_, ProofToken>,
+) -> ProofBaseView<'a> {
     let now = now_expires();
 
-    ProofBaseView::new(application, &key.get().key, now, token.get().ephemeral.as_packed())
+    ProofBaseView::new(
+        application,
+        &key.get().key,
+        now,
+        token.get().ephemeral.as_packed(),
+    )
 }
 
 #[pyfunction]
@@ -285,9 +315,8 @@ fn create_set_claims_proof(
     let proof_base = proof_base(application, key, token);
 
     // The claim bytes are immutable, so we can use them even from outside the GIL,
-    let proof = py.allow_threads(|| {
-        app::create_set_claims_proof(proof_base, user_id, claims.as_bytes())
-    });
+    let proof =
+        py.allow_threads(|| app::create_set_claims_proof(proof_base, user_id, claims.as_bytes()));
 
     Ok(proof.encode())
 }
@@ -304,12 +333,15 @@ fn create_set_claims_proof(
 // }
 
 #[pyfunction]
-fn create_read_all_proof(py: Python<'_>, application: &str, key: &Bound<'_, ProofKey>, token: &Bound<'_, ProofToken>) -> PyResult<String> {
+fn create_read_all_proof(
+    py: Python<'_>,
+    application: &str,
+    key: &Bound<'_, ProofKey>,
+    token: &Bound<'_, ProofToken>,
+) -> PyResult<String> {
     let proof_base = proof_base(application, key, token);
 
-    let proof = py.allow_threads(|| {
-        app::create_read_all_proof(proof_base).encode()
-    });
+    let proof = py.allow_threads(|| app::create_read_all_proof(proof_base).encode());
 
     Ok(proof)
 }

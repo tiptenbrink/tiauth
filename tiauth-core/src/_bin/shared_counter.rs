@@ -1,7 +1,6 @@
 use crossbeam::channel::bounded;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, sleep};
 use std::time::Duration;
 
@@ -52,7 +51,7 @@ fn main() {
     };
     //let mut all_seen = HashSet::new();
     for handle in handles {
-        let seen = handle.join().unwrap();
+        handle.join().unwrap();
         //all_seen.extend(seen);
     }
     //assert_eq!((all_seen.len() as u64), tot);

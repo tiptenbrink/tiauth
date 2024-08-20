@@ -6,15 +6,18 @@ use std::thread::{self, sleep};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tiauth_core::appendonly::{AppendOnlyArcVec, PushMode, ReadableVector};
 use tiauth_core::crypto::load_public_key;
+use tiauth_core::state_impl::AppStateImpl;
 use tiauth_core::StoreAddress;
 use tiauth_core::{crypto::SavedPublicKey, Application, State};
-use tiauth_core::state_impl::AppStateImpl;
-use tiauth_server::{router::create_router, state::{ServerState as GenServerState}, state::{GovernorServerState as GenGovernorServerState}};
+use tiauth_server::{
+    router::create_router, state::GovernorServerState as GenGovernorServerState,
+    state::ServerState as GenServerState,
+};
 use tiny_http::{Method, Response};
 
-use tokio::{runtime, time};
-use tokio::sync::{broadcast, oneshot};
 use tokio::sync::watch::{self, Receiver, Sender};
+use tokio::sync::{broadcast, oneshot};
+use tokio::{runtime, time};
 use tracing::debug;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -23,7 +26,10 @@ type ServerState = GenServerState<AppStateImpl>;
 type GovernorServerState = GenGovernorServerState<AppStateImpl>;
 
 fn create_dummy_app() -> AppStateImpl {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let public_key_pem = "-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
@@ -31,7 +37,13 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
         .to_owned();
     let public_key = load_public_key(&public_key_pem).unwrap();
 
-    let app_state = AppStateImpl::load_app_state("dummy", StoreAddress::from_path("dummy.redb"), Some(public_key), now).unwrap();
+    let app_state = AppStateImpl::load_app_state(
+        "dummy",
+        StoreAddress::from_path("dummy.redb"),
+        Some(public_key),
+        now,
+    )
+    .unwrap();
 
     app_state
 }
@@ -39,16 +51,15 @@ MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
 fn init_state() -> GovernorServerState {
     let mut state = GovernorServerState::new(32);
 
-   
-//     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    //     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-//     let public_key_pem = "-----BEGIN PUBLIC KEY-----
-// MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
-// -----END PUBLIC KEY-----"
-//         .to_owned();
-//     let public_key = load_public_key(&public_key_pem).unwrap();
+    //     let public_key_pem = "-----BEGIN PUBLIC KEY-----
+    // MCowBQYDK2VwAyEAIWUw+W6ukT5D+Dm8osAgTAbeD43xtzb9GAjpJPUVnEs=
+    // -----END PUBLIC KEY-----"
+    //         .to_owned();
+    //     let public_key = load_public_key(&public_key_pem).unwrap();
 
-//     let app_state = AppStateImpl::load_app_state("some_app", StoreAddress::from_path("some_app.redb"), Some(public_key), now).unwrap();
+    //     let app_state = AppStateImpl::load_app_state("some_app", StoreAddress::from_path("some_app.redb"), Some(public_key), now).unwrap();
 
     //state.load_application(app_state);
 
@@ -57,7 +68,12 @@ fn init_state() -> GovernorServerState {
 
 /// The 'governor' (as opposed to admin, which is per app) allows registration and deregistration of applications. It runs as a separate tiny-http server in a single loop
 /// so that we can have mutable state.
-fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState, mut apps_to_delete: AppendOnlyArcVec<StoreAddress, PushMode>, exit_receiver: broadcast::Receiver<()>) {
+fn governor_loop(
+    sender: Sender<ServerState>,
+    mut state: GovernorServerState,
+    mut apps_to_delete: AppendOnlyArcVec<StoreAddress, PushMode>,
+    exit_receiver: broadcast::Receiver<()>,
+) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -112,7 +128,9 @@ fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState, mu
             let app_name = split.next();
 
             if empty.is_none() || !empty.unwrap().is_empty() || app_name.is_none() {
-                let response = Response::from_string("Failed to parse registration! Request path must be of form /load/{app_name}");
+                let response = Response::from_string(
+                    "Failed to parse registration! Request path must be of form /load/{app_name}",
+                );
                 request.respond(response.with_status_code(400)).unwrap();
                 continue;
             }
@@ -159,11 +177,19 @@ fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState, mu
                     continue;
                 }
             };
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-            let app_state = AppStateImpl::load_app_state(app_name, StoreAddress::from_path(format!("{}.redb", app_name)), Some(public_key), now).unwrap();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let app_state = AppStateImpl::load_app_state(
+                app_name,
+                StoreAddress::from_path(format!("{}.redb", app_name)),
+                Some(public_key),
+                now,
+            )
+            .unwrap();
             state.load_application(app_state)
         } else if request_url.starts_with("/delete") {
-            
             let mut split = request_url.strip_prefix("/delete").unwrap().split('/');
             let empty = split.next();
             let app_name = split.next();
@@ -202,7 +228,6 @@ fn governor_loop(sender: Sender<ServerState>, mut state: GovernorServerState, mu
     }
 }
 
-
 async fn server(state_receiver: Receiver<ServerState>, exit_receiver: broadcast::Receiver<()>) {
     println!("Starting server...");
     loop {
@@ -225,8 +250,7 @@ async fn server(state_receiver: Receiver<ServerState>, exit_receiver: broadcast:
             _ = exit_receiver.recv() => {
                 break;
             }
-        }  
-
+        }
     }
 }
 
@@ -239,7 +263,6 @@ async fn new_state(mut receiver: Receiver<ServerState>) {
         tokio::time::sleep(Duration::MAX).await;
     }
 }
-
 
 fn install_tracing() {
     // We have to add the error layer (see the examples in color-eyre), so we can't just use the default init
@@ -260,13 +283,14 @@ fn main() {
     let (tx, rx) = watch::channel::<ServerState>(state.view());
     let (extd, mut extd_r) = broadcast::channel::<()>(2);
     let (ex_tx, ex_rx) = broadcast::channel::<()>(1);
-    
+
     let apps_to_delete: AppendOnlyArcVec<StoreAddress, PushMode> = AppendOnlyArcVec::new(32);
     let delete_view = apps_to_delete.view();
-    
+
     let extd_r_governor = extd.subscribe();
     let tx_governor = tx.clone();
-    let handle = thread::spawn(|| governor_loop(tx_governor, state, apps_to_delete, extd_r_governor));
+    let handle =
+        thread::spawn(|| governor_loop(tx_governor, state, apps_to_delete, extd_r_governor));
 
     ctrlc::set_handler(move || {
         ex_tx.send(()).unwrap();

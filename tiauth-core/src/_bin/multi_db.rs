@@ -4,7 +4,7 @@ use redb::{Database, ReadableTable, TableDefinition};
 use std::{
     env::current_dir,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -86,9 +86,9 @@ const SESSION_SYNC: TableDefinition<&'static [u8], u32> = TableDefinition::new("
 fn write_session(session: SessionInfo, sender: Sender<CreateSession>) -> CreateSessionResult {
     let (sess, r) = CreateSession::new(session);
     sender.send(sess).unwrap();
-    let result = r.recv().unwrap();
+
     //println!("result: {:?}", result);
-    result
+    r.recv().unwrap()
 }
 
 fn synchronize(
@@ -198,7 +198,7 @@ fn main() {
         "single threaded load:  {} inserts in {}ms. {}ms/pair",
         300 * 4,
         duration_time,
-        duration_time / (4f64 * 300 as f64)
+        duration_time / (4f64 * 300_f64)
     );
 
     join.join().unwrap();

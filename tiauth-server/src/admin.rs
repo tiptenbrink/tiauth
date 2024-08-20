@@ -1,10 +1,6 @@
+use crate::model::GetUsers;
 use rmp_serde::encode;
-use serde::Deserialize;
-use tiauth_core::{admin, Proof, State};
-use tiauth_core::encoded::Encoded;
-use crate::{model::GetUsers};
-
-
+use tiauth_core::{admin, State};
 
 pub fn get_users_encoded(state: &impl State, request: GetUsers) -> Vec<u8> {
     let proof = request.read_proof.get();

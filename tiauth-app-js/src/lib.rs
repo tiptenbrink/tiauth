@@ -1,6 +1,6 @@
 use js_sys::{Array, Error, Object, Uint8Array};
-use tiauth_core::encoded::Encodable;
 use std::cmp::Ordering;
+use tiauth_core::encoded::Encodable;
 use tiauth_core::{app, ByteOwned, ByteSerial};
 use tiauth_core::{
     app::ProofBaseView,
@@ -75,11 +75,7 @@ pub fn create_set_claims_proof_map(
         return Err(Error::new("Cannot interpret claims argument as Claims type!").into());
     };
 
-    Ok(app::create_set_claims_proof(
-        proof_base,
-        &user_id,
-        claims.as_packed(),
-    ).encode())
+    Ok(app::create_set_claims_proof(proof_base, &user_id, claims.as_packed()).encode())
 }
 
 #[wasm_bindgen(js_name = createResetProof)]

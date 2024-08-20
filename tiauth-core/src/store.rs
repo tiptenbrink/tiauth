@@ -1,26 +1,20 @@
-use base64::{engine::general_purpose as b64, Engine as _};
 use camino::{Utf8Path, Utf8PathBuf};
 use redb::{
     AccessGuard, CommitError, Database, Error as DbError, Key, ReadOnlyTable, ReadTransaction,
     ReadableTable as DbReadableTable, StorageError, Table, TableDefinition, TableError,
     TransactionError, Value, WriteTransaction,
 };
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::{
-    borrow::Borrow, collections::HashMap, fmt::{write, Display}, fs, io::Cursor, marker::PhantomData, num::ParseIntError, ops::RangeBounds, path::Path, str::Utf8Error, string::FromUtf8Error, sync::Arc, time::SystemTime
+    borrow::Borrow, fmt::Display, fs, num::ParseIntError, ops::RangeBounds, path::Path,
+    string::FromUtf8Error,
 };
-use terrors::OneOf;
 use thiserror::Error;
 
 use crate::{
-    crypto::{self, KeyError},
-    data::{empty_claim_bytes, ByteOwned, ByteSerial, SerializedAs, SessionClaims, UserPassword},
-    encoded::Encodable,
-    error::WrapErrorOneOf,
-    proof::{EphemeralContent, EphemeralType},
-    state::State,
-    util::{combine_encode, rmp_read_bin, rmp_read_str},
-    BytePacked, Claims,
+    crypto::KeyError,
+    data::{empty_claim_bytes, ByteOwned, ByteSerial, SessionClaims},
+    Claims,
 };
 
 // pub type TableStore = (String, String, String);
@@ -353,7 +347,7 @@ impl StoreAddress {
         let new_file_name = format!("{}.{}.{}", file_stem, name, file_suffix);
         let new_path = match self.0.parent() {
             Some(parent) => parent.join(new_file_name),
-            None => Utf8PathBuf::from(new_file_name)
+            None => Utf8PathBuf::from(new_file_name),
         };
         Self(new_path)
     }
@@ -478,35 +472,33 @@ impl WriteTx {
     //     TxTables { tx: &self, keys: None }
     // }
 
-    pub fn keys_table<'tx>(&'tx self) -> Result<WriteTable<'tx, KeysTableType>, StoreError> {
+    pub fn keys_table(&self) -> Result<WriteTable<'_, KeysTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(KEYS)?,
         })
     }
 
-    pub fn user_table<'tx>(&'tx self) -> Result<WriteTable<'tx, UserTableType>, StoreError> {
+    pub fn user_table(&self) -> Result<WriteTable<'_, UserTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(USERS)?,
         })
     }
 
-    pub fn claims_table<'tx>(&'tx self) -> Result<WriteTable<'tx, ClaimsTableType>, StoreError> {
+    pub fn claims_table(&self) -> Result<WriteTable<'_, ClaimsTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(CLAIMS)?,
         })
     }
 
-    pub fn sessions_table<'tx>(
-        &'tx self,
-    ) -> Result<WriteTable<'tx, SessionsTableType>, StoreError> {
+    pub fn sessions_table(&self) -> Result<WriteTable<'_, SessionsTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(SESSIONS)?,
         })
     }
 
-    pub fn sessions_expiry_table<'tx>(
-        &'tx self,
-    ) -> Result<WriteTable<'tx, SessionsExpiryTableType>, StoreError> {
+    pub fn sessions_expiry_table(
+        &self,
+    ) -> Result<WriteTable<'_, SessionsExpiryTableType>, StoreError> {
         Ok(WriteTable {
             table: self.tx.open_table(SESSIONS_EXPIRY)?,
         })
@@ -529,8 +521,8 @@ type KeysTableWrite<'tx> = WriteTable<'tx, KeysTableType>;
 pub mod keys {
     use super::*;
 
-    pub fn get_opaque_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_opaque_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
     where
@@ -539,8 +531,8 @@ pub mod keys {
         get_or_create(table, "opaque_setup", f)
     }
 
-    pub fn get_session_key_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_session_key_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         i: usize,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
@@ -552,8 +544,8 @@ pub mod keys {
         get_or_create(table, key_name.as_str(), f)
     }
 
-    pub fn get_ephemeral_secret_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_ephemeral_secret_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
     where
@@ -562,8 +554,8 @@ pub mod keys {
         get_or_create(table, "ephemeral_secret", f)
     }
 
-    pub fn get_ephemeral_time_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_ephemeral_time_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
     where
@@ -572,8 +564,8 @@ pub mod keys {
         get_or_create(table, "ephemeral_time", f)
     }
 
-    pub fn get_ephemeral_valid_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_ephemeral_valid_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
     where
@@ -582,8 +574,8 @@ pub mod keys {
         get_or_create(table, "ephemeral_valid", f)
     }
 
-    pub fn get_or_create<'tx, F>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn get_or_create<F>(
+        table: &mut KeysTableWrite<'_>,
         key: &str,
         f: F,
     ) -> Result<KeysVOwned, StoreError>
@@ -600,8 +592,8 @@ pub mod keys {
         Ok(bytes)
     }
 
-    pub fn overwrite_or_get<'tx>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn overwrite_or_get(
+        table: &mut KeysTableWrite<'_>,
         key: &str,
         value: Option<KeysVOwned>,
     ) -> Result<Option<KeysVOwned>, StoreError> {
@@ -615,8 +607,8 @@ pub mod keys {
         }
     }
 
-    pub fn overwrite_public_key_or_get<'tx>(
-        table: &mut KeysTableWrite<'tx>,
+    pub fn overwrite_public_key_or_get(
+        table: &mut KeysTableWrite<'_>,
         value: Option<KeysVOwned>,
     ) -> Result<Option<KeysVOwned>, StoreError> {
         overwrite_or_get(table, "public_key", value)
@@ -647,7 +639,7 @@ pub trait ReadableTable<K: Key + 'static, V: Value + 'static> {
         range: impl RangeBounds<KB> + 'k,
     ) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
 
-    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, K>, ReadGuard<'tbl, V>)>, StoreError>;
+    fn iter(&self) -> Result<Vec<(ReadGuard<'_, K>, ReadGuard<'_, V>)>, StoreError>;
 }
 
 // impl<'tx> ReadableTable<UsersK, UsersV> for UserTable<'tx> {
@@ -705,7 +697,7 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for WriteTable<'tx, T> {
         &'tbl self,
         key: impl Borrow<<T::Key as Value>::SelfType<'k>>,
     ) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
-        Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
+        Ok(self.table.get(key)?.map(ReadGuard))
     }
 
     fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(
@@ -715,17 +707,18 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for WriteTable<'tx, T> {
         let range_result: Result<Vec<_>, _> = self
             .table
             .range(range)?
-            .into_iter()
             .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
             .collect();
 
         Ok(range_result?)
     }
-    
-    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
-        let result: Result<Vec<_>, _> = self.table.iter()?.into_iter().map(|kv| {
-            kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v)))
-        }).collect();
+
+    fn iter(&self) -> Result<Vec<(ReadGuard<'_, T::Key>, ReadGuard<'_, T::Value>)>, StoreError> {
+        let result: Result<Vec<_>, _> = self
+            .table
+            .iter()?
+            .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
+            .collect();
 
         Ok(result?)
     }
@@ -736,7 +729,7 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
         &'tbl self,
         key: impl Borrow<<T::Key as Value>::SelfType<'k>>,
     ) -> Result<Option<ReadGuard<'tbl, T::Value>>, StoreError> {
-        Ok(self.table.get(key)?.map(|g| ReadGuard(g)))
+        Ok(self.table.get(key)?.map(ReadGuard))
     }
 
     fn range<'tbl, 'k, KB: Borrow<<T::Key as Value>::SelfType<'k>> + 'k>(
@@ -746,17 +739,18 @@ impl<'tx, T: TableType> ReadableTable<T::Key, T::Value> for ReadTable<T> {
         let range_result: Result<Vec<_>, _> = self
             .table
             .range(range)?
-            .into_iter()
             .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
             .collect();
 
         Ok(range_result?)
     }
-    
-    fn iter<'tbl>(&'tbl self) -> Result<Vec<(ReadGuard<'tbl, T::Key>, ReadGuard<'tbl, T::Value>)>, StoreError> {
-        let result: Result<Vec<_>, _> = self.table.iter()?.into_iter().map(|kv| {
-            kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v)))
-        }).collect();
+
+    fn iter(&self) -> Result<Vec<(ReadGuard<'_, T::Key>, ReadGuard<'_, T::Value>)>, StoreError> {
+        let result: Result<Vec<_>, _> = self
+            .table
+            .iter()?
+            .map(|kv| kv.map(|(k, v)| (ReadGuard(k), ReadGuard(v))))
+            .collect();
 
         Ok(result?)
     }
@@ -962,7 +956,7 @@ pub mod users {
                 // This is very cheap since it's a zero-copy deserialization
                 let claim_view = login.claims.deserialize();
 
-                let (claims, not_found) = claim_view.subset_serialize(&subset);
+                let (claims, not_found) = claim_view.subset_serialize(subset);
                 (claims, SessionClaimsView::Some(not_found))
             } else {
                 // While later we only need a reference, we clone here to not have to keep the table "open" beyond this function

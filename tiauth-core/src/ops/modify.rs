@@ -1,7 +1,4 @@
-use crate::data::{
-    empty_packed, ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE, DELETE_AGE, LEEWAY,
-};
-use crate::encoded::{Encodable, Encoded};
+use crate::data::{empty_packed, ClaimKeys, ModifyClaimError, UserPassword, CHANGE_AGE};
 use crate::error::OneOfTo;
 // use crate::ops::verify::verify_proof_write;
 use crate::proof::{
@@ -9,10 +6,9 @@ use crate::proof::{
     ProofSingleTarget,
 };
 use crate::state::State;
-use crate::store::{users, LoginFieldError, ReadableTable, StoreError};
+use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
-use crate::{ActionType, BytePacked, ByteSerial, Claims, KeyState, Proof, Session};
-use std::time::SystemTime;
+use crate::{ActionType, KeyState, Proof, Session};
 use terrors::OneOf;
 
 use super::verify::{decrypt_session, verify_proof, verify_session};
@@ -447,15 +443,15 @@ pub fn user_remove_claims(
 mod tests {
 
     use super::*;
-    use crate::data::{BytePacked, SessionClaims};
+    use crate::data::SessionClaims;
     use crate::ops::login::test_util::*;
     use crate::ops::register::test_util::*;
-    use crate::ops::verify::proof_token;
+
     use crate::proof::ProofAction;
     use crate::state::test_util::TestState;
     use crate::state::DriverState;
     use crate::verify::proof_token_at;
-    use crate::{AppState, Target, TargetList};
+    use crate::{AppState, ByteSerial, Target, TargetList};
 
     #[test]
     fn test_reset_password() {
@@ -502,8 +498,7 @@ mod tests {
 
         let state = TestState::setup_test(app);
 
-        let session =
-            login_create_session(&state, user_id, password, None, SessionClaims::All);
+        let session = login_create_session(&state, user_id, password, None, SessionClaims::All);
 
         let nonce = change_password(&state, &session).unwrap();
 

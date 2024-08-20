@@ -28,13 +28,18 @@ pub struct ProofBaseView<'a> {
 }
 
 impl<'a> ProofBaseView<'a> {
-    pub fn new(application: &'a str, key: &'a Key, now: u64, nonce: &'a BytePacked<Ephemeral<()>>) -> Self {
+    pub fn new(
+        application: &'a str,
+        key: &'a Key,
+        now: u64,
+        nonce: &'a BytePacked<Ephemeral<()>>,
+    ) -> Self {
         Self {
             application,
             expires_in: 1800,
             key,
             now,
-            nonce
+            nonce,
         }
     }
 }

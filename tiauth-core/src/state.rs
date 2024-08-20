@@ -2,33 +2,22 @@
 use opaque_borink::create_setup;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
-use std::borrow::Borrow;
-use std::cell::{OnceCell, RefCell};
-use std::panic::Location;
-use std::sync::{atomic, LazyLock, OnceLock, RwLock, Weak};
+use std::sync::atomic;
 // use redb::{Database, Error as DbError, ReadableTable, TableDefinition};
-use rmp_serde::{decode, encode};
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
+use sha2::Digest;
+use std::sync::atomic::AtomicU64;
 #[cfg(any(not(target_arch = "wasm32"), not(target_os = "unknown")))]
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use crate::counter::{CompactSet, Counter};
-use crate::crypto::{
-    create_key, create_symmetric_key, load_key, load_public_key, save_private_key, save_public_key,
-    Key, PublicKey,
-};
+use crate::crypto::{create_key, load_public_key, save_public_key, PublicKey};
 use crate::data::{Application, SessionKey, EPHEMERAL_INTERVAL};
 use crate::proof::EphemeralKey;
 use crate::store::{
-    keys, DataDeserializationErrorSource, Store, StoreAddress, StoreError, StoreType,
-    WrapDeserializationError, WrapVecTryFromError,
+    keys, Store, StoreAddress, StoreError, StoreType, WrapDeserializationError, WrapVecTryFromError,
 };
 
 // pub trait GovernorState: State {
@@ -95,7 +84,6 @@ use crate::store::{
 // }
 
 pub trait GovernorState: State {
-
     // fn app_tables(&self, application: &str) -> AppTable;
 
     // fn app_key(&self, application: &str) -> PublicKey;
@@ -330,7 +318,7 @@ pub struct ServerThreadState {
 //     pub static STATE: RefCell<OnceCell<ServerThreadState>> = RefCell::new(OnceCell::new());
 // }
 
-// fn 
+// fn
 
 // impl ServerState for ServerStateImpl {
 //     fn app(&self, application: String) -> &impl State {
@@ -346,7 +334,6 @@ pub struct ServerThreadState {
 //         self.apps.keys().into_iter().collect()
 //     }
 // }
-
 
 pub struct AppStateImpl {
     pub active: bool,
@@ -371,7 +358,7 @@ impl AppStateImpl {
         now: u64,
     ) -> Result<AppStateImpl, StoreError> {
         let store = Store::load(address, StoreType::Application)?;
-    
+
         let AppInitState {
             opaque,
             ephemeral_secret,
@@ -380,7 +367,7 @@ impl AppStateImpl {
             ephemeral_valid,
             ephemeral_time,
         } = init_app_state(&store, public_key, &mut StdRng::from_entropy(), now)?;
-    
+
         let key_state = KeyStateImpl {
             opaque,
             valid_session_keys: session_keys,
@@ -388,22 +375,22 @@ impl AppStateImpl {
             ephemeral_valid,
             ephemeral_time,
         };
-    
+
         let counter = Counter::new();
         let compact_set = CompactSet::new();
         let time = AtomicU64::new(now);
-    
+
         let app_state = AppStateImpl {
             active: true,
             application: application.to_owned(),
             public_key,
             counter,
             compact_set,
-            store: store,
+            store,
             key_state,
             time,
         };
-    
+
         Ok(app_state)
     }
 }
@@ -439,7 +426,7 @@ impl AppState for AppStateImpl {
     fn application(&self) -> &str {
         &self.application
     }
-    
+
     fn active(&self) -> bool {
         todo!()
     }
@@ -469,7 +456,6 @@ impl DriverState for AppStateImpl {
 impl State for AppStateImpl {}
 
 impl GovernorState for AppStateImpl {
-
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2> {
         &mut self.key_state
     }
@@ -699,7 +685,6 @@ fn init_app_state<const SN: usize>(
 
 #[cfg(feature = "test")]
 pub mod test_util {
-    use std::{cell::RefCell, ops::Deref};
 
     use camino::Utf8Path;
 
@@ -739,7 +724,7 @@ pub mod test_util {
         fn keys(&self) -> &impl KeyState<2> {
             self.state.keys()
         }
-        
+
         fn active(&self) -> bool {
             self.state.active()
         }

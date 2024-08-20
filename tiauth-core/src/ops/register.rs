@@ -4,22 +4,19 @@ use thiserror::Error;
 use crate::data::empty_packed;
 use crate::data::Claims;
 use crate::data::UserPassword;
-use crate::encoded::Encodable;
-use crate::error::{OneOfTo, WrapErrorOneOf};
+use crate::error::OneOfTo;
 use crate::proof::Ephemeral;
 use crate::proof::EphemeralChangePasswordState;
 use crate::proof::EphemeralContent;
 use crate::proof::EphemeralEmptyState;
-use crate::proof::EphemeralStateType;
 use crate::proof::EphemeralType;
 use crate::proof::InvalidEphemeral;
 use crate::state::State;
-use crate::store::users;
 use crate::store::ReadableTable;
 use crate::store::StoreError;
 use crate::AppState;
 use crate::ByteSerial;
-use crate::{BytePacked, KeyState};
+use crate::KeyState;
 use opaque_borink::server::register_server_finish;
 use std::str;
 use terrors::OneOf;
@@ -181,13 +178,7 @@ pub fn register_finish(
 pub mod test_util {
     use opaque_borink::client::{client_register, client_register_finish};
 
-    use crate::{
-        data::{UserClaims, UserPassword},
-        encoded::Encoded,
-        state::test_util::TestState,
-        store::users,
-        ByteSerial,
-    };
+    use crate::{data::UserClaims, state::test_util::TestState, store::users, ByteSerial};
 
     use super::*;
 
@@ -214,19 +205,14 @@ pub mod test_util {
                 claims: claims.as_packed(),
             };
 
-            users::set_login_claims(&state.store(), claims_login).unwrap();
+            users::set_login_claims(state.store(), claims_login).unwrap();
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        data::{ByteSerial, Claims, UserPassword},
-        state::test_util::TestState,
-        store::users,
-        AppState,
-    };
+    use crate::{data::UserPassword, state::test_util::TestState, store::users, AppState};
 
     use super::test_util::*;
 
@@ -243,11 +229,11 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(&app);
+        let state = TestState::setup_test(app);
 
         register_flow(&state, user_id, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id)
+        let read_login = users::get_login(state.store(), &value.user_id)
             .unwrap()
             .unwrap();
 
@@ -267,11 +253,11 @@ mod tests {
         let app = "abc";
         let password = "pass";
 
-        let state = TestState::setup_test(&app);
+        let state = TestState::setup_test(app);
 
         register_flow(&state, user_id, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id)
+        let read_login = users::get_login(state.store(), &value.user_id)
             .unwrap()
             .unwrap();
         let initial_pw_file = read_login.password_file;
@@ -279,7 +265,7 @@ mod tests {
         // Registering the second time should be a noop
         register_flow(&state, user_id, password, None, None);
 
-        let read_login = users::get_login(&state.store(), &value.user_id)
+        let read_login = users::get_login(state.store(), &value.user_id)
             .unwrap()
             .unwrap();
 

@@ -1,14 +1,12 @@
-use crate::crypto::PublicKey;
-use crate::data::{empty_packed, ByteSerial, SessionStatus, UserPassword, EPHEMERAL_INTERVAL};
-use crate::error::{OneOfTo, WrapErrorOneOf};
+use crate::data::{empty_packed, ByteSerial, UserPassword, EPHEMERAL_INTERVAL};
+use crate::error::OneOfTo;
 use crate::proof::{
     DecryptedSession, Ephemeral, EphemeralProofTokenState, EphemeralType, InvalidEphemeral,
     InvalidProof, InvalidSession, SessionContent, UnvalidatedProofObject,
 };
 use crate::state::{CounterState, State};
-use crate::store::{sessions, users, Store, StoreError};
+use crate::store::{sessions, users, StoreError};
 use crate::{AppState, BytePacked, Claims, KeyState, Proof, Session};
-use base64::{engine::general_purpose as b64, Engine as _};
 use terrors::OneOf;
 use tracing::debug;
 
@@ -22,16 +20,15 @@ pub fn proof_token_at(state: &impl State, time: u64) -> Ephemeral<()> {
     let count = state.counter_next("", expires);
     let key = state.keys().ephemeral_key(time);
     debug!("Used key {:?}", key);
-    let eph = Ephemeral::create(
+
+    Ephemeral::create(
         &key,
         "",
         EphemeralProofTokenState { count, expires },
         EphemeralType::ProofToken,
         time,
         empty_packed(),
-    );
-
-    eph
+    )
 }
 
 pub fn decrypt_session(
@@ -49,7 +46,7 @@ pub fn decrypt_session(
                 .to_one_of()
                 .map_err(OneOf::broaden)
         },
-        |e| OneOf::new(e),
+        OneOf::new,
     )?;
 
     // let session_status = sessions::session_status(state.store(), session).to_one_of().map_err(OneOf::broaden)?;
@@ -159,7 +156,7 @@ where
 pub mod test_util {
     use crate::data::SerializedAs;
     use crate::proof::ProofAction;
-    use crate::state::{test_util::*, DriverState};
+    use crate::state::test_util::*;
     use crate::{ActionType, Target, TargetList};
 
     use super::*;
@@ -191,10 +188,9 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::{
-        data::{Claims, EXPIRE_TIME},
+        data::Claims,
         proof::ProofSingleTarget,
         state::{test_util::*, DriverState},
-        KeyState,
     };
 
     use test_util::*;

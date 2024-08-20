@@ -5,8 +5,6 @@ use serde::{
 };
 use std::{fmt::Display, marker::PhantomData};
 
-use crate::{ByteOwned, ByteSerial};
-
 pub trait Encodable {
     type Error: Display;
 
@@ -16,7 +14,10 @@ pub trait Encodable {
 
     fn encode(&self) -> String;
 
-    fn as_encoded(self) -> Encoded<Self> where Self: Sized {
+    fn into_encoded(self) -> Encoded<Self>
+    where
+        Self: Sized,
+    {
         Encoded::from_encodable(self)
     }
 }

@@ -1,9 +1,9 @@
 use crate::data::UserPassword;
 use crate::error::OneOfTo;
 use crate::proof::{InvalidProof, ProofTargetAny, ProofTargetOut};
+use crate::state::State;
 use crate::store::ReadableTable;
 use crate::{error::WrapErrorOneOf, store::StoreError};
-use crate::state::State;
 use crate::{ActionType, Proof};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -40,9 +40,11 @@ pub fn get_users_bytes(
         .to_one_of()
         .map_err(OneOf::broaden)?;
 
-
-    let tx = state.store().open_read().to_one_of().map_err(OneOf::broaden)?;
-
+    let tx = state
+        .store()
+        .open_read()
+        .to_one_of()
+        .map_err(OneOf::broaden)?;
 
     let user_table = tx.user_table().to_one_of().map_err(OneOf::broaden)?;
 
@@ -51,21 +53,20 @@ pub fn get_users_bytes(
     // Now None user_selection corresponds to not having to check anything in the iter
     let (iter, filter_selection, user_selection) = match targets {
         ProofTargetOut::Range((first, last)) => {
-
             if first > last {
                 panic!("Selection or range is not sorted!")
             }
 
-            (user_table
-                .range(first.as_str()..=last.as_str())
-                .to_one_of_two()?, false, Vec::new())
-        },
-        ProofTargetOut::Select(select) => {
-            (user_table.iter().to_one_of_two()?, true, select)
-        },
-        ProofTargetOut::All => {
-            (user_table.iter().to_one_of_two()?, false, Vec::new())
+            (
+                user_table
+                    .range(first.as_str()..=last.as_str())
+                    .to_one_of_two()?,
+                false,
+                Vec::new(),
+            )
         }
+        ProofTargetOut::Select(select) => (user_table.iter().to_one_of_two()?, true, select),
+        ProofTargetOut::All => (user_table.iter().to_one_of_two()?, false, Vec::new()),
     };
 
     let mut sel_i = 0;

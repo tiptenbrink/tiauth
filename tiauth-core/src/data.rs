@@ -5,24 +5,22 @@ use crate::crypto::{
     SymmetricKey,
 };
 use crate::encoded::Encodable;
-use crate::proof::{Ephemeral, InvalidEphemeral, InvalidSession, PasswordFileHash};
-use crate::util::{cursor_slice, nonce_384_bytes, rmp_read_bin, rmp_read_str};
+use crate::proof::InvalidSession;
+use crate::util::{cursor_slice, rmp_read_str};
+use base64::{engine::general_purpose as b64, Engine as _};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::str::{self, Utf8Error};
 use std::sync::OnceLock;
-use terrors::OneOf;
 use thiserror::Error;
-use base64::{engine::general_purpose as b64, Engine as _};
 use zerovec::vecs::Index32;
 use zerovec::VarZeroVec;
 
@@ -847,13 +845,14 @@ pub const CHANGE_AGE: u64 = 600;
 
 impl<T> Encodable for ByteOwned<T>
 where
-    T: ByteSerial
+    T: ByteSerial,
 {
     type Error = base64::DecodeError;
 
     fn decode(encoded: &str) -> Result<Self, Self::Error>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         let bytes = b64::URL_SAFE_NO_PAD.decode(encoded)?;
 
         Ok(ByteOwned::new(bytes))

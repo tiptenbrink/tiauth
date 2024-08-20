@@ -1,11 +1,10 @@
 use crate::crypto::{
-    self, debug_secret_bytes, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey, SymmetricKey
+    self, debug_secret_bytes, sign_data, verify_signature, AsSymmetricKey, Key, PublicKey,
+    SymmetricKey,
 };
-use std::fmt::Debug;
 use crate::data::{ByteSerial, SerializedAs};
 use crate::data::{SessionKey, SessionStatus, EPHEMERAL_INTERVAL, LEEWAY};
 use crate::encoded::Encodable;
-use crate::error::OneOfTo;
 use crate::util::{combine_encode, cursor_slice, rmp_read_bin, rmp_read_str};
 use crate::{ByteOwned, BytePacked, Claims};
 use base64::{engine::general_purpose as b64, Engine as _};
@@ -13,15 +12,11 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::debug;
-use tracing_subscriber::fmt::format::debug_fn;
-use std::collections::HashSet;
-use std::error::Error;
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::marker::PhantomData;
-use std::path::Display;
-use terrors::OneOf;
 use thiserror::Error;
+use tracing::debug;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum ActionType {
@@ -139,7 +134,7 @@ pub struct ProofTargetAny;
 pub enum ProofTargetOut {
     Range((String, String)),
     Select(Vec<String>),
-    All
+    All,
 }
 
 impl ProofTarget for ProofTargetAny {
@@ -153,12 +148,12 @@ impl ProofTarget for ProofTargetAny {
         debug!("Validating proof target for any target...");
         Ok(match target {
             Target::All => {
-                if target_data.0.len() != 0 {
+                if !target_data.0.is_empty() {
                     return Err(InvalidProof);
                 }
 
                 ProofTargetOut::All
-            },
+            }
             Target::Range => {
                 if target_data.0.len() != 2 {
                     return Err(InvalidProof);
@@ -166,10 +161,8 @@ impl ProofTarget for ProofTargetAny {
                 let last = target_data.0.pop().unwrap();
                 let first = target_data.0.pop().unwrap();
                 ProofTargetOut::Range((first, last))
-            },
-            Target::Select => {
-                ProofTargetOut::Select(target_data.0)
             }
+            Target::Select => ProofTargetOut::Select(target_data.0),
             _ => return Err(InvalidProof),
         })
     }
@@ -278,8 +271,6 @@ impl ProofAction {
         }
     }
 }
-
-
 
 impl<'a, T> ProofContent<'a, T>
 where
@@ -483,7 +474,10 @@ impl<T: ByteSerial> Proof<T> {
         let content = ProofContent::<T>::deserialize(&self.content)?;
 
         if time >= content.expires + LEEWAY {
-            debug!("Proof has expired, time={}, expires={}", time, content.expires);
+            debug!(
+                "Proof has expired, time={}, expires={}",
+                time, content.expires
+            );
             return Err(InvalidProof);
         }
 
@@ -602,12 +596,13 @@ impl Encodable for Session {
 
     fn decode(encoded: &str) -> Result<Self, Self::Error>
     where
-        Self: Sized {
-        let encrypted = b64::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| InvalidSession)?;
+        Self: Sized,
+    {
+        let encrypted = b64::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| InvalidSession)?;
 
-        Ok(Self {
-            encrypted
-        })
+        Ok(Self { encrypted })
     }
 
     fn encode(&self) -> String {
@@ -671,9 +666,9 @@ impl Session {
         FE: Fn(InvalidSession) -> E,
         F: FnOnce(&Self) -> Result<SessionStatus, E>,
     {
-        let status = status(&self)?;
+        let status = status(self)?;
 
-        status.valid(time).map_err(|e| convert(e))?;
+        status.valid(time).map_err(&convert)?;
 
         let decrypted = crypto::symmetric_decrypt(&self.encrypted, keys)
             .map_err(|_| convert(InvalidSession))?;
@@ -723,8 +718,13 @@ impl AsSymmetricKey for EphemeralKey {
 
 impl EphemeralKey {
     pub fn compute<const INTERVAL: u64>(base_secret: [u8; 32], now: u64, ref_time: u64) -> Self {
-        debug!("Computing ephemeral key for base secret: sha256={} at {} for ref {}", debug_secret_bytes(&base_secret), now, ref_time);
-        
+        debug!(
+            "Computing ephemeral key for base secret: sha256={} at {} for ref {}",
+            debug_secret_bytes(&base_secret),
+            now,
+            ref_time
+        );
+
         let passed = now - ref_time;
 
         let intervals_passed = passed / INTERVAL;
@@ -776,7 +776,7 @@ pub trait EphemeralStateType {
     fn is_valid_type(eph_type: &EphemeralType) -> bool;
 
     /// Return the state in a form that is necessary for the comparison. This can also be bytes.
-    fn get_state<'a>(state: &'a [u8]) -> Self::VerifyType<'a>;
+    fn get_state(state: &[u8]) -> Self::VerifyType<'_>;
 
     /// Create a binary representation of the state that should be compared when verifying the Ephemeral.
     fn create_state(self) -> impl AsRef<[u8]>;
@@ -806,9 +806,7 @@ impl EphemeralStateType for EphemeralEmptyState {
         eph_type == &EphemeralType::NewUser
     }
 
-    fn get_state<'a>(_: &'a [u8]) -> Self::VerifyType<'a> {
-        ()
-    }
+    fn get_state(_: &[u8]) -> Self::VerifyType<'_> {}
 
     fn create_state(self) -> impl AsRef<[u8]> {
         []
@@ -904,7 +902,7 @@ impl EphemeralStateType for EphemeralChangePasswordState {
 
     type VerifyType<'a> = &'a [u8];
 
-    fn get_state<'a>(state: &'a [u8]) -> Self::VerifyType<'a> {
+    fn get_state(state: &[u8]) -> Self::VerifyType<'_> {
         state
     }
 
@@ -924,7 +922,7 @@ impl EphemeralType {
         &self,
         state: &'a [u8],
     ) -> Result<S::VerifyType<'a>, InvalidEphemeral> {
-        S::valid_type(&self)?;
+        S::valid_type(self)?;
 
         Ok(S::get_state(state))
     }
@@ -969,7 +967,7 @@ impl<'a, T: ByteSerial> EphemeralView<'a, T> {
         &self,
         keys: &[EphemeralKey],
     ) -> Result<DecryptedEphemeral<T>, InvalidEphemeral> {
-        Ephemeral::decrypt_bytes(&self.encrypted, keys)
+        Ephemeral::decrypt_bytes(self.encrypted, keys)
         // let Self { encrypted, .. } = self;
 
         // Ephemeral::verify_components(encrypted, verify_keys, application)
@@ -1165,7 +1163,7 @@ pub struct DecryptedEphemeral<T> {
 }
 
 impl<T: ByteSerial> DecryptedEphemeral<T> {
-    pub fn read<'a>(&'a self) -> EphemeralContent<'a, T> {
+    pub fn read(&self) -> EphemeralContent<'_, T> {
         // Since it's encrypted, we know the structure must be correct so we just unwrap here
         EphemeralContent::deserialize(&self.decrypted).unwrap()
     }
@@ -1218,7 +1216,7 @@ impl<'a, T: ByteSerial> EphemeralContent<'a, T> {
         }
 
         // This also checks if the eph_type is valid
-        let s: S::VerifyType<'a> = self.eph_type.try_get_state::<S>(&self.state)?;
+        let s: S::VerifyType<'a> = self.eph_type.try_get_state::<S>(self.state)?;
 
         verify(s)?;
 
@@ -1333,7 +1331,7 @@ impl<'a> SessionContent<'a> {
             return Err(InvalidSession);
         }
 
-        Ok(&self.session_claims)
+        Ok(self.session_claims)
     }
 
     pub fn verify_max_age(
@@ -1358,7 +1356,7 @@ impl<'a> SessionContent<'a> {
         };
         let about_bytes = rmp_serde::encode::to_vec(&about).unwrap();
         rmp::encode::write_bin(&mut buf, &about_bytes).unwrap();
-        rmp::encode::write_bin(&mut buf, &self.pw_file_hash.as_bytes()).unwrap();
+        rmp::encode::write_bin(&mut buf, self.pw_file_hash.as_bytes()).unwrap();
         rmp::encode::write_bin(&mut buf, self.session_claims.as_bytes()).unwrap();
 
         buf

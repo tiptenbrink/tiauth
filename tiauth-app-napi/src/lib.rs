@@ -83,11 +83,7 @@ pub fn create_set_claims_proof_map(
 ) -> Result<String, Error> {
     let proof_base = ProofBaseView::new(&application, &key.key);
 
-    Ok(app::create_set_claims_proof(
-        proof_base,
-        &user_id,
-        claims.as_bytes(),
-    ).encode())
+    Ok(app::create_set_claims_proof(proof_base, &user_id, claims.as_bytes()).encode())
 }
 
 #[napi(js_name = createResetProof)]

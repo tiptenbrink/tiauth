@@ -3,20 +3,23 @@ use std::{
     collections::VecDeque,
     io::Cursor,
     ops::DerefMut,
-    path::Display,
     sync::{
         atomic::{self, AtomicU64},
-        Arc, Mutex,
+        Mutex,
     },
-    time::Instant,
 };
 
 use crate::util::rmp_read_bin;
 
-
 /// A simple counter with concurrent access.
 pub struct Counter {
     counter: AtomicU64,
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Counter {
@@ -52,7 +55,6 @@ impl Counter {
     }
 }
 
-
 /// A data structure that tracks whether it has already seen a u64 value with as little space as possible.
 /// Probabilistic data structures (like a Bloom filter) need 10+ bits per element if you want a decent error rate, but
 /// our values are in a small(ish) and predictable range. It's designed to use less space than a bit arrray in the case
@@ -62,6 +64,12 @@ impl Counter {
 /// a Mutex to allow access from multiple threads.  
 pub struct CompactSet {
     ranges: Mutex<VecDeque<Range<64>>>,
+}
+
+impl Default for CompactSet {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CompactSet {
@@ -303,7 +311,7 @@ fn add_num_ranges<const N: usize>(ranges: &mut VecDeque<Range<N>>, num: u64) -> 
         return (ranges.len() - 1, false);
     }
 
-    let target_range = (&ranges[target_i]).add_num(num);
+    let target_range = ranges[target_i].add_num(num);
 
     if target_range.is_none() {
         return (target_i, true);
@@ -492,13 +500,9 @@ fn check_expired<const N: usize>(ranges: &mut VecDeque<Range<N>>, time: u64) {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-        time::Instant,
-    };
+    use std::time::Instant;
 
-    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use rayon::collections::vec_deque;
+    use rand::{thread_rng, Rng};
 
     use super::*;
     const RANGE_SIZE: usize = 2;
@@ -510,7 +514,7 @@ mod test {
         for i in 1..10 {
             let mut range = Range::<RANGE_SIZE>::new(i * (RANGE_SIZE as u64));
             if i < 7 {
-                range.expires = Expiry::At((i as u64) * 100);
+                range.expires = Expiry::At(i * 100);
             }
             ranges.push_back(range)
         }
@@ -575,7 +579,7 @@ mod test {
         println!("{:?}", ranges);
     }
 
-    fn lightly_shuffle<T>(vec: &mut Vec<T>, max_distance: usize) {
+    fn lightly_shuffle<T>(vec: &mut [T], max_distance: usize) {
         let mut rng = rand::thread_rng();
         let len = vec.len();
 
@@ -680,7 +684,6 @@ mod test {
         let amnt = 10;
         let ops = amnt * size;
         let mut add_time = 0f64;
-        let mut check_time = 0f64;
 
         for _ in 0..amnt {
             let mut values = Vec::new();
@@ -706,7 +709,7 @@ mod test {
                 let around: i32 = rng.gen_range(-900..100);
                 time = time.max(0.max((expires as i32) + around) as u64);
                 let now = Instant::now();
-                compact_set.num_exists((i as u64), expires, Some(time));
+                compact_set.num_exists(i as u64, expires, Some(time));
                 add_time += now.elapsed().as_secs_f64();
             }
         }

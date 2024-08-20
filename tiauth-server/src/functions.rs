@@ -1,24 +1,23 @@
-use tiauth_core::{encoded::{Encodable, Encoded}, ByteOwned, ByteSerial};
-use serde::{Deserialize, Serialize};
-use tiauth_core::{login, register, verify, modify, Claims, Proof, SessionClaims, State};
 use crate::model::*;
-use blocking::unblock;
+use serde::Serialize;
+use tiauth_core::{
+    encoded::Encodable, ByteSerial,
+};
+use tiauth_core::{login, register, verify, SessionClaims, State};
 
 pub fn proof_token(state: &impl State, _: ProofTokenRequest) -> ProofTokenResponse {
     let eph = verify::proof_token(state);
 
-    ProofTokenResponse { tokens: eph.serialize().as_encoded() }
+    ProofTokenResponse {
+        tokens: eph.serialize().into_encoded(),
+    }
 }
 
 pub fn start_register(state: &impl State, request: PakeRequest) -> StartRegisterResponse {
-    match register::start_register(
-        state,
-        &request.opaque_request,
-        &request.user_id,
-    ) {
+    match register::start_register(state, &request.opaque_request, &request.user_id) {
         Ok((opaque_response, start_nonce)) => StartRegisterResponse {
             opaque_response,
-            start_nonce: start_nonce.as_encoded(),
+            start_nonce: start_nonce.into_encoded(),
         },
         Err(e) => match e.to_enum() {
             terrors::E1::A(_) => todo!(),
@@ -29,11 +28,7 @@ pub fn start_register(state: &impl State, request: PakeRequest) -> StartRegister
 pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
     //let proof = request.claims_proof.map(|e| e.get());
 
-    match register::register_finish(
-        state,
-        &request.opaque_request,
-        &request.action_nonce.get(),
-    ) {
+    match register::register_finish(state, &request.opaque_request, &request.action_nonce.get()) {
         Ok(()) => (),
         Err(e) => match e.to_enum() {
             terrors::E4::A(_) => todo!(),
@@ -45,14 +40,10 @@ pub fn register_finish(state: &impl State, request: RegisterFinishRequest) {
 }
 
 pub fn start_login(state: &impl State, request: PakeRequest) -> StartLoginResponse {
-    match login::login_start(
-        state,
-        &request.opaque_request,
-        &request.user_id,
-    ) {
+    match login::login_start(state, &request.opaque_request, &request.user_id) {
         Ok((opaque_response, start_nonce)) => StartLoginResponse {
             opaque_response,
-            start_nonce: start_nonce.as_encoded(),
+            start_nonce: start_nonce.into_encoded(),
         },
         Err(e) => match e.to_enum() {
             terrors::E2::A(_e) => todo!(),
@@ -92,13 +83,8 @@ pub fn login_session(state: &impl State, request: LoginFinishRequest) -> Session
 
 //     match modify::reset_password(state, &request.application, &proof) {
 //         Ok(change_nonce) => {
-            
+
 //         }
 //         Err(e) => todo!(),
 //     }
 // }
-
-#[cfg(feature = "app")]
-mod appfn {
-    //! In the future maybe allow apps to request proofs over TLS or similar
-}

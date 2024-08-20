@@ -50,12 +50,9 @@ use rand_chacha::ChaCha20Rng;
 // DOT6DnnZsSGCwyOpmb+Ke5+PN42Du+J39g==
 // -----END PRIVATE KEY-----";
 
-use sha2::{Sha256, Sha512, Digest};
+use sha2::{Digest, Sha256, Sha512};
 
 fn main() {
-    
-
-
     // let key = load_key(key_pem).unwrap();
 
     // let value = Test {
@@ -78,7 +75,9 @@ fn main() {
     println!("{:?}", base_secret);
     // Up to a month ago
     let time = (StdRng::from_entropy().next_u32() % 2500000) as u64;
-    let start = SystemTime::now().checked_sub(Duration::from_secs(time)).unwrap();
+    let start = SystemTime::now()
+        .checked_sub(Duration::from_secs(time))
+        .unwrap();
 
     let mut b: HashMap<String, [u8; 32]> = HashMap::new();
 
@@ -94,9 +93,7 @@ fn main() {
     //let seed = base_secret.clone();
     let instant = Instant::now();
 
-
     let seed = b.get("some_app").unwrap().clone();
-    
 
     let rng = ChaCha20Rng::from_seed(seed);
     let ten_minutes_passed = SystemTime::now().duration_since(start).unwrap().as_secs() / 600;
@@ -104,8 +101,7 @@ fn main() {
     loop_rng.set_stream(ten_minutes_passed);
     let mut new_key = [0u8; 32];
     loop_rng.fill_bytes(&mut new_key);
-    let dur1 = Instant::now().duration_since(instant).as_secs_f64()*1000f64;
+    let dur1 = Instant::now().duration_since(instant).as_secs_f64() * 1000f64;
     println!("took {} ms", dur1);
     println!("{:?}", new_key);
-
 }

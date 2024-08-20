@@ -1,6 +1,7 @@
 use crate::admin;
 use crate::functions;
 use crate::model::*;
+use crate::state::ServerState;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -8,13 +9,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use blocking::unblock;
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tiauth_core::State;
-use crate::state::{ServerState};
-use std::ops::Deref;
 use std::time::Duration;
+use tiauth_core::State;
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -74,29 +72,40 @@ async fn proof_token<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<ProofTokenRequest>,
 ) -> Json<ProofTokenResponse> {
-
-    Json(state.app(request.application.clone(), move |state| {
-        functions::proof_token(state, request)
-    }).await.unwrap())
+    Json(
+        state
+            .app(request.application.clone(), move |state| {
+                functions::proof_token(state, request)
+            })
+            .await
+            .unwrap(),
+    )
 }
 
 async fn start_register<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<PakeRequest>,
 ) -> Json<StartRegisterResponse> {
-
-    Json(state.app(request.application.clone(), move |state| {
-        functions::start_register(state, request)
-    }).await.unwrap())
+    Json(
+        state
+            .app(request.application.clone(), move |state| {
+                functions::start_register(state, request)
+            })
+            .await
+            .unwrap(),
+    )
 }
 
 async fn register_finish<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<RegisterFinishRequest>,
 ) -> Result<(), ErrorResponse> {
-    state.app(request.application.clone(), move |state| {
-        functions::register_finish(state, request);
-    }).await.unwrap();
+    state
+        .app(request.application.clone(), move |state| {
+            functions::register_finish(state, request);
+        })
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -105,33 +114,45 @@ async fn start_login<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<PakeRequest>,
 ) -> Json<StartLoginResponse> {
-    Json(state.app(request.application.clone(), move |state| {
-        functions::start_login(state, request)
-    }).await.unwrap())
+    Json(
+        state
+            .app(request.application.clone(), move |state| {
+                functions::start_login(state, request)
+            })
+            .await
+            .unwrap(),
+    )
 }
 
 async fn login_session<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<LoginFinishRequest>,
 ) -> Json<SessionResponse> {
-    Json(state.app(request.application.clone(), move |state| {
-        functions::login_session(state, request)
-    }).await.unwrap())
+    Json(
+        state
+            .app(request.application.clone(), move |state| {
+                functions::login_session(state, request)
+            })
+            .await
+            .unwrap(),
+    )
 }
 
 async fn admin_get_users_encoded<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
     Json(request): Json<GetUsers>,
 ) -> Vec<u8> {
-
-    state.app(request.application.clone(), move |state| {
-        admin::get_users_encoded(state, request)
-    }).await.unwrap()
-    
+    state
+        .app(request.application.clone(), move |state| {
+            admin::get_users_encoded(state, request)
+        })
+        .await
+        .unwrap()
 }
 
-pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(state: ServerState<S>) -> Router<Z>
-{
+pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(
+    state: ServerState<S>,
+) -> Router<Z> {
     Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/register/start", post(start_register))
