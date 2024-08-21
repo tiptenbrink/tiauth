@@ -239,9 +239,9 @@ def make_set_claims(json_client: Client, app_name: str, proof: ClaimsProof):
 
     assert r.status_code == 200
 
+import concurrent.futures
 
-
-def test_user_set_claims(json_client: Client, mod_app: str):
+def make_set_claims_all(json_client: Client, mod_app: str):
     user_id = str(uuid4())
     password = "my_pass"
 
@@ -249,8 +249,23 @@ def test_user_set_claims(json_client: Client, mod_app: str):
 
     key = load_key_from_pem(private)
     proof_token = make_proof_token(json_client, mod_app)
-    proof = create_set_claims_proof(mod_app, key, proof_token, user_id, {"email": f"{user_id}@email.com".encode('utf-8'), "zclaim": b"abcd"})
+    dct = {}
+    for i in range(2):
+        dct[f"{i:08d}"] = f"{1000 * i * 211 + 9 ** 2.1 % 10000}".encode('utf-8')
+    proof = create_set_claims_proof(mod_app, key, proof_token, user_id, dct)
 
     make_set_claims(json_client, mod_app, proof)
+
+
+def test_user_set_claims(json_client: Client, mod_app: str):
+    make_set_claims_all(json_client, mod_app)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # Start the load operations and mark each future with its URL
+        for i in range(1000):
+            # executor.submit(lambda: make_set_claims_all(json_client, mod_app))
+            # executor.submit(lambda: make_proof_token(json_client, mod_app))
+            executor.submit(lambda: make_registered_user(json_client, mod_app, str(uuid4()), "pass"))
+    
 
     # make_set_claims(json_client, mod_app, proof)

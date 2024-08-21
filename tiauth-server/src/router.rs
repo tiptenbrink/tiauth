@@ -4,6 +4,7 @@ use crate::model::*;
 use crate::state::ServerState;
 use axum::middleware;
 use axum::middleware::Next;
+use axum::Extension;
 use axum::{
     async_trait,
     extract::{FromRequest, Json, Request, State as ExtractState},
@@ -81,11 +82,12 @@ where
 
 async fn proof_token<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<ProofTokenRequest>,
 ) -> Json<ProofTokenResponse> {
     Json(
         state
-            .app(request.application.clone(), move |state| {
+            .app(request.application.clone(), request_id.id, move |state| {
                 functions::proof_token(state, request)
             })
             .await
@@ -95,11 +97,12 @@ async fn proof_token<S: State>(
 
 async fn start_register<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<PakeRequest>,
 ) -> Json<StartRegisterResponse> {
     Json(
         state
-            .app(request.application.clone(), move |state| {
+            .app(request.application.clone(), request_id.id, move |state| {
                 functions::start_register(state, request)
             })
             .await
@@ -109,10 +112,11 @@ async fn start_register<S: State>(
 
 async fn register_finish<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<RegisterFinishRequest>,
 ) -> Result<(), ErrorResponse> {
     state
-        .app(request.application.clone(), move |state| {
+        .app(request.application.clone(), request_id.id, move |state| {
             functions::register_finish(state, request);
         })
         .await
@@ -123,11 +127,12 @@ async fn register_finish<S: State>(
 
 async fn start_login<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<PakeRequest>,
 ) -> Json<StartLoginResponse> {
     Json(
         state
-            .app(request.application.clone(), move |state| {
+            .app(request.application.clone(), request_id.id, move |state| {
                 functions::start_login(state, request)
             })
             .await
@@ -137,11 +142,12 @@ async fn start_login<S: State>(
 
 async fn login_session<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<LoginFinishRequest>,
 ) -> Json<SessionResponse> {
     Json(
         state
-            .app(request.application.clone(), move |state| {
+            .app(request.application.clone(), request_id.id, move |state| {
                 functions::login_session(state, request)
             })
             .await
@@ -151,10 +157,11 @@ async fn login_session<S: State>(
 
 async fn user_set_claims<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<SetClaimsRequest>,
 ) -> Result<(), ErrorResponse> {
     state
-        .app(request.application.clone(), move |state| {
+        .app(request.application.clone(), request_id.id, move |state| {
             functions::user_set_claims(state, request);
         })
         .await
@@ -165,10 +172,11 @@ async fn user_set_claims<S: State>(
 
 async fn admin_get_users_encoded<S: State>(
     ExtractState(state): ExtractState<ServerState<S>>,
+    Extension(request_id): Extension<RequestId>,
     Json(request): Json<GetUsers>,
 ) -> Vec<u8> {
     state
-        .app(request.application.clone(), move |state| {
+        .app(request.application.clone(), request_id.id, move |state| {
             admin::get_users_encoded(state, request)
         })
         .await
@@ -183,24 +191,18 @@ fn uid() -> String {
     random_string
 }
 
-async fn wtf() {
-    debug!("ttttt");
-}
+#[derive(Clone)]
+struct RequestId { id: String }
 
-// #[tracing::instrument(name = "req", level = "debug", skip_all, fields(req_id=uid()))]
-async fn my_middleware(
-    request: Request,
+async fn request_id(
+    mut request: Request,
     next: Next,
 ) -> Response {
-    let span = debug_span!("req", req_id=uid());
+    let id = uid();
+    let span = debug_span!("id", id=id);
+    request.extensions_mut().insert(RequestId { id });
+    
     let response = next.run(request).instrument(span).await;
-    let span2 = debug_span!("req2", req_id2=uid());
-    wtf().instrument(span2).await;
-    // do something with `request`...
-    // debug!("huhh?");
-    // let response = 
-    // debug!("huhh fini?");
-    // do something with `response`...
 
     response
 }
@@ -220,10 +222,14 @@ pub fn create_router<S: State, Z: Clone + Send + Sync + 'static>(
         .with_state(state)
         .layer(
             ServiceBuilder::new()
+                .layer(middleware::from_fn(request_id))
                 .layer(
                     TraceLayer::new_for_http()
+                    .on_response(
+                        tower_http::trace::DefaultOnResponse::new()
+                            .latency_unit(tower_http::LatencyUnit::Micros)
+                    )
                 )
-                .layer(middleware::from_fn(my_middleware))
 
             
         )

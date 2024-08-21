@@ -206,6 +206,16 @@ Opening, writing and comitting a write transaction takes ~1 ms. A 1 MB write can
 
 Opening and reading a read transaction takes less than 1 us.
 
+When applying significant load through concurrent requests, we can serve about 4000 requests in ~10 seconds (400 ops/sec). 2000 of these are requests that require a write to the database, and these take up the vast majority of time.
+
+Writing a user, which is not small because the password file can be quite long, can take up to 4 ms. Writing a small set of claims can take 2 ms. Some tests consisting of 10000 claims for a single user can take up to 20 ms.
+
+Throughout this, all 16 logical cores reached a constant utilization of around 15-20% (meaning a total scaling factor of 2-3).
+
+Another scenario, which consisted of only requesting proof tokens, served 10000 requests in ~4.5 seconds (2200 ops/sec). The other opposite is only registering users, where 1000 could be served in ~8 seconds (125 ops/sec).
+
+Assuming an average write will cost around 5 ms, realistically, better storage, memory and processors will not push this much lower than 1 ms. Therefore, on an enterprise-grade system, a single application can be expected to handle around, AT MOST, 1000 writes per second. Assuming something like 20% registrations vs current users, and each user requiring claims updates at least once a day, let's assume 61 ms of time per user per month. This means that a tiauth application could scale to 40 million users per month. Although, depending on the workload (in some cases most users could be expected to rapidly change claims, which could would make something like 20 SECONDS of time per user per month not that crazy), this could be as low as 100,000 users per month.
+
 ### Ephemeral:
 
 NewUser,

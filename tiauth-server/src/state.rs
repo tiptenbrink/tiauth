@@ -113,8 +113,9 @@ impl<S: State> ServerState<S> {
         id: &str,
         f: F,
     ) -> Result<T, ApplicationNotFound> {
-        let span = debug_span!("app", app=application, id=id);
+        let span = debug_span!("id", id=id);
         let _enter = span.enter();
+        debug!("application={}", application);
         match self.states.get(application) {
             Some(lock) => Ok(f(lock.read().deref())),
             None => Err(ApplicationNotFound),
@@ -127,9 +128,7 @@ impl<S: State> ServerState<S> {
         id: String,
         f: F,
     ) -> Result<T, ApplicationNotFound> {
-        debug!("unblocking..");
-        let sp1 = debug_span!("testting..");
-        unblock(move || self.app_blocking(&application, &id, f)).instrument(sp1).await
+        unblock(move || self.app_blocking(&application, &id, f)).await
     }
 
     // pub fn with_app(self, application: &str) -> AppResult {

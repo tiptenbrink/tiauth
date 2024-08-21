@@ -1,5 +1,6 @@
 use opaque_borink::{server::register_server, Error as OpaqueError};
 use thiserror::Error;
+use tracing::debug;
 
 use crate::data::empty_packed;
 use crate::data::Claims;
@@ -66,6 +67,7 @@ fn user_change_ephemeral<T: ByteSerial>(
     old_login_bytes: Option<&[u8]>,
     password_file: String,
 ) -> Result<UserPassword, OneOf<(SetLoginError, InvalidEphemeral)>> {
+    debug!("Validating ephemeral...");
     let login = match entry.eph_type {
         EphemeralType::NewUser => {
             // TODO check if we want AlreadyExists error
@@ -122,10 +124,11 @@ pub fn register_finish(
     request: &str,
     register_eph: &Ephemeral<()>,
 ) -> Result<(), FinishError> {
+    debug!("Starting register finish...");
     let password_file = register_server_finish(request)
         .to_one_of()
         .map_err(OneOf::broaden)?;
-
+    debug!("Computed opaque.");
     let time = state.time();
     let verify_keys = state.keys().eph_veri_keys(time);
     let eph_decrypted = register_eph
@@ -133,7 +136,7 @@ pub fn register_finish(
         .to_one_of()
         .map_err(OneOf::broaden)?;
     let content = eph_decrypted.read();
-
+    debug!("Verified eph.");
     let store = state.store();
     let tx = store.open_write().to_one_of().map_err(OneOf::broaden)?;
     {
@@ -146,12 +149,13 @@ pub fn register_finish(
                 .map_err(OneOf::broaden)?;
             // The `as_ref` here allows us to make this work
             let option_bytes = guarded_option.as_ref().map(|g| g.value());
-
+            debug!("Read user.");
             let time = state.time();
             user_change_ephemeral(&content, time, option_bytes, password_file)
                 .map_err(OneOf::broaden)?
                 .serialize()
         };
+        debug!("Computed login bytes.");
         // if let Some(login_bytes) = table.get(content.user_id)
         //     .to_one_of()
         //     .map_err(OneOf::broaden)?
@@ -167,9 +171,11 @@ pub fn register_finish(
             .insert(content.user_id, new_login_bytes.as_slice())
             .to_one_of()
             .map_err(OneOf::broaden)?;
+        debug!("Inserted login bytes.");
     };
 
     tx.commit().to_one_of().map_err(OneOf::broaden)?;
+    debug!("Committed.");
 
     Ok(())
 }

@@ -20,100 +20,8 @@ use crate::store::{
     keys, Store, StoreAddress, StoreError, StoreType, WrapDeserializationError, WrapVecTryFromError,
 };
 
-// pub trait GovernorState: State {
-//     type Readonly;
-
-//     fn add_app_to_state(&mut self, application: &Application);
-
-//     fn register_application(&mut self, application: &Application) -> Result<(), DbError> {
-//         write_app_to_db(self.db(), application)?;
-
-//         self.add_app_to_state(application);
-//         self.keys_mut()
-//             .register_application(&application.name, None);
-
-//         Ok(())
-//     }
-
-//     fn remove_app_from_state(&mut self, application: &str);
-
-//     fn deregister_application(&mut self, application: &str) -> Result<(), DbError> {
-//         let tables = self.app_tables(application);
-
-//         remove_app_from_db(self.db(), application, tables)?;
-
-//         self.remove_app_from_state(application);
-
-//         Ok(())
-//     }
-
-//     // fn app_tables(&self, application: &str) -> AppTable;
-
-//     // fn app_key(&self, application: &str) -> PublicKey;
-
-//     // fn apps(&self) -> Vec<&String>;
-
-//     // fn db(&self) -> &Database;
-
-//     // fn keys(&self) -> &impl GovernorKeyState<2>;
-
-//     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2>;
-
-//     fn rng(&self) -> StdRng {
-//         StdRng::from_entropy()
-//     }
-
-//     // fn private(&self) -> &PrivateState;
-
-//     fn from_init(init_state: InitState<2>) -> Self;
-
-//     fn setup<P: AsRef<Path>>(db_path: P, now: u64) -> Result<Self, DbError>
-//     where
-//         Self: Sized,
-//     {
-//         let mut state = Self::from_init(InitState::init(db_path, now)?);
-
-//         let registered_apps = get_apps(state.db())?;
-
-//         for app in registered_apps {
-//             state.add_app_to_state(&app);
-//         }
-
-//         Ok(state)
-//     }
-// }
-
 pub trait GovernorState: State {
-    // fn app_tables(&self, application: &str) -> AppTable;
-
-    // fn app_key(&self, application: &str) -> PublicKey;
-
-    // fn apps(&self) -> Vec<&String>;
-
-    // fn db(&self) -> &Database;
-
-    // fn keys(&self) -> &impl GovernorKeyState<2>;
-
     fn keys_mut(&mut self) -> &mut impl GovernorKeyState<2>;
-
-    // fn private(&self) -> &PrivateState;
-
-    // fn from_init(init_state: InitState<2>) -> Self;
-
-    // fn setup<P: AsRef<Path>>(db_path: P, now: u64) -> Result<Self, DbError>
-    // where
-    //     Self: Sized,
-    // {
-    //     let mut state = Self::from_init(InitState::init(db_path, now)?);
-
-    //     let registered_apps = get_apps(state.db())?;
-
-    //     for app in registered_apps {
-    //         state.add_app_to_state(&app);
-    //     }
-
-    //     Ok(state)
-    // }
 }
 
 pub trait State: DriverState + AppState + CounterState + Send + Sync + 'static {}
@@ -140,54 +48,8 @@ pub trait AppState {
 
     fn store(&self) -> &Store;
 
-    // fn private(&self) -> &PrivateState;
-
     fn keys(&self) -> &impl KeyState<2>;
 }
-
-// impl<T: GovernorState> State for T {
-//     fn app_tables(&self, application: &str) -> AppTable {
-//         self.app_tables(application)
-//     }
-
-//     fn app_key(&self, application: &str) -> PublicKey {
-//         self.app_key(application)
-//     }
-
-//     fn db(&self) -> &Database {
-//         self.db()
-//     }
-
-//     fn private(&self) -> &PrivateState {
-//         self.private()
-//     }
-
-//     fn apps(&self) -> Vec<&String> {
-//         self.apps()
-//     }
-
-//     fn keys(&self) -> &impl KeyState<2> {
-//         self.keys()
-//     }
-// }
-
-// impl<const SN: usize, T: GovernorKeyState<SN>> KeyState<SN> for T {
-//     fn opaque(&self) -> &str {
-//         self.opaque()
-//     }
-
-//     fn sess_veri_keys(&self) -> &[SessionKey; SN] {
-//         self.sess_veri_keys()
-//     }
-
-//     fn eph_veri_keys(&self, application: &str) -> (Vec<EphemeralKey>, usize) {
-//         self.eph_veri_keys(application)
-//     }
-
-//     fn ephemeral_key(&self, application: &str) -> EphemeralKey {
-//         self.ephemeral_key(application)
-//     }
-// }
 
 pub trait GovernorKeyState<const SN: usize>: KeyState<SN> {
     fn rotate_session_keys(&mut self, key: SessionKey);
@@ -254,26 +116,6 @@ impl<const SN: usize> KeyState<SN> for KeyStateImpl<SN> {
     }
 }
 
-// fn create_app_secret(
-//     base_secret: &[u8; 32],
-//     application: &str,
-//     amount_valid: Option<usize>,
-// ) -> AppSecret {
-//     let mut hasher = Sha256::new();
-
-//     hasher.update(application.as_bytes());
-//     hasher.update(*base_secret);
-
-//     let base_seed: [u8; 32] = hasher.finalize().into();
-
-//     let amount_valid = amount_valid.unwrap_or(2);
-
-//     AppSecret {
-//         amount_valid,
-//         base_seed,
-//     }
-// }
-
 impl<const SN: usize> GovernorKeyState<SN> for KeyStateImpl<SN> {
     fn rotate_session_keys(&mut self, key: SessionKey) {
         self.valid_session_keys.rotate_left(1);
@@ -301,39 +143,10 @@ impl<const SN: usize> GovernorKeyState<SN> for KeyStateImpl<SN> {
     }
 }
 
-// #[derive(Clone)]
-// pub struct ServerStateImpl {
-//     // Persistent database for overall configuration and app information
-//     pub store: Arc<Store>,
-//     pub base_address: StoreAddress,
-//     pub app_stores: Arc<HashMap<String, OnceLock<Store>>>,
-// }
-
 pub struct ServerThreadState {
     // Persistent database for overall configuration and app information
     pub state: AppStateImpl,
 }
-
-// thread_local! {
-//     pub static STATE: RefCell<OnceCell<ServerThreadState>> = RefCell::new(OnceCell::new());
-// }
-
-// fn
-
-// impl ServerState for ServerStateImpl {
-//     fn app(&self, application: String) -> &impl State {
-//         self.apps.get(&application).unwrap()
-//             .get_or_init(|| {
-//                 let address = self.base_address.join_name(&application);
-//                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-//                 load_app_state(&application, address, None, now).unwrap()
-//             })
-//     }
-
-//     fn apps(&self) -> Vec<&String> {
-//         self.apps.keys().into_iter().collect()
-//     }
-// }
 
 pub struct AppStateImpl {
     pub active: bool,
@@ -395,25 +208,10 @@ impl AppStateImpl {
     }
 }
 
-// fn register_application_tables(map: &mut HashMap<String, TableStore>, application: &str) {
-//     let session_name = format!("{}:sessions", application);
-//     let user_name = format!("{}:users", application);
-//     let state_name = format!("{}:ephemeral", application);
-
-//     map.insert(
-//         application.to_owned(),
-//         (session_name, user_name, state_name),
-//     );
-// }
-
 impl AppState for AppStateImpl {
     fn store(&self) -> &Store {
         &self.store
     }
-
-    // fn private(&self) -> &PrivateState {
-    //     &self.private
-    // }
 
     fn keys(&self) -> &impl KeyState<2> {
         &self.key_state
@@ -460,27 +258,6 @@ impl GovernorState for AppStateImpl {
         &mut self.key_state
     }
 }
-
-// pub struct InitState<const SN: usize> {
-//     pub db: Database,
-//     pub key_init: KeyInitState<SN>,
-//     pub opaque
-// }
-
-// impl<const SN: usize> InitState<SN> {
-//     fn init<P: AsRef<Path>>(db_path: P, now: u64) -> Result<Self, DbError> {
-//         let db = open_db(db_path)?;
-//         let mut rng = StdRng::from_entropy();
-//         let private = init_private_state(&db, &mut rng)?;
-//         let key_init = init_key_state(&db, &mut rng, now)?;
-
-//         Ok(Self {
-//             db,
-//             private,
-//             key_init,
-//         })
-//     }
-// }
 
 pub struct AppInitState<const SN: usize> {
     pub opaque: String,
@@ -571,117 +348,6 @@ fn init_app_state<const SN: usize>(
         ephemeral_time,
     })
 }
-
-// fn init_private_state(db: &Database, rng: &mut StdRng) -> Result<PrivateState, DbError> {
-//     let write_txn = db.begin_write()?;
-
-//     let (opaque, session, private) = {
-//         let mut table = write_txn.open_table(SERVER)?;
-//         let setup = table.get("opaque_setup")?.map(|a| a.value());
-
-//         let setup = if let Some(setup) = setup {
-//             setup
-//         } else {
-//             let setup = create_setup();
-//             table.insert("opaque_setup", setup.clone())?;
-//             setup
-//         };
-
-//         let session_key = table.get("session_key")?.map(|a| a.value());
-
-//         let session_key = if let Some(session_key) = session_key {
-//             load_session_key(&session_key)
-//         } else {
-//             let session_key = create_session_key(rng);
-//             let saved_session_key = save_session_key(&session_key);
-
-//             table.insert("session_key", saved_session_key.session)?;
-//             session_key
-//         };
-
-//         let private_key = table.get("private_key")?.map(|a| a.value());
-
-//         let keypair = if let Some(private_key) = private_key {
-//             load_key(&private_key).unwrap()
-//         } else {
-//             let keypair = create_key();
-//             let saved_private_key = save_private_key(&keypair);
-
-//             table.insert("private_key", saved_private_key)?;
-//             keypair
-//         };
-
-//         (setup, session_key, keypair)
-//     };
-//     write_txn.commit()?;
-
-//     Ok(PrivateState {
-//         opaque,
-//         session,
-//         private,
-//     })
-// }
-
-// pub fn write_app_to_db(db: &Database, application: &Application) -> Result<(), DbError> {
-//     let app_buf = encode::to_vec_named(&application).unwrap();
-
-//     let write_txn = db.begin_write()?;
-//     {
-//         let mut table = write_txn.open_table(APPS)?;
-//         table
-//             .insert(application.name.as_str(), app_buf.as_slice())
-//             .unwrap();
-//     }
-//     write_txn.commit()?;
-
-//     Ok(())
-// }
-
-// pub fn remove_app_from_db(
-//     db: &Database,
-//     application: &str,
-//     tables: AppTable,
-// ) -> Result<(), DbError> {
-//     let write_txn = db.begin_write()?;
-//     {
-//         let mut table = write_txn.open_table(APPS)?;
-//         table.remove(application)?;
-
-//         for t in tables.all() {
-//             // This is a fake definition with wrong types, but the types don't have to match to delete the table
-//             let definition: TableDefinition<String, String> = TableDefinition::new(&t);
-//             write_txn.delete_table(definition)?;
-//         }
-//     }
-//     write_txn.commit()?;
-
-//     Ok(())
-// }
-
-// fn get_apps(db: &Database) -> Result<Vec<Application>, DbError> {
-//     let write_txn = db.begin_write()?;
-//     let apps = {
-//         let table = write_txn.open_table(APPS)?;
-
-//         let mut apps = Vec::new();
-
-//         for app_entry in table.iter()? {
-//             let (_, app_bytes) = app_entry?;
-
-//             let app_bytes = app_bytes.value();
-
-//             let app: Application = decode::from_read(app_bytes).unwrap();
-
-//             apps.push(app);
-//         }
-
-//         apps
-//     };
-
-//     write_txn.commit()?;
-
-//     Ok(apps)
-// }
 
 #[cfg(feature = "test")]
 pub mod test_util {

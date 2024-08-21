@@ -10,6 +10,7 @@ use crate::store::{users, LoginFieldError, StoreError};
 // use crate::verify::verify_session;
 use crate::{ActionType, ByteSerial, Claims, KeyState, Proof, Session};
 use terrors::OneOf;
+use tracing::debug;
 
 use super::verify::{decrypt_session, verify_proof, verify_session};
 
@@ -145,18 +146,19 @@ fn change_password(
 }
 
 pub fn user_set_claims(state: &impl State, claims_proof: &Proof<Claims>) -> Result<(), OneOf<(StoreError, InvalidProof, ClaimsUnsortedError)>>{
+    debug!("Setting user claims...");
     let time = state.time();
     let proof_unvalidated = verify_proof(state, claims_proof, time).map_err(OneOf::broaden)?;
-
+    debug!("Verified proof.");
     let (claims, user_id) = proof_unvalidated
         .validate(ActionType::SetClaims, ProofSingleTarget)
         .to_one_of()
         .map_err(OneOf::broaden)?;
-
+    debug!("Validated proof.");
     // We check if they are sorted
     let claims = claims.to_claims_sorted().to_one_of().map_err(OneOf::broaden)?;
     let claims = claims.serialize();
-
+    debug!("Created claims bytes.");
     let tx = state
         .store()
         .open_write()
@@ -169,10 +171,11 @@ pub fn user_set_claims(state: &impl State, claims_proof: &Proof<Claims>) -> Resu
         let user_claims = UserClaims { user_id, claims: claims.as_packed() };
 
         table.insert(user_claims.user_id.as_str(), user_claims.serialize().as_slice()).to_one_of().map_err(OneOf::broaden)?;
+        debug!("Inserted claims bytes.");
     }
 
     tx.commit().to_one_of().map_err(OneOf::broaden)?;
-
+    debug!("Committed.");
     Ok(())
 }
 
