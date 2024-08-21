@@ -216,6 +216,9 @@ Another scenario, which consisted of only requesting proof tokens, served 10000 
 
 Assuming an average write will cost around 5 ms, realistically, better storage, memory and processors will not push this much lower than 1 ms. Therefore, on an enterprise-grade system, a single application can be expected to handle around, AT MOST, 1000 writes per second. Assuming something like 20% registrations vs current users, and each user requiring claims updates at least once a day, let's assume 61 ms of time per user per month. This means that a tiauth application could scale to 40 million users per month. Although, depending on the workload (in some cases most users could be expected to rapidly change claims, which could would make something like 20 SECONDS of time per user per month not that crazy), this could be as low as 100,000 users per month.
 
+After looking at some more stats... the total CPU utilization of tiauth does not even reach 1%. Disk utilization does not reach more than 3 MB/s (it reports max 20% utilization).
+Some huge IO bottlenecks must remain.
+
 ### Ephemeral:
 
 NewUser,

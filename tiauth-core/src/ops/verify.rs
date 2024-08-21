@@ -1,4 +1,4 @@
-use crate::data::{empty_packed, ByteSerial, UserPassword, EPHEMERAL_INTERVAL};
+use crate::data::{empty_packed, ByteSerial, ClaimsUnsortedError, InvalidClaimsBytes, UserPassword, EPHEMERAL_INTERVAL};
 use crate::error::OneOfTo;
 use crate::proof::{
     DecryptedSession, Ephemeral, EphemeralProofTokenState, EphemeralType, InvalidEphemeral,
@@ -84,6 +84,18 @@ pub fn verify_session<'a>(
     .map_err(OneOf::broaden)?;
 
     Ok((claims, password_file))
+}
+
+pub fn check_session(state: &impl State, session: &Session) -> Result<Claims, OneOf<(StoreError, InvalidSession, InvalidClaimsBytes, ClaimsUnsortedError,)>> {
+    let time = state.time();
+    let decrypted = decrypt_session(state, session, time).map_err(OneOf::broaden)?;
+    let session = decrypted.read();
+
+    let (claims, _) = verify_session(state, &session, time, None).map_err(OneOf::broaden)?;
+
+    let view = claims.try_deserialize().to_one_of().map_err(OneOf::broaden)?;
+
+    Ok(view.to_claims_sorted().to_one_of().map_err(OneOf::broaden)?)
 }
 
 // pub fn verify_proof_write<T: ByteSerial>(

@@ -239,7 +239,7 @@ def make_set_claims(json_client: Client, app_name: str, proof: ClaimsProof):
 
     assert r.status_code == 200
 
-import concurrent.futures
+
 
 def make_set_claims_all(json_client: Client, mod_app: str):
     user_id = str(uuid4())
@@ -257,15 +257,34 @@ def make_set_claims_all(json_client: Client, mod_app: str):
     make_set_claims(json_client, mod_app, proof)
 
 
-def test_user_set_claims(json_client: Client, mod_app: str):
+def test_user_set_claims(json_client: Client, gov_client: Client, mod_app: str):
     make_set_claims_all(json_client, mod_app)
+    # import concurrent.futures
+    # apps = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-    # Start the load operations and mark each future with its URL
-        for i in range(1000):
-            # executor.submit(lambda: make_set_claims_all(json_client, mod_app))
-            # executor.submit(lambda: make_proof_token(json_client, mod_app))
-            executor.submit(lambda: make_registered_user(json_client, mod_app, str(uuid4()), "pass"))
+    # for i in range(10):
+    #     app_name = f"app_{str(uuid4())}"
+    #     apps.append(app_name)
+    #     r = gov_client.post(f"/load/{app_name}", content=public.encode('utf-8'))
+    #     assert r.status_code == 200
+
+    # with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # # Start the load operations and mark each future with its URL
+    #     for j in range(50000):
+    #         executor.submit(lambda: make_proof_token(json_client, mod_app))
+
+        # for j in range(300):
+        #     for a in apps:
+        # # executor.submit(lambda: make_set_claims_all(json_client, mod_app))
+        # # executor.submit(lambda: make_proof_token(json_client, mod_app))
+        #         executor.submit(lambda: make_registered_user(json_client, a, str(uuid4()), "pass"))
+
+
+        
+    # for a in apps:
+    #     gov_client.post(f"/delete/{a}")
+
+        
     
 
     # make_set_claims(json_client, mod_app, proof)
