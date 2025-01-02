@@ -1,7 +1,14 @@
 use std::{
-    cmp::Ordering, collections::VecDeque, io::Cursor, mem::MaybeUninit, ops::DerefMut, sync::{
-        atomic::{self, AtomicBool, AtomicU64}, Arc, Mutex, OnceLock
-    }
+    cmp::Ordering,
+    collections::VecDeque,
+    io::Cursor,
+    mem::MaybeUninit,
+    ops::DerefMut,
+    sync::{
+        atomic::{self, AtomicBool, AtomicU64},
+        Arc, Mutex, OnceLock,
+    },
+    u64,
 };
 
 use crate::util::rmp_read_bin;
@@ -511,7 +518,7 @@ fn check_expired<const N: usize>(ranges: &mut VecDeque<Range<N>>, time: u64) {
 
 #[cfg(test)]
 mod test {
-    use std::time::Instant;
+    use std::{hint::black_box, time::Instant};
 
     use rand::{thread_rng, Rng};
 
@@ -691,8 +698,8 @@ mod test {
         // For better benchmark do 500k and 50 amount
         // There it can reach 20M ops/secs
         // `cargo test --package tiauth-core --lib --release --all-features -- counter::test::routine --exact --show-output`
-        let size = 10000;
-        let amnt = 10;
+        let size = 500000;
+        let amnt = 50;
         let ops = amnt * size;
         let mut add_time = 0f64;
 
@@ -733,7 +740,7 @@ mod test {
         let mut rng = thread_rng();
 
         // For better benchmark do 500k and 50 amount
-        // There it can reach 20M ops/secs
+        // There it can reach 40M ops/secs
         // `cargo test --package tiauth-core --lib --release --all-features -- counter::test::routine --exact --show-output`
         let size = 500000;
         let amnt = 50;
@@ -751,21 +758,28 @@ mod test {
 
             lightly_shuffle(&mut values, size / 100);
 
-            let compact_set = AtomicBitSet::new();
+            let compact_set = AtomicDynamicBitSet::new();
 
             let mut max_space = 0;
 
             let mut time = 0;
 
+            let now = Instant::now();
             for (i, expires) in values {
                 //println!("sp: {}", ranges.len());
-                let around: i32 = rng.gen_range(-900..100);
-                time = time.max(0.max((expires as i32) + around) as u64);
-                let now = Instant::now();
-                compact_set.num_exists(i, expires, Some(time));
-                add_time += now.elapsed().as_secs_f64();
-                max_space = 0;
+                //let around: i32 = rng.gen_range(-900..100);
+                //time = time.max(0.max((expires as i32) + around) as u64);
+                
+                let result = compact_set.num_exists(i, expires, Some(time));
+
+                if result {
+                    black_box(());
+                    println!("hu!");
+                }
+                
+                //max_space = 0;
             }
+            add_time += now.elapsed().as_secs_f64();
 
             maxes.push(max_space);
         }
@@ -774,77 +788,76 @@ mod test {
 
         println!(
             "add: {} ops/s. {} us/op.",
-            (ops as f64) / add_time, (add_time * 1_000_000f64) / (ops as f64)
+            (ops as f64) / add_time,
+            (add_time * 1_000_000f64) / (ops as f64)
         );
 
-        println!(
-            "avg max space: {}",
-            max_space
-        );
+        println!("avg max space: {}", max_space);
     }
-
-    
 }
 
-/// 
-/// 
+struct AtomicU64BitSet(AtomicU64);
 
-
-struct AtomicBucket<const N: usize> {
-    bucket: [AtomicU64; N]
-}
-
-impl<const N: usize> AtomicBucket<N> {
-    fn new() -> Self {
-        Self { bucket: [const { AtomicU64::new(0) }; N] }
+impl AtomicU64BitSet {
+    const fn new() -> Self {
+        Self(AtomicU64::new(0))
     }
 
     fn exists(&self, n: u64) -> bool {
-        // value is in [0-(N*64-1)]
-
-        let index = n / 64;
-        // index is the number such that r + index*64 = n, where 0 <= r < 64
-        if index >= (N as u64) {
-            panic!("Value must be within bucket range!")
+        if n >= 64 {
+            panic!("Value must be less than 64!")
         }
-        // index < N
-        // N is a usize, so if index < N, then certainly index fits in a usize and we can just cast it
+        // 0 <= n < 64, so below does not overflow
+        let one_at_bit_index = 1u64 << n;
+        // shifting a 1 by n means we have a 64 bit number with a 1 at the nth position (0-indexed)
+        let old_value = self.0.fetch_or(one_at_bit_index, atomic::Ordering::Relaxed);
+        // now we OR with the existing value, which means we have a 1 at the nth position in our atom
 
-        // we have N buckets, index starting at 0, so since index < N we know that the atom exists
-        // each atom in the bucket is 64 bits, bucket i (0-indexed) corresponds to bits [(i*64), (i*64)+63]
-        // (index*64) = n - r, so [(index*64), (index*64)+63] is [(n-r), (n-r)+63]
-        let atom = &self.bucket[index as usize];
-        
-        let bit_index = n - (index * 64);
-        // bit_index = n - (n - r) = r
-        // remember 0 <= r < 64, so below does not overflow
-        let one_at_bit_index = 1u64 << bit_index;
-        // shifting a 1 by r means we have a 64 bit number with a 1 at the rth position (0-indexed)
-        let old_value = atom.fetch_or(one_at_bit_index, atomic::Ordering::Relaxed);
-        // now we OR with the existing value, which means we have a 1 at the rth position in our atom
-        // but that corresponds to the n-r+r=nth position of our overall number, exactly what we want
-        
         (old_value & one_at_bit_index) > 0
-        // one_at_bit_index is 0 except at the rth position (0-indexed) and using AND will only return
-        // a non-zero value if the rth position in old_value is 1
-        // this corresponds to (n-r)+r=nth position 
-        // nth bit of the number formed by combining the buckets is equal to 1
+        // one_at_bit_index is 0 except at the nth position (0-indexed) and using AND will only return
+        // a non-zero value if the nth position in old_value is 1
     }
 }
 
-const INITIAL_SIZE: usize = 1;
-const FURTHER_SIZE: usize = 1;
+trait AtomicBitSet {
+    fn new() -> Self;
 
-struct AtomicBitSet {
-    initial: AtomicBucket<INITIAL_SIZE>,
-    further: OnceLock<Arc<boxcar::Vec<AtomicBucket<FURTHER_SIZE>>>>
+    fn max_n(&self) -> u64;
+
+    fn create_up_to(&self, n: u64);
+
+    fn exists(&self, n: u64) -> bool;
 }
 
-impl AtomicBitSet {
+const SMALL_SIZE: usize = 32;
+
+/// Occupies roughly 256 bytes for 2048 values
+struct AtomicSmallBitSet {
+    atoms: [AtomicU64BitSet; SMALL_SIZE],
+}
+
+// Initially only 16 bytes, but once the initial 64 values are exhausted the initial allocation take nearly 500 additional bytes
+struct AtomicDynamicBitSet {
+    initial: AtomicU64BitSet,
+    max: u64,
+    further: OnceLock<Arc<boxcar::Vec<AtomicU64BitSet>>>,
+}
+
+fn further_indexes(n: u64) -> (usize, u64) {
+    let n_further = n - 64;
+    let atom_index = (n_further as usize) / 64;
+    let index_in_bucket = n_further - (atom_index * 64) as u64;
+
+    (atom_index, index_in_bucket)
+}
+
+impl AtomicBitSet for AtomicDynamicBitSet {
     fn new() -> Self {
         Self {
-            initial: AtomicBucket::new(),
-            further: OnceLock::new()
+            initial: AtomicU64BitSet::new(),
+            // We have space  64 * (2^64 - 31 [the max length of the boxcar Vec]) + 64, which is more than u64::MAX
+            max: u64::MAX,
+            further: OnceLock::new(),
         }
     }
 
@@ -853,42 +866,87 @@ impl AtomicBitSet {
             return;
         }
 
-        let further = self.further.get_or_init(|| {
-            Arc::new(boxcar::Vec::new())
-        });
+        let further = self.further.get_or_init(|| Arc::new(boxcar::Vec::new()));
 
-        let (bucket_index, _) = self.indexes(n);
+        let (atom_index, _) = further_indexes(n);
 
-        while further.get(bucket_index).is_none() {
-            further.push(AtomicBucket::new());
+        while further.get(atom_index).is_none() {
+            further.push(AtomicU64BitSet::new());
         }
     }
 
-    fn indexes(&self, n: u64) -> (usize, u64) {
-        let n_further = n - (64 * INITIAL_SIZE as u64);
-        let bucket_index = (n_further as usize) / (64 * FURTHER_SIZE);
-        let index_in_bucket = n_further - (bucket_index * 64 * FURTHER_SIZE) as u64;
-
-        (bucket_index, index_in_bucket)
-    }
-
-    /// Panics if exists is called for a number for which the bucket does not yet exist. Ensure `create_up_to` has been called for n before. 
+    /// Panics if exists is called for a number for which the bucket does not yet exist. Ensure `create_up_to` has been called for n before.
     fn exists(&self, n: u64) -> bool {
         if n < 64 {
-            return self.initial.exists(n)
+            return self.initial.exists(n);
         }
 
         let further = self.further.get().unwrap();
 
-        let (bucket_index, index_in_bucket) = self.indexes(n);
+        let (atom_index, index_in_bucket) = further_indexes(n);
 
-        let bucket = further.get(bucket_index).unwrap();
-        
+        let bucket = further.get(atom_index).unwrap();
+
         bucket.exists(index_in_bucket)
+    }
+
+    fn max_n(&self) -> u64 {
+        self.max
     }
 }
 
-impl CompactSet for AtomicBitSet {
+impl AtomicBitSet for AtomicSmallBitSet {
+    fn new() -> Self {
+        Self {
+            atoms: [const { AtomicU64BitSet::new() }; SMALL_SIZE],
+        }
+    }
+
+    fn max_n(&self) -> u64 {
+        ((SMALL_SIZE as u64) * 64) - 1
+    }
+
+    fn create_up_to(&self, n: u64) {
+        if n > self.max_n() {
+            panic!("Cannot create for value greater than max!")
+        }
+    }
+
+    fn exists(&self, n: u64) -> bool {
+        if n > self.max_n() {
+            panic!("Cannot check existence for greater than max!")
+        }
+
+        let atom_index = n / 64;
+        let index_in_atom = n - (atom_index * 64);
+
+        let atom = &self.atoms[index_in_atom as usize];
+
+        atom.exists(index_in_atom)
+    }
+}
+
+impl AtomicBitSet for AtomicU64BitSet {
+    fn new() -> Self {
+        Self::new()
+    }
+
+    fn max_n(&self) -> u64 {
+        63
+    }
+
+    fn create_up_to(&self, n: u64) {
+        if n > self.max_n() {
+            panic!("Cannot create for value greater than max!")
+        }
+    }
+
+    fn exists(&self, n: u64) -> bool {
+        self.exists(n)
+    }
+}
+
+impl<T: AtomicBitSet> CompactSet for T {
     fn num_exists(&self, num: u64, expires: u64, time: Option<u64>) -> bool {
         self.create_up_to(num);
 
