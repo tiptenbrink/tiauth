@@ -6,7 +6,7 @@ edition = "2021"
 
 [dependencies]
 redb = { version = "2.1.1", optional = true }
-opaque-borink = { version = "0.4.0", optional = true}
+opaque-borink = { version = "0.5.0", optional = true}
 rand = "0.8"
 hex = "0.4.3"
 rmp = "0.8"
@@ -34,6 +34,7 @@ tracing = "=0.1.40"
 tracing-subscriber = "=0.3.18"
 tracing-error = "=0.2.0"
 itertools = "0.13.0"
+boxcar = "0.2.8"
 
 # systemtime doesn't work on wasm, but we rely on it for creating proofs
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

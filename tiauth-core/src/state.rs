@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::SystemTime;
 
-use crate::counter::{CompactSet, Counter};
+use crate::counter::{CompactSet, CompactSetRange, Counter};
 use crate::crypto::{create_key, load_public_key, save_public_key, PublicKey};
 use crate::data::{Application, SessionKey, EPHEMERAL_INTERVAL};
 use crate::proof::EphemeralKey;
@@ -155,7 +155,7 @@ pub struct AppStateImpl {
     pub public_key: PublicKey,
     // Counter used to ensure ephemeral validity
     pub counter: Counter,
-    pub compact_set: CompactSet,
+    pub compact_set: CompactSetRange,
     // Persistent database
     pub store: Store,
     // Keys and secrets
@@ -190,7 +190,7 @@ impl AppStateImpl {
         };
 
         let counter = Counter::new();
-        let compact_set = CompactSet::new();
+        let compact_set = CompactSetRange::new();
         let time = AtomicU64::new(now);
 
         let app_state = AppStateImpl {
